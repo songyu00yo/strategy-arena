@@ -1,0 +1,16 @@
+{
+  "configVersion": "1.0.0",
+  "provider": "deepseek",
+  "baseUrl": "https://api.deepseek.com",
+  "model": "deepseek-flash",
+  "documentedModelVersion": "DeepSeek-V4.1-Flash-1017",
+  "thinking": "disabled",
+  "temperature": 0.3,
+  "maxOutputTokens": 2200,
+  "timeoutMs": 60000,
+  "estimatedInputCnyPerMillion": 2.4,
+  "estimatedOutputCnyPerMillion": 9.6,
+  "pricingNote": "Conservative estimates at 8 CNY/USD using peak uncached rates; not an invoice. Record provider-reported model and usage on every response.",
+  "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+  "verifiedAt": "2026-11-04"
+}

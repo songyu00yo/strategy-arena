@@ -17,3 +17,6 @@ artifacts/
 private/
 *.pem
 *.key
+
+# Framework-generated declarations change between development and production.
+next-env.d.ts

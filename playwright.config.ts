@@ -6,13 +6,25 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: [["list"], ["html", { open: "never" }], ["junit", { outputFile: "test-results/e2e.xml" }]],
+  reporter: [
+    ["list"],
+    ["html", { open: "never" }],
+    ["junit", { outputFile: "test-results/e2e.xml" }],
+  ],
   use: {
     baseURL: "http://127.0.0.1:3100",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: process.env.PLAYWRIGHT_CHANNEL === "chrome" ? "chrome" : undefined } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        channel: process.env.PLAYWRIGHT_CHANNEL === "chrome" ? "chrome" : undefined,
+      },
+    },
+  ],
   webServer: {
     command: "node scripts/start-e2e-server.mjs",
     url: "http://127.0.0.1:3100",

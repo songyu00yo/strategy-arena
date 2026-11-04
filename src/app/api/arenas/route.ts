@@ -8,5 +8,7 @@ export async function POST(request: Request) {
     const challenge = await readBody(request, ChallengeSchema);
     const { owner, cookie } = ensureOwner(request);
     return json(createArena(challenge, owner), 201, cookie ? { "Set-Cookie": cookie } : undefined);
-  } catch (error) { return errorResponse(error); }
+  } catch (error) {
+    return errorResponse(error);
+  }
 }

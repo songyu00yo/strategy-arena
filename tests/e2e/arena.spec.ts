@@ -2,24 +2,63 @@ import { expect, test } from "@playwright/test";
 import { advanceFixture, fixtureChallenge, fixtureSnapshot, fixtureVersion } from "./ui.fixture";
 import type { Challenge } from "../../src/lib/contracts";
 
-test("real API without model key reports configuration state and enforces owner isolation", async ({ request, playwright }) => {
+test("real API without model key reports configuration state and enforces owner isolation", async ({
+  request,
+  playwright,
+}) => {
   const health = await request.get("/api/health");
   expect(health.status()).toBe(200);
   expect((await health.json()).model.configured).toBe(false);
-  expect((await request.post("/api/arenas", { headers: { Origin: "http://127.0.0.1:3100" }, data: fixtureChallenge })).status()).toBe(401);
-  expect((await request.post("/api/access", { headers: { Origin: "http://127.0.0.1:3100" }, data: { code: "wrong-fixture-code" } })).status()).toBe(401);
-  expect((await request.post("/api/access", { headers: { Origin: "http://127.0.0.1:3100" }, data: { code: "e2e-only-access-code" } })).status()).toBe(200);
-  const create = await request.post("/api/arenas", { headers: { Origin: "http://127.0.0.1:3100" }, data: fixtureChallenge });
+  expect(
+    (
+      await request.post("/api/arenas", {
+        headers: { Origin: "http://127.0.0.1:3100" },
+        data: fixtureChallenge,
+      })
+    ).status(),
+  ).toBe(401);
+  expect(
+    (
+      await request.post("/api/access", {
+        headers: { Origin: "http://127.0.0.1:3100" },
+        data: { code: "wrong-fixture-code" },
+      })
+    ).status(),
+  ).toBe(401);
+  expect(
+    (
+      await request.post("/api/access", {
+        headers: { Origin: "http://127.0.0.1:3100" },
+        data: { code: "e2e-only-access-code" },
+      })
+    ).status(),
+  ).toBe(200);
+  const create = await request.post("/api/arenas", {
+    headers: { Origin: "http://127.0.0.1:3100" },
+    data: fixtureChallenge,
+  });
   expect(create.status()).toBe(201);
   const snapshot = await create.json();
   expect((await request.get(`/api/arenas/${snapshot.id}`)).status()).toBe(200);
   const foreign = await playwright.request.newContext({ baseURL: "http://127.0.0.1:3100" });
   try {
     expect((await foreign.get(`/api/arenas/${snapshot.id}`)).status()).toBe(401);
-    expect((await foreign.post("/api/access", { headers: { Origin: "http://127.0.0.1:3100" }, data: { code: "e2e-only-access-code" } })).status()).toBe(200);
+    expect(
+      (
+        await foreign.post("/api/access", {
+          headers: { Origin: "http://127.0.0.1:3100" },
+          data: { code: "e2e-only-access-code" },
+        })
+      ).status(),
+    ).toBe(200);
     expect((await foreign.get(`/api/arenas/${snapshot.id}`)).status()).toBe(404);
-  } finally { await foreign.dispose(); }
-  const advance = await request.post(`/api/arenas/${snapshot.id}/advance`, { headers: { Origin: "http://127.0.0.1:3100" }, data: { versionId: snapshot.activeVersionId } });
+  } finally {
+    await foreign.dispose();
+  }
+  const advance = await request.post(`/api/arenas/${snapshot.id}/advance`, {
+    headers: { Origin: "http://127.0.0.1:3100" },
+    data: { versionId: snapshot.activeVersionId },
+  });
   expect(advance.status()).toBe(503);
   expect((await advance.json()).code).toBe("MODEL_NOT_CONFIGURED");
   const after = await (await request.get(`/api/arenas/${snapshot.id}`)).json();
@@ -27,24 +66,47 @@ test("real API without model key reports configuration state and enforces owner 
   expect(after.versions[0].costCny).toBe(0);
 });
 
-test("real unconfigured homepage explains missing key and prevents starting a paid run", async ({ page }) => {
-  await page.request.post("/api/access", { headers: { Origin: "http://127.0.0.1:3100" }, data: { code: "e2e-only-access-code" } });
+test("real unconfigured homepage explains missing key and prevents starting a paid run", async ({
+  page,
+}) => {
+  await page.request.post("/api/access", {
+    headers: { Origin: "http://127.0.0.1:3100" },
+    data: { code: "e2e-only-access-code" },
+  });
   await page.goto("/");
   await expect(page.getByRole("button", { name: "模型待配置" })).toBeVisible();
   await expect(page.getByRole("button", { name: "让方案上场" })).toBeDisabled();
-  await expect(page.getByText("当前不会生成模拟结果或发起计费请求。", { exact: false })).toBeVisible();
+  await expect(
+    page.getByText("当前不会生成模拟结果或发起计费请求。", { exact: false }),
+  ).toBeVisible();
 });
 
-test("explicit UI fixture: five stages, evidence, condition rematch and preserved history", async ({ page }, testInfo) => {
+test("explicit UI fixture: five stages, evidence, condition rematch and preserved history", async ({
+  page,
+}, testInfo) => {
   const snapshot = fixtureSnapshot();
-  await page.route("**/api/**", async route => {
+  await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/health") return route.fulfill({ json: { status: "ok", version: "fixture", commit: "fixture", model: snapshot.model, requiresAccessCode: false, accessGranted: true } });
-    if (path.endsWith("/events")) return route.fulfill({ contentType: "text/event-stream", body: ": explicit test fixture\n\n" });
+    if (path === "/api/health")
+      return route.fulfill({
+        json: {
+          status: "ok",
+          version: "fixture",
+          commit: "fixture",
+          model: snapshot.model,
+          requiresAccessCode: false,
+          accessGranted: true,
+        },
+      });
+    if (path.endsWith("/events"))
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: ": explicit test fixture\n\n",
+      });
     if (path.endsWith("/advance")) advanceFixture(snapshot);
     if (path.endsWith("/versions")) {
       const body = route.request().postDataJSON() as { challenge: Challenge; changeReason: string };
-      const previous = snapshot.versions.find(item => item.id === snapshot.activeVersionId)!;
+      const previous = snapshot.versions.find((item) => item.id === snapshot.activeVersionId)!;
       previous.status = "superseded";
       const next = fixtureVersion(snapshot.versions.length + 1, body.challenge);
       next.changeReason = body.changeReason;
@@ -57,12 +119,18 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
   await page.getByRole("button", { name: "试填一个视频任务" }).click();
   await page.getByRole("button", { name: "让方案上场" }).click();
   await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("explicit-ui-fixture-arena.png"), fullPage: true });
+  await page.screenshot({
+    path: testInfo.outputPath("explicit-ui-fixture-arena.png"),
+    fullPage: true,
+  });
   await page.getByRole("button", { name: /测试质疑：尚未核算总投入/ }).click();
   const evidence = page.getByRole("dialog", { name: "这一条，站得住吗？" });
   await expect(evidence.getByRole("heading", { name: "测试计算证据" })).toBeVisible();
   await expect(evidence.getByText("依据测试计算补充准备时间。", { exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("explicit-ui-fixture-evidence.png"), fullPage: true });
+  await page.screenshot({
+    path: testInfo.outputPath("explicit-ui-fixture-evidence.png"),
+    fullPage: true,
+  });
   await page.keyboard.press("Escape");
   await expect(evidence).not.toBeVisible();
   await page.getByRole("button", { name: "修改条件再开局" }).click();
@@ -77,20 +145,40 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
   expect(snapshot.versions[0].challenge.budget).toBe(300);
   expect(snapshot.versions[1].challenge.budget).toBe(150);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: testInfo.outputPath("explicit-ui-fixture-mobile-history.png"), fullPage: true });
+  await page.screenshot({
+    path: testInfo.outputPath("explicit-ui-fixture-mobile-history.png"),
+    fullPage: true,
+  });
 });
 
-test("explicit UI fixture: a delayed old advance cannot replace a new condition version", async ({ page }) => {
+test("explicit UI fixture: a delayed old advance cannot replace a new condition version", async ({
+  page,
+}) => {
   const snapshot = fixtureSnapshot();
   let releaseOld!: () => void;
   let oldStarted!: () => void;
-  const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
-  const oldSeen = new Promise<void>(resolve => { oldStarted = resolve; });
+  const oldGate = new Promise<void>((resolve) => {
+    releaseOld = resolve;
+  });
+  const oldSeen = new Promise<void>((resolve) => {
+    oldStarted = resolve;
+  });
   let held = false;
-  await page.route("**/api/**", async route => {
+  await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/health") return route.fulfill({ json: { status: "ok", version: "fixture", commit: "fixture", model: snapshot.model, requiresAccessCode: false, accessGranted: true } });
-    if (path.endsWith("/events")) return route.fulfill({ contentType: "text/event-stream", body: ": explicit fixture\n\n" });
+    if (path === "/api/health")
+      return route.fulfill({
+        json: {
+          status: "ok",
+          version: "fixture",
+          commit: "fixture",
+          model: snapshot.model,
+          requiresAccessCode: false,
+          accessGranted: true,
+        },
+      });
+    if (path.endsWith("/events"))
+      return route.fulfill({ contentType: "text/event-stream", body: ": explicit fixture\n\n" });
     if (path.endsWith("/advance")) {
       if (!held) {
         held = true;
@@ -126,7 +214,11 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
     await expect(page.getByRole("heading", { name: newGoal })).toBeVisible();
     releaseOld();
     await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "选择推演版本" })).toHaveValue("fixture-version-2");
+    await expect(page.getByRole("combobox", { name: "选择推演版本" })).toHaveValue(
+      "fixture-version-2",
+    );
     await expect(page.getByRole("heading", { name: newGoal })).toBeVisible();
-  } finally { releaseOld(); }
+  } finally {
+    releaseOld();
+  }
 });

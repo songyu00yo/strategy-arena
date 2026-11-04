@@ -91,6 +91,8 @@ sudo systemctl start strategy-arena
 
 在冻结提交上完成检查，再生成构建包：
 
+必须通过 `pnpm build` 构建。构建包装脚本在开始前清除旧身份标记，成功后才记录提交、Git 可见源码指纹与编译产物哈希。构建期间源码变化、构建失败、标记缺失，或打包前提交／源码／编译文件发生变化，都不能沿用旧构建。应先提交，再重新构建和检查。稳定的未提交开发构建可以运行测试，但不能生成干净的候选发布清单。
+
 ```sh
 pnpm install --frozen-lockfile
 pnpm typecheck

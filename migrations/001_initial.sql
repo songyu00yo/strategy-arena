@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS arenas (id TEXT PRIMARY KEY, owner TEXT NOT NULL, active_version_id TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY, arena_id TEXT NOT NULL REFERENCES arenas(id), number INTEGER NOT NULL, body TEXT NOT NULL, UNIQUE(arena_id, number));
+CREATE TABLE IF NOT EXISTS steps (id TEXT PRIMARY KEY, arena_id TEXT NOT NULL REFERENCES arenas(id), version_id TEXT NOT NULL REFERENCES versions(id), stage TEXT NOT NULL, role TEXT NOT NULL, ordinal REAL NOT NULL, status TEXT NOT NULL DEFAULT 'pending', error TEXT, started_at TEXT, finished_at TEXT, lease_until INTEGER, reservation REAL NOT NULL DEFAULT 0, usage TEXT, UNIQUE(version_id, stage, role));
+CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, arena_id TEXT NOT NULL REFERENCES arenas(id), version_id TEXT NOT NULL, type TEXT NOT NULL, stage TEXT, actor TEXT, message TEXT NOT NULL, data TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS visitor_runs (owner TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(owner, day));
+CREATE TABLE IF NOT EXISTS interventions (id TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES versions(id), body TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS events_arena_seq ON events(arena_id, seq);
+CREATE INDEX IF NOT EXISTS steps_status ON steps(status, lease_until);
+CREATE TABLE IF NOT EXISTS access_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL);

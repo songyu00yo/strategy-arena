@@ -45,7 +45,7 @@ export function newVersion(arenaId: string, owner: string, challenge: Challenge,
 export function intervene(arenaId: string, owner: string, input: z.infer<typeof InterventionSchema>) {
   const arena = assertOwner(arenaId, owner);
   const current = getVersion(arena.active_version_id);
-  const strategy = current.strategies.find(s => s.id === input.targetStrategyId);
+  const strategy = current.revisions.find(r => r.strategyId === input.targetStrategyId)?.strategy || current.strategies.find(s => s.id === input.targetStrategyId);
   const claim = strategy?.claims.find(c => c.id === input.targetClaimId);
   if (!claim) throw new ArenaError("这条观点不属于当前版本，请刷新后重试。", 409, "STALE_CLAIM");
   return newVersion(arenaId, owner, current.challenge, "用户针对观点补充质疑", `针对方案 ${strategy!.id} 的观点「${claim.text}」：${input.text}`);

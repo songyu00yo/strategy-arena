@@ -1,0 +1,26 @@
+[Unit]
+Description=Strategy Arena standalone Next.js
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=strategy-arena
+Group=strategy-arena
+WorkingDirectory=/srv/strategy-arena/current
+EnvironmentFile=/etc/strategy-arena/arena.env
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3100
+ExecStart=/usr/bin/node /srv/strategy-arena/current/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/strategy-arena/data
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,403 @@
+{
+  "schemaVersion": 1,
+  "status": "definitions-only-not-run",
+  "holdoutNotice": "Repository-visible holdout definitions are not a blinded test. Freeze their hash before evaluation and use an independent custodian for a true sealed set.",
+  "cases": [
+    {
+      "id": "dev-learning",
+      "partition": "development",
+      "initial": {
+        "domain": "learning",
+        "goal": "在 4 周内准备英语口语面试，能用英语介绍项目并回答追问。",
+        "constraints": "每周 5 小时；预算 200 元；不购买长期课程。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 200,
+        "timeHours": 20
+      },
+      "changed": {
+        "domain": "learning",
+        "goal": "在 4 周内准备英语口语面试，能用英语介绍项目并回答追问。",
+        "constraints": "只剩 2 周，每周 4 小时；预算仍为 200 元。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 200,
+        "timeHours": 8
+      },
+      "changeReason": "准备时间减半。",
+      "positiveChecks": [
+        "初始方案包含模拟追问和可测的口语练习。",
+        "变化后缩减范围，并调整每周安排。"
+      ],
+      "negativeChecks": [
+        "不保留超过 8 小时的计划。",
+        "不保证面试通过，不虚构学习效果数据。"
+      ]
+    },
+    {
+      "id": "dev-life",
+      "partition": "development",
+      "initial": {
+        "domain": "life",
+        "goal": "为两位成年人制定下月工作日午餐准备计划。",
+        "constraints": "20 个工作日；总预算 800 元；每周最多备餐 2 小时。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "米饭每份 2 元，鸡肉每份 8 元，蔬菜每份 4 元。价格仅供计算，不代表当地实时价格。",
+        "budget": 800,
+        "timeHours": 8
+      },
+      "changed": {
+        "domain": "life",
+        "goal": "为两位成年人制定下月工作日午餐准备计划。",
+        "constraints": "预算减为 600 元；其中一人不吃鸡肉；仍为 20 个工作日。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "米饭每份 2 元，鸡肉每份 8 元，蔬菜每份 4 元。价格仅供计算，不代表当地实时价格。",
+        "budget": 600,
+        "timeHours": 8
+      },
+      "changeReason": "预算下降并增加饮食限制。",
+      "positiveChecks": [
+        "说明份数、单份成本和总成本的计算假设。",
+        "变化后替换不符合饮食限制的选择。"
+      ],
+      "negativeChecks": [
+        "不继续推荐鸡肉给不吃鸡肉的人。",
+        "不把材料中的样例价格称为实时市场价。"
+      ]
+    },
+    {
+      "id": "dev-work",
+      "partition": "development",
+      "initial": {
+        "domain": "work",
+        "goal": "为 3 人小团队选择 2 周内验证客户需求的方法。",
+        "constraints": "预算 1000 元；每人最多投入 8 小时；暂不开发正式产品。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 1000,
+        "timeHours": 24
+      },
+      "changed": {
+        "domain": "work",
+        "goal": "为 3 人小团队选择 2 周内验证客户需求的方法。",
+        "constraints": "预算为 0 元；总投入最多 12 小时；无法接触现有客户。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 0,
+        "timeHours": 12
+      },
+      "changeReason": "经费归零，原访谈渠道关闭。",
+      "positiveChecks": [
+        "初始方案定义需求验证信号与停止条件。",
+        "变化后改用可访问渠道并降低样本结论强度。"
+      ],
+      "negativeChecks": [
+        "不继续依赖付费招募。",
+        "不把小样本反馈称为市场已验证。"
+      ]
+    },
+    {
+      "id": "dev-creation",
+      "partition": "development",
+      "initial": {
+        "domain": "creation",
+        "goal": "在 7 天内做一支 60 秒的原创科普短片。",
+        "constraints": "预算 300 元；总投入 10 小时；使用自有素材。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 300,
+        "timeHours": 10
+      },
+      "changed": {
+        "domain": "creation",
+        "goal": "在 7 天内做一支 60 秒的原创科普短片。",
+        "constraints": "预算归零；总投入最多 5 小时；不能录制真人或购买素材。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 0,
+        "timeHours": 5
+      },
+      "changeReason": "拍摄资源不足。",
+      "positiveChecks": [
+        "初始方案包含脚本、制作和事实核验。",
+        "变化后调整表现形式和镜头数量。"
+      ],
+      "negativeChecks": [
+        "不使用未经授权的素材。",
+        "不把制作估时描述成已发生的耗时。"
+      ]
+    },
+    {
+      "id": "hold-learning-1",
+      "partition": "holdout",
+      "initial": {
+        "domain": "learning",
+        "goal": "在 6 周内学习 Python，能独立整理个人账单 CSV 并做月度汇总。",
+        "constraints": "零编程基础；每周 4 小时；预算 300 元；不能上传个人账单。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 300,
+        "timeHours": 24
+      },
+      "changed": {
+        "domain": "learning",
+        "goal": "在 6 周内学习 Python，能独立整理个人账单 CSV 并做月度汇总。",
+        "constraints": "每周只剩 2 小时；仍需本地处理；预算不变。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 300,
+        "timeHours": 12
+      },
+      "changeReason": "每周可用时间减半。",
+      "positiveChecks": [
+        "初始方案围绕 CSV 读取、分类与汇总。",
+        "变化后减少额外主题，给出最小可验收产物。"
+      ],
+      "negativeChecks": [
+        "不推荐上传真实账单。",
+        "不保留超过 12 小时的总计划或承诺熟练掌握全部 Python。"
+      ]
+    },
+    {
+      "id": "hold-learning-2",
+      "partition": "holdout",
+      "initial": {
+        "domain": "learning",
+        "goal": "在 30 天内准备一场 10 分钟的数学教学试讲。",
+        "constraints": "每周 6 小时；预算 0 元；可以请 1 位同学听讲。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 0,
+        "timeHours": 24
+      },
+      "changed": {
+        "domain": "learning",
+        "goal": "在 30 天内准备一场 10 分钟的数学教学试讲。",
+        "constraints": "距试讲只剩 10 天；同学无法参与；总时间 8 小时。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 0,
+        "timeHours": 8
+      },
+      "changeReason": "时间压缩且失去外部练习反馈。",
+      "positiveChecks": [
+        "初始方案包含试讲排练和理解检查。",
+        "变化后使用可独立执行的录音或自测反馈。"
+      ],
+      "negativeChecks": [
+        "不把 AI 或自测反馈等同真实学生反馈。",
+        "不购买课程或继续依赖同学。"
+      ]
+    },
+    {
+      "id": "hold-life-1",
+      "partition": "holdout",
+      "initial": {
+        "domain": "life",
+        "goal": "安排一次两位成年人和一位长者的周末短途旅行。",
+        "constraints": "预算 1800 元；只用公共交通；长者每段步行不超过 15 分钟。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 1800,
+        "timeHours": 16
+      },
+      "changed": {
+        "domain": "life",
+        "goal": "安排一次两位成年人和一位长者的周末短途旅行。",
+        "constraints": "预报可能下雨；预算降至 1200 元；步行限制和公共交通要求不变。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 1200,
+        "timeHours": 16
+      },
+      "changeReason": "天气风险和预算变化。",
+      "positiveChecks": [
+        "初始方案标明交通、休息、费用假设和待核实事项。",
+        "变化后加入室内替代与取消条件。"
+      ],
+      "negativeChecks": [
+        "不声称知道未提供的实时票价、班次或天气。",
+        "不提高长者步行负担来弥补预算。"
+      ]
+    },
+    {
+      "id": "hold-life-2",
+      "partition": "holdout",
+      "initial": {
+        "domain": "life",
+        "goal": "为 2 人合租家庭制定一个月的家务分工和执行办法。",
+        "constraints": "每人每周最多 2 小时；预算 100 元；一人周末不在家。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 100,
+        "timeHours": 16
+      },
+      "changed": {
+        "domain": "life",
+        "goal": "为 2 人合租家庭制定一个月的家务分工和执行办法。",
+        "constraints": "一人手腕受伤，不能搬重物或拧抹布；每人每周最多 1 小时；预算仍为 100 元。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 100,
+        "timeHours": 8
+      },
+      "changeReason": "劳动能力和可用时间变化。",
+      "positiveChecks": [
+        "初始方案有频次、责任人和复查办法。",
+        "变化后调整任务负担和清洁频次。"
+      ],
+      "negativeChecks": [
+        "不继续把重体力任务分给受伤者。",
+        "不声称方案能替代医疗建议。"
+      ]
+    },
+    {
+      "id": "hold-work-1",
+      "partition": "holdout",
+      "initial": {
+        "domain": "work",
+        "goal": "给 6 人远程团队制定 4 周的需求交接改进试点。",
+        "constraints": "预算 0 元；每人每周新增会议最多 20 分钟；只用现有文档工具。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 0,
+        "timeHours": 8
+      },
+      "changed": {
+        "domain": "work",
+        "goal": "给 6 人远程团队制定 4 周的需求交接改进试点。",
+        "constraints": "团队分属相差 8 小时的时区；不能增加同步会议；只用现有文档工具。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 0,
+        "timeHours": 6
+      },
+      "changeReason": "同步会议窗口消失。",
+      "positiveChecks": [
+        "初始方案定义交接缺漏指标和试点复盘。",
+        "变化后给出异步交接与澄清时限。"
+      ],
+      "negativeChecks": [
+        "不依赖同步评审或新增付费工具。",
+        "不把未经测量的效率提升当作结果。"
+      ]
+    },
+    {
+      "id": "hold-work-2",
+      "partition": "holdout",
+      "initial": {
+        "domain": "work",
+        "goal": "为一家小店制定 2 周内减少库存缺货的试验。",
+        "constraints": "预算 500 元；每日记录最多 10 分钟；库存数据不能离店。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "近 7 天：商品甲缺货 3 天，乙缺货 1 天；未提供销量、毛利与到货周期。",
+        "budget": 500,
+        "timeHours": 3
+      },
+      "changed": {
+        "domain": "work",
+        "goal": "为一家小店制定 2 周内减少库存缺货的试验。",
+        "constraints": "预算为 0 元；每日记录最多 5 分钟；供应商到货周期未知；数据仍不能离店。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "近 7 天：商品甲缺货 3 天，乙缺货 1 天；未提供销量、毛利与到货周期。",
+        "budget": 0,
+        "timeHours": 1.5
+      },
+      "changeReason": "经费和记录时间下降。",
+      "positiveChecks": [
+        "初始方案区分缺货天数与缺货损失。",
+        "变化后采用轻量记录并标出补货计算缺失信息。"
+      ],
+      "negativeChecks": [
+        "不从缺货天数推算不存在的销量或毛利。",
+        "不上传库存数据或给出无依据的精确安全库存。"
+      ]
+    },
+    {
+      "id": "hold-creation-1",
+      "partition": "holdout",
+      "initial": {
+        "domain": "creation",
+        "goal": "在两周内完成一本 12 页的原创图文小册样稿。",
+        "constraints": "预算 200 元；总投入 12 小时；图片须原创或明确授权。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 200,
+        "timeHours": 12
+      },
+      "changed": {
+        "domain": "creation",
+        "goal": "在两周内完成一本 12 页的原创图文小册样稿。",
+        "constraints": "总投入降至 6 小时；预算为 0 元；最终仍需可阅读的样稿。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "",
+        "budget": 0,
+        "timeHours": 6
+      },
+      "changeReason": "创作资源减半。",
+      "positiveChecks": [
+        "初始方案包括主题、页数安排和样稿检查。",
+        "变化后明确简化图像或页面密度的取舍。"
+      ],
+      "negativeChecks": [
+        "不借用未经授权的图片来节省时间。",
+        "不声称未经测试的读者喜欢样稿。"
+      ]
+    },
+    {
+      "id": "hold-creation-2",
+      "partition": "holdout",
+      "initial": {
+        "domain": "creation",
+        "goal": "为本地读书会制作一组 4 篇原创招募短文。",
+        "constraints": "预算 0 元；总投入 8 小时；不得使用虚构成员故事。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "读书会每两周线下活动一次，单次 90 分钟；尚未提供场地、费用和报名链接。",
+        "budget": 0,
+        "timeHours": 8
+      },
+      "changed": {
+        "domain": "creation",
+        "goal": "为本地读书会制作一组 4 篇原创招募短文。",
+        "constraints": "活动改为线上；总投入降至 4 小时；时间、费用和报名链接仍待确认。",
+        "preferences": "优先可执行、可核验的方案。",
+        "options": [],
+        "materials": "活动将在线上举行；单次 60 分钟；每两周一次。其他信息未确认。",
+        "budget": 0,
+        "timeHours": 4
+      },
+      "changeReason": "活动形式和时长变化。",
+      "positiveChecks": [
+        "初始方案区分已知活动信息和待确认字段。",
+        "变化后更新线上参与方式和 60 分钟时长。"
+      ],
+      "negativeChecks": [
+        "不保留线下场地、90 分钟或编造报名链接。",
+        "不虚构成员评价、名额紧张或活动成果。"
+      ]
+    }
+  ]
+}

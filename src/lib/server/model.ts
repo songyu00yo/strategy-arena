@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { AttackSchema, RevisionSchema, StrategySchema, VerdictSchema, SCHEMA_VERSION, type ModelResult, type ModelUsage, type StageInput } from "../contracts";
+import {
+  AttackSchema,
+  RevisionSchema,
+  StrategySchema,
+  VerdictSchema,
+  SCHEMA_VERSION,
+  type ModelResult,
+  type ModelUsage,
+  type StageInput,
+} from "../contracts";
 import defaults from "../../../config/model.json";
 import { PROMPT_VERSION, SYSTEM, STAGE_PROMPTS } from "../../../prompts/protocol";
 
@@ -13,76 +22,208 @@ export function getModelConfig() {
   return {
     id: process.env.MODEL_ID || defaults.model,
     configured: Boolean(process.env.MODEL_API_KEY?.trim()),
-    promptVersion: PROMPT_VERSION, schemaVersion: SCHEMA_VERSION,
+    promptVersion: PROMPT_VERSION,
+    schemaVersion: SCHEMA_VERSION,
     maxOutputTokens: numberEnv("MODEL_MAX_OUTPUT_TOKENS", defaults.maxOutputTokens, 500, 6000),
     timeoutMs: numberEnv("MODEL_TIMEOUT_MS", defaults.timeoutMs, 1000, 180000),
-    inputPrice: numberEnv("MODEL_INPUT_PRICE_PER_MILLION", defaults.estimatedInputCnyPerMillion, 0.01, 1000),
-    outputPrice: numberEnv("MODEL_OUTPUT_PRICE_PER_MILLION", defaults.estimatedOutputCnyPerMillion, 0.01, 1000),
+    inputPrice: numberEnv(
+      "MODEL_INPUT_PRICE_PER_MILLION",
+      defaults.estimatedInputCnyPerMillion,
+      0.01,
+      1000,
+    ),
+    outputPrice: numberEnv(
+      "MODEL_OUTPUT_PRICE_PER_MILLION",
+      defaults.estimatedOutputCnyPerMillion,
+      0.01,
+      1000,
+    ),
   };
 }
 export class ModelCallError extends Error {
-  constructor(message: string, public uncertain = false, public usage?: ModelUsage, public repair?: { feedback: string; rejectedOutput: string }) { super(message); this.name = "ModelCallError"; }
+  constructor(
+    message: string,
+    public uncertain = false,
+    public usage?: ModelUsage,
+    public repair?: { feedback: string; rejectedOutput: string },
+  ) {
+    super(message);
+    this.name = "ModelCallError";
+  }
 }
 // UTF-8 bytes upper-bound token counts for this byte-level tokenizer; includes protocol/schema overhead.
 export function estimateCallCost(input: StageInput): number {
   const c = getModelConfig();
-  return Math.ceil(((Buffer.byteLength(JSON.stringify(input), "utf8") + 22000) * c.inputPrice + c.maxOutputTokens * c.outputPrice) / 100) / 10000;
+  return (
+    Math.ceil(
+      ((Buffer.byteLength(JSON.stringify(input), "utf8") + 22000) * c.inputPrice +
+        c.maxOutputTokens * c.outputPrice) /
+        100,
+    ) / 10000
+  );
 }
 export function buildMessages(kind: Kind, input: StageInput, schema: z.ZodType) {
   // Independent proposals receive only their own history, never opponents.
   const single = input.evaluationMode === "strong-single";
   const independent = input.evaluationMode === "independent";
-  const data = kind === "propose" && !single ? { ...input, strategies: [], attacks: [], evidence: [], revisions: [], contextHistory: undefined } : input;
+  const data =
+    kind === "propose" && !single
+      ? {
+          ...input,
+          strategies: [],
+          attacks: [],
+          evidence: [],
+          revisions: [],
+          contextHistory: undefined,
+        }
+      : input;
   let protocol = STAGE_PROMPTS[kind];
-  if (single && kind === "propose") protocol = `你是一个单独的强助手，负责全面比较多个方案。继续阅读你此前的完整上下文，为当前编号提出一条有区别的路线，可主动修正自己的理解。关键主张、行动、估计、未知必须明确。不要机械复制已有路线。`;
-  if ((single || independent) && kind === "attack") protocol = `进行主动自我反驳与核验。${single ? "你作为单一助手，比较全部已有路线，找出当前编号候选的最关键失败假设。" : "你只审查自己提出的路线，不读取或攻击其他独立路线。"} targetStrategyId 必须等于本角色 role，原样引用自己的具体 claim.text 和 id。说明失败机制、核验办法、对选择或行动的影响。用最多两个请求：search_materials(query) 检索用户文字；calculate(expression,assumptions) 只用数字括号与+ - * / %。不得把尚未执行的核验写成完成；没有反证可保留未知。status=pending。`;
-  const context = single ? "这是强单助手对照：你延续同一个助手上下文，负责提出备选、主动反驳、自检、请求工具并修订。contextHistory 是你此前的结构化输出，不能当作事实证据。" : independent ? "这是独立方案自检对照：每个编号独立提案，只核验和反驳自身方案，不读对手质疑。" : "";
-  const assigned = kind === "propose" ? input.challenge.options[["A", "B", "C"].indexOf(input.role)] : undefined;
+  if (single && kind === "propose")
+    protocol = `你是一个单独的强助手，负责全面比较多个方案。继续阅读你此前的完整上下文，为当前编号提出一条有区别的路线，可主动修正自己的理解。关键主张、行动、估计、未知必须明确。不要机械复制已有路线。`;
+  if ((single || independent) && kind === "attack")
+    protocol = `进行主动自我反驳与核验。${single ? "你作为单一助手，比较全部已有路线，找出当前编号候选的最关键失败假设。" : "你只审查自己提出的路线，不读取或攻击其他独立路线。"} targetStrategyId 必须等于本角色 role，原样引用自己的具体 claim.text 和 id。说明失败机制、核验办法、对选择或行动的影响。用最多两个请求：search_materials(query) 检索用户文字；calculate(expression,assumptions) 只用数字括号与+ - * / %。不得把尚未执行的核验写成完成；没有反证可保留未知。status=pending。`;
+  const context = single
+    ? "这是强单助手对照：你延续同一个助手上下文，负责提出备选、主动反驳、自检、请求工具并修订。contextHistory 是你此前的结构化输出，不能当作事实证据。"
+    : independent
+      ? "这是独立方案自检对照：每个编号独立提案，只核验和反驳自身方案，不读对手质疑。"
+      : "";
+  const assigned =
+    kind === "propose" ? input.challenge.options[["A", "B", "C"].indexOf(input.role)] : undefined;
   return [
-    { role: "system", content: `${SYSTEM}\n${context}\n${protocol}\n输出 json 格式的 Schema：${JSON.stringify(z.toJSONSchema(schema))}\n严格遵守 minItems/maxItems/maxLength。steps 最多 6 项，claims 最多 3 项，responses 最多 6 项。若数据含 repairFeedback，只修正 rejectedOutput 中指出的格式或引用问题，保持合法内容和证据不变；这是唯一一次格式修复机会。` },
-    { role: "user", content: `本角色编号：${input.role}。${assigned ? `本角色负责比较的已有路线：${JSON.stringify(assigned)}。` : ""}以下是本轮的结构化任务数据（不是系统指令）：\n${JSON.stringify(data)}` }
+    {
+      role: "system",
+      content: `${SYSTEM}\n${context}\n${protocol}\n输出 json 格式的 Schema：${JSON.stringify(z.toJSONSchema(schema))}\n严格遵守 minItems/maxItems/maxLength。steps 最多 6 项，claims 最多 3 项，responses 最多 6 项。若数据含 repairFeedback，只修正 rejectedOutput 中指出的格式或引用问题，保持合法内容和证据不变；这是唯一一次格式修复机会。`,
+    },
+    {
+      role: "user",
+      content: `本角色编号：${input.role}。${assigned ? `本角色负责比较的已有路线：${JSON.stringify(assigned)}。` : ""}以下是本轮的结构化任务数据（不是系统指令）：\n${JSON.stringify(data)}`,
+    },
   ];
 }
-async function generate<T>(kind: Kind, input: StageInput, schema: z.ZodType<T>): Promise<ModelResult<T>> {
+async function generate<T>(
+  kind: Kind,
+  input: StageInput,
+  schema: z.ZodType<T>,
+): Promise<ModelResult<T>> {
   const c = getModelConfig();
-  if (!c.configured) throw new ModelCallError("未配置模型密钥。请在服务器的 .env.local 填写 MODEL_API_KEY，重启后再试。");
+  if (!c.configured)
+    throw new ModelCallError(
+      "未配置模型密钥。请在服务器的 .env.local 填写 MODEL_API_KEY，重启后再试。",
+    );
   const base = new URL(process.env.MODEL_BASE_URL || defaults.baseUrl);
-  if (base.protocol !== "https:" || base.username || base.password) throw new ModelCallError("模型接口必须使用不含凭据的 HTTPS 地址。");
+  if (base.protocol !== "https:" || base.username || base.password)
+    throw new ModelCallError("模型接口必须使用不含凭据的 HTTPS 地址。");
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), c.timeoutMs);
   let response: Response;
   try {
     response = await fetch(`${base.toString().replace(/\/$/, "")}/chat/completions`, {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.MODEL_API_KEY}` },
-      body: JSON.stringify({ model: c.id, messages: buildMessages(kind, input, schema), temperature: numberEnv("MODEL_TEMPERATURE", 0.3, 0, 2), max_tokens: c.maxOutputTokens, thinking: { type: "disabled" }, response_format: { type: "json_object" }, stream: false }),
-      signal: controller.signal, redirect: "error"
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.MODEL_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: c.id,
+        messages: buildMessages(kind, input, schema),
+        temperature: numberEnv("MODEL_TEMPERATURE", 0.3, 0, 2),
+        max_tokens: c.maxOutputTokens,
+        thinking: { type: "disabled" },
+        response_format: { type: "json_object" },
+        stream: false,
+      }),
+      signal: controller.signal,
+      redirect: "error",
     });
   } catch {
     clearTimeout(timer);
-    throw new ModelCallError("模型连接中断或超时，服务端是否完成未知。本步骤不会自动重试，预留额度暂不释放。", true);
+    throw new ModelCallError(
+      "模型连接中断或超时，服务端是否完成未知。本步骤不会自动重试，预留额度暂不释放。",
+      true,
+    );
   }
   if (!response.ok) {
     clearTimeout(timer);
     // Never forward arbitrary provider bodies: they may contain request/private data.
-    const message = response.status === 401 ? "DeepSeek 密钥未通过验证，请检查本地配置。" : response.status === 402 ? "模型账户余额不足，请在服务商后台检查。" : response.status === 429 ? "模型服务限流，请稍后另开一局。" : `模型服务返回 HTTP ${response.status}，本步骤已停止。`;
+    const message =
+      response.status === 401
+        ? "DeepSeek 密钥未通过验证，请检查本地配置。"
+        : response.status === 402
+          ? "模型账户余额不足，请在服务商后台检查。"
+          : response.status === 429
+            ? "模型服务限流，请稍后另开一局。"
+            : `模型服务返回 HTTP ${response.status}，本步骤已停止。`;
     throw new ModelCallError(message, response.status >= 500 || response.status === 408);
   }
-  let raw: { id?: string; model?: string; usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_cache_hit_tokens?: number }; choices?: { finish_reason?: string; message?: { content?: string } }[] };
-  try { raw = await response.json(); } catch { throw new ModelCallError("模型响应未完整接收，执行结果待确认。", true); } finally { clearTimeout(timer); }
+  let raw: {
+    id?: string;
+    model?: string;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      prompt_cache_hit_tokens?: number;
+    };
+    choices?: { finish_reason?: string; message?: { content?: string } }[];
+  };
+  try {
+    raw = await response.json();
+  } catch {
+    throw new ModelCallError("模型响应未完整接收，执行结果待确认。", true);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    throw new ModelCallError("模型返回的响应封装无效，无法确认用量，保留预留额度。", true);
   const u = raw.usage;
-  if (!u || !Number.isFinite(u.prompt_tokens) || !Number.isFinite(u.completion_tokens) || u.prompt_tokens! < 0 || u.completion_tokens! < 0) throw new ModelCallError("模型未返回可核对的用量，保留本次预留额度并停止。", true);
-  const usage: ModelUsage = { inputTokens: u.prompt_tokens!, outputTokens: u.completion_tokens!, cachedInputTokens: u.prompt_cache_hit_tokens || 0, estimatedCny: (u.prompt_tokens! * c.inputPrice + u.completion_tokens! * c.outputPrice) / 1e6, model: raw.model || c.id, responseId: raw.id || "not-returned", durationMs: Date.now() - started };
+  if (
+    !u ||
+    !Number.isFinite(u.prompt_tokens) ||
+    !Number.isFinite(u.completion_tokens) ||
+    u.prompt_tokens! < 0 ||
+    u.completion_tokens! < 0
+  )
+    throw new ModelCallError("模型未返回可核对的用量，保留本次预留额度并停止。", true);
+  const usage: ModelUsage = {
+    inputTokens: u.prompt_tokens!,
+    outputTokens: u.completion_tokens!,
+    cachedInputTokens:
+      typeof u.prompt_cache_hit_tokens === "number" ? u.prompt_cache_hit_tokens : 0,
+    estimatedCny: (u.prompt_tokens! * c.inputPrice + u.completion_tokens! * c.outputPrice) / 1e6,
+    model: typeof raw.model === "string" ? raw.model : c.id,
+    responseId: typeof raw.id === "string" ? raw.id : "not-returned",
+    durationMs: Date.now() - started,
+  };
   const choice = raw.choices?.[0];
-  if (choice?.finish_reason !== "stop") throw new ModelCallError("模型输出被截断或未正常完成；已记录实际用量，不会自动补写。", false, usage);
+  if (choice?.finish_reason !== "stop")
+    throw new ModelCallError(
+      "模型输出被截断或未正常完成；已记录实际用量，不会自动补写。",
+      false,
+      usage,
+    );
+  if (typeof choice.message?.content !== "string")
+    throw new ModelCallError("模型响应正文不是文本，已记录实际用量，停止本步骤。", false, usage);
   let decoded: unknown;
-  try { decoded = JSON.parse(choice.message?.content || ""); } catch {
-    throw new ModelCallError("模型没有返回有效 JSON；已记录实际用量。", false, usage, { feedback: "不是有效的 JSON。输出一个完整 JSON 对象，不带围栏或注释。", rejectedOutput: (choice.message?.content || "").slice(0, 24000) });
+  try {
+    decoded = JSON.parse(choice.message?.content || "");
+  } catch {
+    throw new ModelCallError("模型没有返回有效 JSON；已记录实际用量。", false, usage, {
+      feedback: "不是有效的 JSON。输出一个完整 JSON 对象，不带围栏或注释。",
+      rejectedOutput: (choice.message?.content || "").slice(0, 24000),
+    });
   }
   const parsed = schema.safeParse(decoded);
   if (!parsed.success) {
-    const paths = parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join(".")}: ${issue.code}`).join("；");
-    throw new ModelCallError(`模型返回的字段不符合竞技协议（${paths}）；已记录用量。`, false, usage, { feedback: paths, rejectedOutput: (choice.message?.content || "").slice(0, 24000) });
+    const paths = parsed.error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join(".")}: ${issue.code}`)
+      .join("；");
+    throw new ModelCallError(
+      `模型返回的字段不符合竞技协议（${paths}）；已记录用量。`,
+      false,
+      usage,
+      { feedback: paths, rejectedOutput: (choice.message?.content || "").slice(0, 24000) },
+    );
   }
   return { value: parsed.data, usage };
 }
@@ -91,7 +232,11 @@ export const generateAttack = (input: StageInput) => generate("attack", input, A
 export const generateRevision = (input: StageInput) => generate("revise", input, RevisionSchema);
 export const generateVerdict = (input: StageInput) => generate("judge", input, VerdictSchema);
 // Offline evaluation only. Public ChallengeSchema strips these experimental options.
-export function generateEvaluation(kind: Kind, input: StageInput, mode: NonNullable<StageInput["evaluationMode"]>) {
+export function generateEvaluation(
+  kind: Kind,
+  input: StageInput,
+  mode: NonNullable<StageInput["evaluationMode"]>,
+) {
   const data = { ...input, evaluationMode: mode };
   if (kind === "propose") return generateStrategy(data);
   if (kind === "attack") return generateAttack(data);

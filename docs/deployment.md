@@ -21,11 +21,71 @@ Node.js 版本固定为 `24.19.0`，pnpm 版本固定为 `11.19.0`。SQLite 需�
 
 由管理员创建专用低权限用户 `strategy-arena`，并让该用户可写数据目录。环境文件放在发布目录外，权限设为仅管理员和服务账号可读。不要把填写后的环境文件提交到仓库。
 
-根据 `.env.example` 填写真实模型密钥、随机会话密钥和预览访问口令。设置 `ARENA_DATABASE_PATH=/srv/strategy-arena/data/arena.sqlite`，把 `ARENA_PUBLIC_ORIGIN` 设为实际 HTTPS 源站地址（例如 `https://你的域名`），并把 `RELEASE_COMMIT` 设为完整的提交 SHA。源站校验不信任任意转发头；反向代理必须保留正确的 Host。预览口令用于限制进入付费推演，不能代替每个浏览器的所有者隔离。
+根据 `.env.example` 填写真实模型密钥、随机会话密钥和预览访问口令。默认模型配置 `1.2.0` 使用 `MODEL_BASE_URL=https://api.deepseek.com/beta`、`MODEL_STRUCTURED_OUTPUT=strict-tool` 和 `MODEL_ID=deepseek-flash`；提示词版本为 `1.1.1`。strict-tool 模式不会自动把普通接口改成 Beta，也不会在失败后切换输出模式。设置 `ARENA_DATABASE_PATH=/srv/strategy-arena/data/arena.sqlite`，把 `ARENA_PUBLIC_ORIGIN` 设为实际 HTTPS 源站地址（例如 `https://你的域名`），并把 `RELEASE_COMMIT` 设为完整的提交 SHA。源站校验不信任任意转发头；反向代理必须保留正确的 Host。预览口令用于限制进入付费推演，不能代替每个浏览器的所有者隔离。
 
 生产环境默认要求 `ARENA_ACCESS_CODE`。只有明确决定开放公开演示时，才设置 `ARENA_PUBLIC_DEMO=true`；公开演示仍需费用和请求限制。不要把测试口令或测试会话密钥用在生产服务中。
 
+每个版本固定有效模型配置与 SHA-256 指纹。部署改变接口、温度、输出模式、提示词或其他已记录配置后，原版本在下一次步骤认领时停止，待执行步骤标为跳过；应由使用者创建新版本。API 密钥及其是否已配置不参与指纹，因此密钥轮换不会改变策略协议记录。
+
+网页服务开发额度默认为 70 元，每场讨论及其历史版本共用 1.5 元上限。离线评测另预留 20 元，最终验收与评审至少保留 30 元。网页、离线命令和服务商账单需要人工汇总；更换数据库或重新运行命令不会增加已授权总预算。
+
 配置服务前先检查 [systemd 模板](strategy-arena.service.example) 中的 Node.js 路径、目录、用户名和端口。SQLite 数据放在独立持久目录。升级前先停止写入或使用 SQLite 一致性备份；运行中的数据库不能只复制主文件而忽略 WAL。
+
+## 未知请求的人工核账
+
+外部请求超时后，服务可能无法确认是否扣费。系统会保留费用预留和并发占用。3 个未知请求会占满默认并发额度，系统不会自动重试，也不会自动释放。
+
+只有管理员在服务商后台核对请求和实际人民币费用后，才能运行离线核账工具。工具只能记录管理员的确认，无法证明凭证真实。没有查到请求不等于确认未扣费；仍有疑问时，保留未知状态。
+
+先停止 `strategy-arena` 服务，确认没有该服务的其他实例。再备份 SQLite 数据库及其 WAL。停止服务可避免迟到的响应与人工核账同时写账本。
+
+```sh
+sudo systemctl stop strategy-arena
+```
+
+在已核对提交的源码目录执行下面的命令。源码目录需要安装依赖，包含 `scripts`、`src` 和 `migrations`。standalone 发布包通常不含这些运维脚本。不要把环境文件、数据库或凭证复制进源码仓库。
+
+先设置实际数据库路径，再查看未知步骤。下面的查询只显示步骤 ID、版本 ID 和预留金额。
+
+```sh
+export ARENA_DATABASE_PATH=/srv/strategy-arena/data/arena.sqlite
+node --input-type=module <<'JS'
+import { DatabaseSync } from 'node:sqlite';
+const database = new DatabaseSync(process.env.ARENA_DATABASE_PATH, { readOnly: true });
+console.table(database.prepare(
+  'SELECT id, version_id, reservation FROM steps WHERE status = ?'
+).all('uncertain'));
+database.close();
+JS
+```
+
+把服务商回执保存到仓库外的本地普通文件。工具接受 `.json`、`.pdf`、`.png`、`.jpg` 和 `.txt`，文件大小不超过 20 MB。凭证应先脱敏，不包含密钥。环境文件、密钥路径和符号链接会遭拒。工具只保存文件名和 SHA-256，不保存或打印凭证正文，也不把凭证加入 Git。
+
+把示例中的步骤 ID 和凭证路径替换成已核对的值。确认没有扣费时，使用 `no-charge`，金额必须是 `0`。
+
+```sh
+pnpm exec tsx scripts/reconcile-uncertain.ts \
+  --step '替换为步骤UUID' --resolution no-charge --confirmed-cny 0 \
+  --proof /srv/strategy-arena/operator-receipts/receipt.json \
+  --acknowledge-provider-confirmation
+```
+
+确认实际扣费时，使用 `settled`，金额填写服务商确认的人民币正数。下例的 `0.0345` 仅为格式示例，不是建议金额。实际费用即使超过原预留，也必须如实记录。
+
+```sh
+pnpm exec tsx scripts/reconcile-uncertain.ts \
+  --step '替换为步骤UUID' --resolution settled --confirmed-cny 0.0345 \
+  --proof /srv/strategy-arena/operator-receipts/receipt.json \
+  --acknowledge-provider-confirmation
+```
+
+成功后，工具释放该步骤的预留和并发占用，并记入确认费用。原步骤变为失败，原结果仍不可用；工具不会重放请求、继续原版本或创建新版本。已暂停或已替换的版本保留原状态。重复核账会遭拒，确认费用只入账一次。实际费用超出预算时，后续请求仍受正常预算限制。
+
+保留脱敏回执，核对终端显示的步骤 ID 和金额，再启动服务。原讨论需要继续时，由使用者另建版本，并遵守每日次数和剩余预算。
+
+```sh
+sudo systemctl start strategy-arena
+```
 
 ## 打包和校验
 

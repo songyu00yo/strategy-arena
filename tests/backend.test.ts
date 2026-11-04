@@ -3,7 +3,7 @@ import { ChallengeSchema, type ModelResult, type StageInput, type Strategy, type
 
 const model = vi.hoisted(() => ({ generate: vi.fn(), configured: true, estimate: 0.2 }));
 vi.mock("../src/lib/server/model", () => {
-  class ModelCallError extends Error { constructor(message: string, public uncertain = false, public usage?: unknown) { super(message); } }
+  class ModelCallError extends Error { constructor(message: string, public uncertain = false, public usage?: unknown, public repair?: { feedback: string; rejectedOutput: string }) { super(message); } }
   return {
     ModelCallError,
     getModelConfig: () => ({ id: "test-model", configured: model.configured, promptVersion: "test", schemaVersion: "1.0.0", timeoutMs: 1000 }),
@@ -16,12 +16,15 @@ import { closeDb, db, getVersion } from "../src/lib/server/db";
 import { advanceArena, createArena, getArena, newVersion, stopArena } from "../src/lib/server/runtime";
 import { ModelCallError } from "../src/lib/server/model";
 import { ensureOwner, ownerFromRequest, checkOrigin, accessState, grantAccess, requireArenaAccess } from "../src/lib/server/auth";
+import { validateRevision, validateVerdict } from "../src/lib/server/tools";
+import { startArenaWorker, stopArenaWorker } from "../src/lib/server/runner";
 
 const challenge = ChallengeSchema.parse({ goal: "在两个月内完成一门入门课程并交付项目" });
 function result(role = "A"): ModelResult<Strategy> {
   return { value: { id: role as Strategy["id"], title: `方案${role}`, thesis: `使用${role}路径学习`, steps: ["先完成一个小项目"], claims: [{ id: `${role}1`, text: "每周至少投入三小时", status: "unknown", sourceIds: [] }], resources: "现有设备", firstAction: "列出可用时间", failureCondition: "时间不足", estimatedCost: null, estimatedHours: 12 }, usage: { inputTokens: 100, outputTokens: 100, cachedInputTokens: 0, estimatedCny: 0.04, model: "test-model", responseId: "response-test", durationMs: 20 } };
 }
 beforeEach(() => {
+  stopArenaWorker();
   closeDb();
   vi.stubEnv("ARENA_DATABASE_PATH", ":memory:");
   vi.stubEnv("ARENA_RUN_BUDGET_CNY", "1.5");
@@ -30,11 +33,13 @@ beforeEach(() => {
   vi.stubEnv("ARENA_MAX_CONCURRENT_CALLS", "3");
   vi.stubEnv("ARENA_SESSION_SECRET", "backend-test-secret-32-characters-long");
   vi.stubEnv("ARENA_ACCESS_CODE", "");
+  vi.stubEnv("ARENA_PUBLIC_ORIGIN", "");
+  vi.stubEnv("ARENA_WORKER_ENABLED", "false");
   model.configured = true; model.estimate = 0.2;
   model.generate.mockReset();
   model.generate.mockImplementation(async (input: StageInput) => result(input.role));
 });
-afterEach(() => { closeDb(); vi.unstubAllEnvs(); });
+afterEach(() => { stopArenaWorker(); closeDb(); vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe("durable execution and ownership", () => {
   it("runs the complete protocol with real local retrieval, arithmetic, revision and a conditional verdict", async () => {
@@ -71,6 +76,8 @@ describe("durable execution and ownership", () => {
     expect(version.revisions).toHaveLength(3);
     expect(version.revisions.every(r => r.changed)).toBe(true);
     expect(version.verdict?.conditions.length).toBeGreaterThan(0);
+    expect(version.attacks.every(attack => attack.status === version.verdict?.attackFindings.find(finding => finding.attackId === attack.id)?.status)).toBe(true);
+    expect(version.attacks.every(attack => attack.status !== "pending")).toBe(true);
     expect(model.generate).toHaveBeenCalledTimes(10);
     expect(current.steps.filter(s => s.status === "completed")).toHaveLength(11);
     expect(version.costCny).toBeCloseTo(0.4);
@@ -101,6 +108,30 @@ describe("durable execution and ownership", () => {
     expect(failed.versions[0]).toMatchObject({ status: "uncertain", reservedCny: 0.2, costCny: 0 });
     await advanceArena(arena.id, "owner", arena.activeVersionId);
     expect(model.generate).toHaveBeenCalledTimes(1);
+  });
+  it("records rejected structured output and controlled validator diagnostics while charging actual usage", async () => {
+    const arena = createArena(challenge, "owner");
+    model.generate.mockResolvedValueOnce(result("B"));
+    const failed = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(failed.versions[0]).toMatchObject({ status: "ready", costCny: 0.04, reservedCny: 0 });
+    expect(failed.versions[0].status).toBe("ready");
+    const audit = failed.events.find(e => e.type === "step_failed");
+    expect(audit?.data).toMatchObject({ rejectedResult: { id: "B" }, validationMessage: "模型返回的方案编号与指定角色不一致。", usage: { responseId: "response-test" } });
+    expect(failed.versions[0].strategies).toHaveLength(0);
+    const repaired = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(model.generate.mock.calls[1][0].repairFeedback).toContain("方案编号与指定角色不一致");
+    expect(repaired.versions[0].strategies).toHaveLength(1);
+    expect(repaired.versions[0].costCny).toBe(0.08);
+    expect(repaired.events.filter(e => e.type === "protocol_repair_scheduled")).toHaveLength(1);
+  });
+  it("bounds known-format repair to one attempt and charges both failed responses", async () => {
+    const arena = createArena(challenge, "owner");
+    model.generate.mockImplementation(async () => result("B"));
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    const stopped = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(stopped.versions[0]).toMatchObject({ status: "failed", costCny: 0.08, reservedCny: 0 });
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(model.generate).toHaveBeenCalledTimes(2);
   });
   it("treats stale leases as uncertain, but can settle a late response exactly once", async () => {
     const arena = createArena(challenge, "owner");
@@ -146,6 +177,33 @@ describe("durable execution and ownership", () => {
 });
 
 describe("budgets and limits", () => {
+  it("allows absorbing a cross-route attack with its own valid evidence and still requires direct responses", () => {
+    const original = result().value;
+    const other = result("B").value;
+    const attack: Attack = { id: "own-attack", from: "B", targetStrategyId: "A", targetClaimId: original.claims[0].id, claimQuote: original.claims[0].text, reason: "时间可能不足", impact: "无法完成", verification: "计算时间", requests: [], status: "pending" };
+    const crossAttack: Attack = { ...attack, id: "cross-attack", from: "A", targetStrategyId: "B", targetClaimId: other.claims[0].id, claimQuote: other.claims[0].text };
+    const evidence = { id: "cross-evidence", attackId: crossAttack.id, tool: "calculate" as const, status: "calculated" as const, title: "时间计算", content: "3*4=12", source: "算术工具", sourceIds: [], expression: "3*4", result: 12, assumptions: "按四周计算", createdAt: new Date().toISOString() };
+    const input: StageInput = { challenge, role: "A", strategies: [original, other], attacks: [attack, crossAttack], evidence: [evidence, { ...evidence, id: "failed-evidence", attackId: attack.id, status: "error", result: null }], revisions: [], userChallenges: [] };
+    const revision: Revision = { strategyId: "A", strategy: { ...original, firstAction: "先记录四周可用时间，再安排学习任务", claims: [{ ...original.claims[0], status: "supported", sourceIds: ["failed-evidence"] }] }, responses: [{ attackId: crossAttack.id, decision: "accept", reason: "对B的时间质疑同样适用于本方案", evidenceIds: [evidence.id], change: "加入时间确认步骤" }], summary: "吸收其他方案的经验", changed: true };
+    const checked = validateRevision(revision, input);
+    expect(checked.responses.find(response => response.attackId === crossAttack.id)).toMatchObject({ decision: "accept", evidenceIds: [evidence.id] });
+    expect(checked.responses.find(response => response.attackId === attack.id)).toMatchObject({ decision: "unresolved", evidenceIds: [] });
+    expect(checked.strategy.claims[0]).toMatchObject({ status: "unknown", sourceIds: [] });
+    expect(() => validateRevision({ ...revision, responses: [{ ...revision.responses[0], evidenceIds: ["failed-evidence"] }] }, input)).toThrow("证据引用与攻击不对应");
+  });
+  it("allows citing unavailable results as unknowns without treating them as proof", () => {
+    const strategy = result().value;
+    const attack: Attack = { id: "attack-B", from: "B", targetStrategyId: "A", targetClaimId: "A1", claimQuote: strategy.claims[0].text, reason: "成本尚未证实", impact: "可能超过预算", verification: "查询材料", requests: [], status: "pending" };
+    const input: StageInput = { challenge, role: "judge", strategies: [strategy], attacks: [attack], revisions: [], userChallenges: [], evidence: [{ id: "E-failed", attackId: attack.id, tool: "search_materials", status: "unavailable", title: "缺少材料", content: "没有文字材料", source: "用户材料", sourceIds: [], expression: null, result: null, assumptions: "", createdAt: new Date().toISOString() }] };
+    const verdict: Verdict = { outcome: "insufficient", preferred: null, headline: "证据尚不足", rationale: "等待核实成本", conditions: [], uncertainties: ["成本未知"], nextActions: ["提供报价单"], exitCondition: "成本核实前不执行", evidenceIds: [], comparisons: [], attackFindings: [{ attackId: attack.id, status: "refuted", reason: "模型声称质疑已被反驳", evidenceIds: ["E-failed"] }] };
+    const checked = validateVerdict(verdict, input);
+    expect(checked.preferred).toBeNull();
+    expect(checked.attackFindings[0]).toMatchObject({ status: "unresolved", evidenceIds: [] });
+    expect(validateVerdict({ ...verdict, evidenceIds: ["E-failed"] }, input)).toMatchObject({ outcome: "insufficient", preferred: null });
+    expect(() => validateVerdict({ ...verdict, evidenceIds: ["invented-evidence"] }, input)).toThrow("不存在的证据");
+    expect(() => validateVerdict({ ...verdict, outcome: "recommendation", preferred: "C" }, input)).toThrow("不存在的策略");
+    expect(validateVerdict({ ...verdict, outcome: "recommendation", preferred: "A" }, input)).toMatchObject({ outcome: "insufficient", preferred: null });
+  });
   it("blocks a call before any external request when the historical arena budget is exhausted", async () => {
     process.env.ARENA_RUN_BUDGET_CNY = "0.21";
     const arena = createArena(challenge, "owner");
@@ -184,6 +242,60 @@ describe("budgets and limits", () => {
   });
 });
 
+describe("opt-in long-lived Node worker", () => {
+  it("requires opt-in and a configured model", () => {
+    expect(startArenaWorker()).toBeUndefined();
+    process.env.ARENA_WORKER_ENABLED = "true";
+    model.configured = false;
+    expect(startArenaWorker()).toBeUndefined();
+  });
+  it("advances without an open browser and shares atomic claims with manual requests", async () => {
+    vi.useFakeTimers();
+    process.env.ARENA_WORKER_ENABLED = "true";
+    const arena = createArena(challenge, "owner");
+    let resolve!: (value: ModelResult<Strategy>) => void;
+    model.generate.mockImplementationOnce(() => new Promise<ModelResult<Strategy>>(r => { resolve = r; }));
+    startArenaWorker(); startArenaWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(model.generate).toHaveBeenCalledTimes(1);
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(model.generate).toHaveBeenCalledTimes(1);
+    resolve(result());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getArena(arena.id, "owner").versions[0].strategies).toHaveLength(1);
+    stopArenaWorker();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(model.generate).toHaveBeenCalledTimes(1);
+  });
+  it("never replays uncertain requests after worker restart", async () => {
+    vi.useFakeTimers();
+    process.env.ARENA_WORKER_ENABLED = "true";
+    const arena = createArena(challenge, "owner");
+    model.generate.mockRejectedValueOnce(new ModelCallError("请求结果未知", true));
+    startArenaWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    stopArenaWorker(); startArenaWorker();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(model.generate).toHaveBeenCalledTimes(1);
+    expect(getArena(arena.id, "owner").versions[0]).toMatchObject({ status: "uncertain", reservedCny: 0.2 });
+  });
+  it("cools down budget failures before attempting another safe preflight", async () => {
+    vi.useFakeTimers();
+    process.env.ARENA_WORKER_ENABLED = "true";
+    process.env.ARENA_RUN_BUDGET_CNY = "0.1";
+    createArena(challenge, "owner");
+    startArenaWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(model.generate).not.toHaveBeenCalled();
+    process.env.ARENA_RUN_BUDGET_CNY = "1.5";
+    await vi.advanceTimersByTimeAsync(29000);
+    expect(model.generate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(model.generate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("browser ownership and request origin", () => {
   it("requires signed invite access when configured, rotates with code changes and bounds attempts", () => {
     process.env.ARENA_ACCESS_CODE = "private-invite";
@@ -207,8 +319,14 @@ describe("browser ownership and request origin", () => {
     expect(ownerFromRequest(new Request(initial.url, { headers: { cookie: cookie + "x" } }))).toBeNull();
   });
   it("checks same origin, including rejecting missing origin", () => {
+    process.env.ARENA_PUBLIC_ORIGIN = "https://arena.test";
     expect(() => checkOrigin(new Request("https://arena.test/api/arenas", { headers: { origin: "https://evil.test" } }))).toThrow("来源校验失败");
     expect(() => checkOrigin(new Request("https://arena.test/api/arenas"))).toThrow();
     expect(() => checkOrigin(new Request("https://arena.test/api/arenas", { headers: { origin: "https://arena.test" } }))).not.toThrow();
+  });
+  it("uses the local Host when Next normalizes the request URL and requires explicit remote origin", () => {
+    expect(() => checkOrigin(new Request("http://localhost:3100/api/arenas", { headers: { host: "127.0.0.1:3100", origin: "http://127.0.0.1:3100" } }))).not.toThrow();
+    expect(() => checkOrigin(new Request("http://localhost:3100/api/arenas", { headers: { host: "127.0.0.1:3100", origin: "https://evil.test" } }))).toThrow("来源校验失败");
+    expect(() => checkOrigin(new Request("http://localhost/api/arenas", { headers: { host: "public.test", origin: "http://public.test" } }))).toThrow("ARENA_PUBLIC_ORIGIN");
   });
 });

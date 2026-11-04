@@ -16,7 +16,7 @@ async function main() {
   const owner = `live-smoke-${randomUUID()}`;
   let snapshot = createArena(fixture, owner);
   const started = Date.now();
-  const maxSteps = process.argv.includes("--first-call") ? 1 : 16;
+  const maxSteps = process.argv.includes("--first-call") ? 1 : 32;
   async function run() {
     for (let i = 0; i < maxSteps; i++) {
       const active = snapshot.versions.find(v => v.id === snapshot.activeVersionId)!;

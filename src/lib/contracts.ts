@@ -81,6 +81,8 @@ export interface ModelResult<T> { value: T; usage: ModelUsage }
 export interface StageInput {
   challenge: Challenge; role: string; strategies: Strategy[]; attacks: Attack[]; evidence: Evidence[];
   revisions: Revision[]; userChallenges: string[]; previousStrategy?: Strategy; duplicateHint?: string;
+  repairFeedback?: string; rejectedOutput?: string;
+  evaluationMode?: "strong-single" | "independent" | "arena"; contextHistory?: string[];
 }
 export const InterventionSchema = z.object({ targetStrategyId: z.enum(["A", "B", "C"]), targetClaimId: short, text: z.string().min(3).max(1000) });
 export const VersionRequestSchema = z.object({ challenge: ChallengeSchema, changeReason: z.string().min(1).max(1000) });

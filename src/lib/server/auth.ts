@@ -26,7 +26,26 @@ export function ensureOwner(request: Request) {
 }
 export function checkOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  const expected = new URL(request.url).origin;
+  const url = new URL(request.url);
+  const configured = process.env.ARENA_PUBLIC_ORIGIN;
+  let expected = url.origin;
+  if (configured) {
+    try {
+      const publicUrl = new URL(configured);
+      if (!["http:", "https:"].includes(publicUrl.protocol) || publicUrl.username || publicUrl.password || publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) throw new Error();
+      expected = publicUrl.origin;
+    } catch { throw new ArenaError("服务的公开访问地址配置无效，请联系管理员。", 503, "INVALID_PUBLIC_ORIGIN"); }
+  } else {
+    // Next may normalize request.url to localhost. Host is the browser's actual target;
+    // forwarded headers are intentionally not trusted. HTTPS proxies set ARENA_PUBLIC_ORIGIN.
+    const host = request.headers.get("host");
+    if (host) {
+      if (/[\s/@\\?#]/.test(host)) throw new ArenaError("请求主机无效。", 400, "INVALID_HOST");
+      try { expected = new URL(`${url.protocol}//${host}`).origin; }
+      catch { throw new ArenaError("请求主机无效。", 400, "INVALID_HOST"); }
+    }
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(expected).hostname)) throw new ArenaError("公开预览必须配置可信的 ARENA_PUBLIC_ORIGIN，请联系管理员。", 503, "PUBLIC_ORIGIN_REQUIRED");
+  }
   if (origin !== expected) throw new ArenaError("请求来源校验失败，请从本站页面重新操作。", 403, "INVALID_ORIGIN");
 }
 function accessCode() { return process.env.ARENA_ACCESS_CODE?.trim() || ""; }

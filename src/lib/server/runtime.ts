@@ -99,7 +99,12 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
     const previous = db().prepare("SELECT data FROM events WHERE version_id=? AND type='step_completed' AND stage='propose' AND actor=? ORDER BY seq DESC LIMIT 1").get(version.id, step.role.split(":")[0]) as { data: string } | undefined;
     if (previous) previousStrategy = JSON.parse(previous.data).result as Strategy;
   }
-  return { challenge: version.challenge, role: step.role.split(":")[0], strategies: independent ? [] : version.strategies, attacks: independent ? [] : version.attacks, evidence: independent ? [] : version.evidence, revisions: independent ? [] : version.revisions, userChallenges: userChallenges(version.id), ...(previousStrategy ? { previousStrategy } : {}), ...(step.role.includes(":retry") ? { duplicateHint: "上次方案与其他方案实质重复。请换一种机制、资源分配与执行路径。" } : {}) };
+  let repair: { feedback: string; rejectedOutput: string } | undefined;
+  if (step.role.includes(":repair")) {
+    const row = db().prepare("SELECT data FROM events WHERE version_id=? AND stage=? AND type='protocol_repair_scheduled' AND actor=? ORDER BY seq DESC LIMIT 1").get(version.id, step.stage, step.role.split(":")[0]) as { data: string } | undefined;
+    if (row) repair = JSON.parse(row.data);
+  }
+  return { challenge: version.challenge, role: step.role.split(":")[0], strategies: independent ? [] : version.strategies, attacks: independent ? [] : version.attacks, evidence: independent ? [] : version.evidence, revisions: independent ? [] : version.revisions, userChallenges: userChallenges(version.id), ...(previousStrategy ? { previousStrategy } : {}), ...(step.role.includes(":retry") ? { duplicateHint: "上次方案与其他方案实质重复。请换一种机制、资源分配与执行路径。" } : {}), ...(repair ? { repairFeedback: repair.feedback, rejectedOutput: repair.rejectedOutput } : {}) };
 }
 export function reserveCall(version: ArenaVersion, amount: number) {
   if (!Number.isFinite(amount) || amount <= 0) throw new ArenaError("模型费用配置无效。", 503, "INVALID_COST_CONFIG");
@@ -122,7 +127,7 @@ function claim(arenaId: string, owner: string, versionId: string): { step: StepR
     if (db().prepare("SELECT id FROM steps WHERE version_id=? AND status='running'").get(versionId)) return null;
     let step: StepRow | undefined;
     while ((step = db().prepare("SELECT * FROM steps WHERE version_id=? AND status='pending' ORDER BY ordinal LIMIT 1").get(versionId) as unknown as StepRow | undefined)) {
-      if ((step.stage === "attack" || step.stage === "revise") && (!version.strategies.some(s => s.id === step!.role) || (step.stage === "attack" && version.strategies.length < 2))) {
+      if ((step.stage === "attack" || step.stage === "revise") && (!version.strategies.some(s => s.id === step!.role.split(":")[0]) || (step.stage === "attack" && version.strategies.length < 2))) {
         db().prepare("UPDATE steps SET status='skipped',finished_at=? WHERE id=?").run(now(), step.id);
         event(arenaId, versionId, "step_skipped", "缺少可用的对应方案，已明确跳过这一步。", step.stage, step.role);
       } else break;
@@ -155,10 +160,17 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
     else if (step.stage === "revise") result = await generateRevision(input);
     else if (step.stage === "judge") result = await generateVerdict(input);
     const evidence = step.stage === "verify" ? [...input.attacks.flatMap(attack => executeAttackTools(attack, input.challenge.materials)), ...checkConstraints(input.challenge, input.strategies)] : null;
-    if (step.stage === "attack" && (result!.value as Attack).from !== input.role) throw new Error("质疑发起者与本轮角色不一致。");
-    const value = step.stage === "attack" ? validateAttack({ ...result!.value as Attack, id: `attack-${input.role}`, from: input.role }, input.strategies)
-      : step.stage === "revise" ? validateRevision(result!.value as Revision, input)
-      : step.stage === "judge" ? validateVerdict(result!.value as Verdict, input) : result?.value;
+    let value: Strategy | Attack | Revision | Verdict | undefined;
+    try {
+      if (step.stage === "propose" && (result!.value as Strategy).id !== input.role) throw new Error("模型返回的方案编号与指定角色不一致。");
+      if (step.stage === "attack" && (result!.value as Attack).from !== input.role) throw new Error("质疑发起者与本轮角色不一致。");
+      value = step.stage === "attack" ? validateAttack({ ...result!.value as Attack, id: `attack-${input.role}`, from: input.role }, input.strategies)
+        : step.stage === "revise" ? validateRevision(result!.value as Revision, input)
+        : step.stage === "judge" ? validateVerdict(result!.value as Verdict, input) : result?.value;
+    } catch (error) {
+      const feedback = error instanceof Error ? error.message.slice(0, 500) : "协议引用不合法";
+      throw new ModelCallError(`协议校验未通过：${feedback}`, false, result?.usage, { feedback, rejectedOutput: JSON.stringify(result?.value).slice(0, 24000) });
+    }
     atomic(() => {
       const currentStep = db().prepare("SELECT status FROM steps WHERE id=?").get(step.id) as { status: string };
       if (!["running", "uncertain"].includes(currentStep.status)) return;
@@ -166,12 +178,11 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       settle(version, step, result?.usage);
       if (step.stage === "propose") {
         const strategy = value as Strategy;
-        if (strategy.id !== input.role) throw new Error("模型返回的方案编号与指定角色不一致。");
         const userText = [input.challenge.goal, input.challenge.constraints, input.challenge.preferences, input.challenge.materials, ...input.challenge.options].join("\n");
         strategy.claims = strategy.claims.map((c, index) => ({ ...c, id: `${strategy.id}-claim-${index + 1}`, status: c.status === "estimate" ? "estimate" : c.status === "user" && userText.includes(c.text) ? "user" : "unknown", sourceIds: [] }));
         const duplicate = version.strategies.some(other => strategiesDuplicate(other, strategy));
         if (duplicate && !step.role.includes(":retry")) {
-          db().prepare("INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal) VALUES(?,?,?,?,?,?)").run(id(), arenaId, versionId, "propose", `${step.role}:retry`, step.ordinal + 0.1);
+          db().prepare("INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal) VALUES(?,?,?,?,?,?)").run(id(), arenaId, versionId, "propose", `${input.role}:retry`, step.ordinal + 0.1);
           event(arenaId, versionId, "duplicate_strategy", "方案实质重复；仅允许再生成一次，费用照常记录。", "propose", step.role);
         } else if (!duplicate) version.strategies.push(strategy);
         else event(arenaId, versionId, "duplicate_omitted", "再次生成仍重复，已保留较少的独立方案，不补造方案。", "propose", step.role);
@@ -185,7 +196,10 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       }
       else if (step.stage === "verify") version.evidence.push(...evidence!);
       else if (step.stage === "revise") version.revisions.push(value as Revision);
-      else version.verdict = value as Verdict;
+      else {
+        version.verdict = value as Verdict;
+        version.attacks = version.attacks.map(attack => ({ ...attack, status: version.verdict!.attackFindings.find(finding => finding.attackId === attack.id)?.status || "unresolved" }));
+      }
       db().prepare("UPDATE steps SET status='completed',finished_at=?,lease_until=NULL,reservation=0,usage=?,error=NULL WHERE id=?").run(now(), result ? JSON.stringify(result.usage) : null, step.id);
       if (["running", "uncertain"].includes(version.status)) { version.status = step.stage === "judge" ? "completed" : "ready"; version.error = null; }
       if (version.status === "paused") version.verdict = partialVerdict(version);
@@ -196,14 +210,21 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
     const modelError = error instanceof ModelCallError ? error : undefined;
     const uncertain = modelError?.uncertain ?? false;
     const usage = modelError?.usage ?? result?.usage;
-    const message = modelError?.message || "此步骤处理失败，已有记录已保留；未生成替代内容。请检查模型响应或服务日志。";
+    const validationMessage = modelError?.repair?.feedback || (!modelError && result && error instanceof Error ? error.message.slice(0, 500) : null);
+    const message = modelError?.message || (validationMessage ? `协议校验未通过：${validationMessage} 已记录实际用量，未生成替代内容。` : "此步骤处理失败，已有记录已保留；未生成替代内容。请检查模型响应或服务日志。");
     atomic(() => {
       const version = getVersion(versionId);
       if (!uncertain) settle(version, step, usage);
       db().prepare("UPDATE steps SET status=?,error=?,finished_at=?,lease_until=NULL,reservation=?,usage=? WHERE id=?").run(uncertain ? "uncertain" : "failed", message, now(), uncertain ? step.reservation : 0, usage ? JSON.stringify(usage) : null, step.id);
       if (!["paused", "superseded"].includes(version.status)) { version.status = uncertain ? "uncertain" : "failed"; version.error = message; }
+      event(arenaId, versionId, uncertain ? "step_uncertain" : "step_failed", message, step.stage, step.role, { usage: usage ?? null, heldReservationCny: uncertain ? step.reservation : 0, ...(validationMessage ? { rejectedResult: result?.value ?? modelError?.repair?.rejectedOutput, validationMessage } : {}) });
+      const repairRole = `${input.role}:repair`;
+      if (modelError?.repair && !uncertain && !["paused", "superseded"].includes(version.status) && !db().prepare("SELECT id FROM steps WHERE version_id=? AND stage=? AND role=?").get(versionId, step.stage, repairRole)) {
+        db().prepare("INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal) VALUES(?,?,?,?,?,?)").run(id(), arenaId, versionId, step.stage, repairRole, step.ordinal + 0.01);
+        version.status = "ready"; version.error = null;
+        event(arenaId, versionId, "protocol_repair_scheduled", "已记录格式或引用错误，将使用额外额度尝试一次修复；不会替换成模拟结果。", step.stage, input.role, modelError.repair);
+      }
       saveVersion(version);
-      event(arenaId, versionId, uncertain ? "step_uncertain" : "step_failed", message, step.stage, step.role, { usage: usage ?? null, heldReservationCny: uncertain ? step.reservation : 0 });
     });
   }
   return getArena(arenaId, owner);

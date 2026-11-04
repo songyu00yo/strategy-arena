@@ -105,11 +105,11 @@ export function checkConstraints(challenge: Challenge, strategies: Strategy[]): 
     return checks;
   });
 }
-export function validateAttack(attack: Attack, strategies: Strategy[]): Attack {
+export function validateAttack(attack: Attack, strategies: Strategy[], allowSelf = false): Attack {
   const target = strategies.find(s => s.id === attack.targetStrategyId);
   const claim = target?.claims.find(c => c.id === attack.targetClaimId);
   if (!claim || claim.text !== attack.claimQuote) throw new Error("质疑没有精确对应原主张，已停止，未伪造关联。");
-  if (attack.from === attack.targetStrategyId) throw new Error("交叉攻击不能攻击自己的策略。");
+  if (!allowSelf && attack.from === attack.targetStrategyId) throw new Error("交叉攻击不能攻击自己的策略。");
   return { ...attack, status: "pending" };
 }
 function actionable(strategy: Strategy) {
@@ -121,22 +121,28 @@ export function validateRevision(revision: Revision, input: StageInput): Revisio
   const eligible = input.attacks.filter(a => a.targetStrategyId === original.id);
   const seen = new Set<string>();
   for (const r of revision.responses) {
-    if (!eligible.some(a => a.id === r.attackId) || seen.has(r.attackId)) throw new Error("修订引用了不存在、无关或重复的攻击。");
+    if (!input.attacks.some(a => a.id === r.attackId) || seen.has(r.attackId)) throw new Error("修订引用了不存在或重复的攻击。");
     seen.add(r.attackId);
     if (r.evidenceIds.some(id => !input.evidence.some(e => e.id === id && e.attackId === r.attackId))) throw new Error("修订的证据引用与攻击不对应。");
   }
   const changed = actionable(original) !== actionable(revision.strategy);
-  const responses = revision.responses.map(r => r.decision === "accept" && (!changed || !r.change.trim()) ? { ...r, decision: "unresolved" as const, change: "", reason: `${r.reason}（未检测到行动、资源或成立条件变化，不计为实质修订）` } : r);
+  const successful = input.evidence.filter(e => e.status === "found" || e.status === "calculated");
+  const responses = revision.responses.map(r => {
+    const evidenceIds = r.evidenceIds.filter(id => successful.some(e => e.id === id));
+    if (r.decision !== "unresolved" && !evidenceIds.length) return { ...r, evidenceIds, decision: "unresolved" as const, reason: `${r.reason}（缺少有效证据，暂不视为质疑已解决）` };
+    if (r.decision === "accept" && (!changed || !r.change.trim())) return { ...r, evidenceIds, decision: "unresolved" as const, change: "", reason: `${r.reason}（未检测到行动、资源或成立条件变化，不计为实质修订）` };
+    return { ...r, evidenceIds };
+  });
   for (const attack of eligible.filter(a => !seen.has(a.id))) responses.push({ attackId: attack.id, decision: "unresolved", reason: "本次修订未回应这项质疑，保持未解决。", evidenceIds: [], change: "" });
   // A supported claim must have a real evidence/source reference.
-  const sourceIds = new Set(input.evidence.flatMap(e => [e.id, ...e.sourceIds]));
+  const sourceIds = new Set(successful.flatMap(e => [e.id, ...e.sourceIds]));
   const claims = revision.strategy.claims.map(c => c.status === "supported" && (!c.sourceIds.length || c.sourceIds.some(id => !sourceIds.has(id))) ? { ...c, status: "unknown" as const, sourceIds: [] } : c);
   return { ...revision, changed, responses, strategy: { ...revision.strategy, claims } };
 }
 export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
   const strategies = input.strategies.map(s => input.revisions.find(r => r.strategyId === s.id)?.strategy || s);
   const successful = new Set(input.evidence.filter(e => e.status === "found" || e.status === "calculated").map(e => e.id));
-  if (verdict.evidenceIds.some(id => !successful.has(id))) throw new Error("裁决引用了不存在或失败的证据。");
+  if (verdict.evidenceIds.some(id => !input.evidence.some(e => e.id === id))) throw new Error("裁决引用了不存在的证据。请原样复制 Evidence.id，不要使用材料 sourceId。");
   const findings = input.attacks.map(a => {
     const finding = verdict.attackFindings.find(f => f.attackId === a.id);
     const ids = finding?.evidenceIds.filter(id => successful.has(id) && input.evidence.some(e => e.id === id && e.attackId === a.id)) || [];
@@ -146,10 +152,12 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
     const existing = verdict.comparisons.find(c => c.strategyId === s.id);
     if ((input.challenge.budget !== null && s.estimatedCost !== null && s.estimatedCost > input.challenge.budget) || (input.challenge.timeHours !== null && s.estimatedHours !== null && s.estimatedHours > input.challenge.timeHours)) return { strategyId: s.id, status: "violates" as const, reason: "按当前方案自己的估计超出明确限制；估计的准确性仍需验证。" };
     if ((input.challenge.budget !== null && s.estimatedCost === null) || (input.challenge.timeHours !== null && s.estimatedHours === null)) return { strategyId: s.id, status: "unknown" as const, reason: "关键限制缺少可核验的资源估计，尚不能确认满足。" };
+    if (existing?.status === "eligible" && input.challenge.constraints.trim()) return { strategyId: s.id, status: "unknown" as const, reason: `${existing.reason}（文字限制尚无逐项确定性证明；这是一条有条件建议）` };
     return existing || { strategyId: s.id, status: "unknown" as const, reason: "裁决未完成该路线的限制检查。" };
   });
   let result = { ...verdict, comparisons, attackFindings: findings };
   if (result.preferred && !strategies.some(s => s.id === result.preferred)) throw new Error("裁决选择了不存在的策略。");
+  if (strategies.length < 2 || !successful.size) result = { ...result, preferred: null, outcome: "insufficient", headline: "目前不足以判定优选", uncertainties: [...result.uncertainties, strategies.length < 2 ? "不足两条独立策略，尚未形成有效比较。" : "没有有效工具证据，不能声称完成了核验。"] };
   if (result.preferred && comparisons.find(c => c.strategyId === result.preferred)?.status === "violates") result = { ...result, preferred: null, outcome: "insufficient", headline: "当前优选违反限制，需要重新核实或修改路线", rationale: `协议检查撤销了优选：${result.rationale}`, uncertainties: [...result.uncertainties, "不能将超出明确限制的路线判为优选。"] };
   if (result.outcome !== "recommendation") result.preferred = null;
   return result;

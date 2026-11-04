@@ -8,7 +8,7 @@ let database: DatabaseSync | undefined;
 export function db(): DatabaseSync {
   if (!database) {
     const path = process.env.ARENA_DATABASE_PATH || "./data/arena.sqlite";
-    if (path !== ":memory:") mkdirSync(dirname(resolve(path)), { recursive: true });
+    if (path !== ":memory:") mkdirSync(dirname(resolve(/* turbopackIgnore: true */ path)), { recursive: true });
     database = new DatabaseSync(path);
     database.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
     database.exec(readFileSync(resolve(process.cwd(), "migrations/001_initial.sql"), "utf8"));

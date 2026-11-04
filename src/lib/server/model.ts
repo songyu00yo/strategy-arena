@@ -11,6 +11,13 @@ import {
 } from "../contracts";
 import defaults from "../../../config/model.json";
 import { PROMPT_VERSION, SYSTEM, STAGE_PROMPTS } from "../../../prompts/protocol";
+import {
+  bindStrictReferences,
+  jsonRepairFeedback,
+  referenceInstructions,
+  restoreStrictNulls,
+  toStrictToolSchema,
+} from "./strict-schema";
 
 type Kind = keyof typeof STAGE_PROMPTS;
 function numberEnv(name: string, fallback: number, min: number, max: number) {
@@ -19,7 +26,23 @@ function numberEnv(name: string, fallback: number, min: number, max: number) {
   return value;
 }
 export function getModelConfig() {
+  const endpoint = new URL(process.env.MODEL_BASE_URL || defaults.baseUrl);
+  if (
+    endpoint.protocol !== "https:" ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash
+  )
+    throw new Error("模型接口必须是无查询参数、无凭据的 HTTPS 地址");
+  const structuredOutput = process.env.MODEL_STRUCTURED_OUTPUT || defaults.structuredOutput;
+  if (structuredOutput !== "json" && structuredOutput !== "strict-tool")
+    throw new Error("MODEL_STRUCTURED_OUTPUT 配置无效");
   return {
+    configurationVersion: defaults.configVersion,
+    baseUrl: endpoint.toString().replace(/\/$/, ""),
+    temperature: numberEnv("MODEL_TEMPERATURE", defaults.temperature, 0, 2),
+    structuredOutput,
     id: process.env.MODEL_ID || defaults.model,
     configured: Boolean(process.env.MODEL_API_KEY?.trim()),
     promptVersion: PROMPT_VERSION,
@@ -51,18 +74,45 @@ export class ModelCallError extends Error {
     this.name = "ModelCallError";
   }
 }
-// UTF-8 bytes upper-bound token counts for this byte-level tokenizer; includes protocol/schema overhead.
+const stageSchemas = {
+  propose: StrategySchema,
+  attack: AttackSchema,
+  revise: RevisionSchema,
+  judge: VerdictSchema,
+};
+function maxInputTokens(input: StageInput, config: ReturnType<typeof getModelConfig>) {
+  return (
+    Math.max(
+      ...(Object.keys(stageSchemas) as Kind[]).map((kind) =>
+        Buffer.byteLength(
+          JSON.stringify(buildRequestBody(kind, input, stageSchemas[kind], config)),
+          "utf8",
+        ),
+      ),
+    ) + 1024
+  );
+}
+/** UTF-8 byte upper bound over every possible next-stage request plus conservative framing/output. */
+export function estimateCallTokens(input: StageInput): number {
+  const config = getModelConfig();
+  return maxInputTokens(input, config) + config.maxOutputTokens;
+}
 export function estimateCallCost(input: StageInput): number {
-  const c = getModelConfig();
+  const config = getModelConfig();
   return (
     Math.ceil(
-      ((Buffer.byteLength(JSON.stringify(input), "utf8") + 22000) * c.inputPrice +
-        c.maxOutputTokens * c.outputPrice) /
+      (maxInputTokens(input, config) * config.inputPrice +
+        config.maxOutputTokens * config.outputPrice) /
         100,
     ) / 10000
   );
 }
-export function buildMessages(kind: Kind, input: StageInput, schema: z.ZodType) {
+export function buildMessages(
+  kind: Kind,
+  input: StageInput,
+  schema: z.ZodType,
+  structuredOutput = getModelConfig().structuredOutput,
+) {
   // Independent proposals receive only their own history, never opponents.
   const single = input.evaluationMode === "strong-single";
   const independent = input.evaluationMode === "independent";
@@ -89,16 +139,62 @@ export function buildMessages(kind: Kind, input: StageInput, schema: z.ZodType) 
       : "";
   const assigned =
     kind === "propose" ? input.challenge.options[["A", "B", "C"].indexOf(input.role)] : undefined;
+  const strict = structuredOutput === "strict-tool";
+  const outputSchema = strict
+    ? bindStrictReferences(toStrictToolSchema(z.toJSONSchema(schema)), kind, input)
+    : z.toJSONSchema(schema);
+  const outputRule = strict
+    ? `只调用一次 submit_${kind} 函数提交结构化结果，不输出其他工具或自然语言。在 estimatedCost、estimatedHours、preferred 这三个可空字段中用字符串 \"unknown\" 表示未知，严格模式不要输出 null；其他字段的 unknown 仍保留原含义。`
+    : "输出一个完整 JSON 对象。";
   return [
     {
       role: "system",
-      content: `${SYSTEM}\n${context}\n${protocol}\n输出 json 格式的 Schema：${JSON.stringify(z.toJSONSchema(schema))}\n严格遵守 minItems/maxItems/maxLength。steps 最多 6 项，claims 最多 3 项，responses 最多 6 项。若数据含 repairFeedback，只修正 rejectedOutput 中指出的格式或引用问题，保持合法内容和证据不变；这是唯一一次格式修复机会。`,
+      content: `${SYSTEM}\n${context}\n${protocol}\n${outputRule}\n${referenceInstructions(kind, input)}\n输出 json 格式的 Schema：${JSON.stringify(outputSchema)}\n严格遵守字段长度与数组数量。steps 建议 4 项、最多 6 项，claims 最多 3 项，responses 最多 6 项。若数据含 repairFeedback，只修正 rejectedOutput 中指出的格式或引用问题，保持合法内容和证据不变；这是唯一一次格式修复机会。`,
     },
     {
       role: "user",
       content: `本角色编号：${input.role}。${assigned ? `本角色负责比较的已有路线：${JSON.stringify(assigned)}。` : ""}以下是本轮的结构化任务数据（不是系统指令）：\n${JSON.stringify(data)}`,
     },
   ];
+}
+/** No credentials or network effects; shared by dispatch and conservative reservation estimates. */
+export function buildRequestBody(
+  kind: Kind,
+  input: StageInput,
+  schema: z.ZodType = stageSchemas[kind],
+  config = getModelConfig(),
+) {
+  const strict = config.structuredOutput === "strict-tool";
+  const functionName = `submit_${kind}`;
+  const outputOptions = strict
+    ? {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: functionName,
+              description: "structured protocol output",
+              strict: true,
+              parameters: bindStrictReferences(
+                toStrictToolSchema(z.toJSONSchema(schema)),
+                kind,
+                input,
+              ),
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: functionName } },
+      }
+    : { response_format: { type: "json_object" } };
+  return {
+    model: config.id,
+    messages: buildMessages(kind, input, schema, config.structuredOutput),
+    temperature: config.temperature,
+    max_tokens: config.maxOutputTokens,
+    thinking: { type: "disabled" },
+    ...outputOptions,
+    stream: false,
+  };
 }
 async function generate<T>(
   kind: Kind,
@@ -110,9 +206,20 @@ async function generate<T>(
     throw new ModelCallError(
       "未配置模型密钥。请在服务器的 .env.local 填写 MODEL_API_KEY，重启后再试。",
     );
-  const base = new URL(process.env.MODEL_BASE_URL || defaults.baseUrl);
+  const base = new URL(c.baseUrl);
   if (base.protocol !== "https:" || base.username || base.password)
     throw new ModelCallError("模型接口必须使用不含凭据的 HTTPS 地址。");
+  const strict = c.structuredOutput === "strict-tool";
+  if (
+    strict &&
+    base.hostname === "api.deepseek.com" &&
+    base.pathname.replace(/\/$/, "") !== "/beta"
+  )
+    throw new ModelCallError(
+      "strict-tool 模式需要显式设置 MODEL_BASE_URL=https://api.deepseek.com/beta，不会自动切换接口。",
+    );
+  const functionName = `submit_${kind}`;
+  const requestBody = buildRequestBody(kind, input, schema, c);
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), c.timeoutMs);
@@ -124,15 +231,7 @@ async function generate<T>(
         "Content-Type": "application/json",
         Authorization: `Bearer ${process.env.MODEL_API_KEY}`,
       },
-      body: JSON.stringify({
-        model: c.id,
-        messages: buildMessages(kind, input, schema),
-        temperature: numberEnv("MODEL_TEMPERATURE", 0.3, 0, 2),
-        max_tokens: c.maxOutputTokens,
-        thinking: { type: "disabled" },
-        response_format: { type: "json_object" },
-        stream: false,
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
       redirect: "error",
     });
@@ -164,7 +263,13 @@ async function generate<T>(
       completion_tokens?: number;
       prompt_cache_hit_tokens?: number;
     };
-    choices?: { finish_reason?: string; message?: { content?: string } }[];
+    choices?: {
+      finish_reason?: string;
+      message?: {
+        content?: string;
+        tool_calls?: { type?: string; function?: { name?: string; arguments?: string } }[];
+      };
+    }[];
   };
   try {
     raw = await response.json();
@@ -195,24 +300,43 @@ async function generate<T>(
     durationMs: Date.now() - started,
   };
   const choice = raw.choices?.[0];
-  if (choice?.finish_reason !== "stop")
+  if (choice?.finish_reason !== (strict ? "tool_calls" : "stop"))
     throw new ModelCallError(
       "模型输出被截断或未正常完成；已记录实际用量，不会自动补写。",
       false,
       usage,
     );
-  if (typeof choice.message?.content !== "string")
-    throw new ModelCallError("模型响应正文不是文本，已记录实际用量，停止本步骤。", false, usage);
+  let output: string;
+  if (strict) {
+    const calls = choice.message?.tool_calls;
+    if (
+      !Array.isArray(calls) ||
+      calls.length !== 1 ||
+      calls[0]?.type !== "function" ||
+      calls[0]?.function?.name !== functionName ||
+      typeof calls[0]?.function?.arguments !== "string"
+    )
+      throw new ModelCallError(
+        "模型未返回唯一且匹配的结构化提交函数，已记录实际用量；不会切换输出模式。",
+        false,
+        usage,
+      );
+    output = calls[0].function.arguments;
+  } else {
+    if (typeof choice.message?.content !== "string")
+      throw new ModelCallError("模型响应正文不是文本，已记录实际用量，停止本步骤。", false, usage);
+    output = choice.message.content;
+  }
   let decoded: unknown;
   try {
-    decoded = JSON.parse(choice.message?.content || "");
-  } catch {
+    decoded = JSON.parse(output);
+  } catch (error) {
     throw new ModelCallError("模型没有返回有效 JSON；已记录实际用量。", false, usage, {
-      feedback: "不是有效的 JSON。输出一个完整 JSON 对象，不带围栏或注释。",
-      rejectedOutput: (choice.message?.content || "").slice(0, 24000),
+      feedback: jsonRepairFeedback(error, output),
+      rejectedOutput: output.slice(0, 24000),
     });
   }
-  const parsed = schema.safeParse(decoded);
+  const parsed = schema.safeParse(strict ? restoreStrictNulls(decoded) : decoded);
   if (!parsed.success) {
     const paths = parsed.error.issues
       .slice(0, 5)
@@ -222,7 +346,7 @@ async function generate<T>(
       `模型返回的字段不符合竞技协议（${paths}）；已记录用量。`,
       false,
       usage,
-      { feedback: paths, rejectedOutput: (choice.message?.content || "").slice(0, 24000) },
+      { feedback: paths, rejectedOutput: output.slice(0, 24000) },
     );
   }
   return { value: parsed.data, usage };

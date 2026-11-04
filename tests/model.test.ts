@@ -32,6 +32,7 @@ const strategy = {
 };
 beforeEach(() => {
   vi.stubEnv("MODEL_API_KEY", "fixture-key-not-a-secret");
+  vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "json");
   vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com");
 });
 afterEach(() => {
@@ -50,24 +51,22 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
     expect(estimateCallCost(input)).toBeGreaterThan(0);
   });
   it("sends bounded JSON request and records returned model and actual usage", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        Response.json({
-          id: "fixture-response",
-          model: "provider-returned-snapshot",
-          choices: [
-            {
-              finish_reason: "stop",
-              message: {
-                content: JSON.stringify(strategy),
-                reasoning_content: "DO_NOT_STORE_PRIVATE_REASONING",
-              },
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        id: "fixture-response",
+        model: "provider-returned-snapshot",
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: JSON.stringify(strategy),
+              reasoning_content: "DO_NOT_STORE_PRIVATE_REASONING",
             },
-          ],
-          usage: { prompt_tokens: 1000, completion_tokens: 500, prompt_cache_hit_tokens: 200 },
-        }),
-      );
+          },
+        ],
+        usage: { prompt_tokens: 1000, completion_tokens: 500, prompt_cache_hit_tokens: 200 },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const result = await generateStrategy(input);
     expect(result.value.id).toBe("A");
@@ -88,15 +87,13 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
     expect(fetchMock.mock.calls[0][1].redirect).toBe("error");
   });
   it("retains charge metadata for invalid JSON, never silently retries", async () => {
-    const fn = vi
-      .fn()
-      .mockResolvedValue(
-        Response.json({
-          id: "invalid-fixture",
-          choices: [{ finish_reason: "stop", message: { content: "invalid json" } }],
-          usage: { prompt_tokens: 100, completion_tokens: 100 },
-        }),
-      );
+    const fn = vi.fn().mockResolvedValue(
+      Response.json({
+        id: "invalid-fixture",
+        choices: [{ finish_reason: "stop", message: { content: "invalid json" } }],
+        usage: { prompt_tokens: 100, completion_tokens: 100 },
+      }),
+    );
     vi.stubGlobal("fetch", fn);
     await expect(generateStrategy(input)).rejects.toMatchObject({
       uncertain: false,

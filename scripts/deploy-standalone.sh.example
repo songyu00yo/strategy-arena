@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Linux server template. Inspect paths, service name and rollback policy before use.
+set -euo pipefail
+if [[ $# -ne 4 ]]; then
+  echo "Usage: bash scripts/deploy-standalone.sh.example archive.tar.gz manifest.json COMMIT /srv/strategy-arena" >&2
+  exit 2
+fi
+archive=$(realpath "$1")
+manifest=$(realpath "$2")
+commit="$3"
+root="$4"
+[[ "$root" == /srv/* && "$root" != *..* ]] || { echo "Use a dedicated /srv directory." >&2; exit 2; }
+node scripts/verify-release.mjs "$manifest" "$archive" "$commit"
+# Reject archive paths that could escape the release directory.
+if tar -tzf "$archive" | awk '/^\// || /(^|\/)\.\.($|\/)/ { bad=1 } END { exit !bad }'; then
+  echo "Unsafe archive path." >&2; exit 1
+fi
+release="$root/releases/$commit"
+[[ ! -e "$release" ]] || { echo "Release already exists; do not overwrite it." >&2; exit 1; }
+mkdir -p "$release"
+tar -xzf "$archive" -C "$release" --no-same-owner
+[[ -f "$release/server.js" && -f "$release/release-info.json" ]] || { echo "Missing standalone entry point." >&2; exit 1; }
+cp "$manifest" "$release/manifest.json"
+previous=$(readlink "$root/current" || true)
+ln -s "$release" "$root/current.next"
+mv -Tf "$root/current.next" "$root/current"
+# The service reads a private environment file outside the release directory.
+if ! systemctl restart strategy-arena || ! curl --fail --silent --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:3100/api/health | node -e 'let text="";process.stdin.on("data",chunk=>text+=chunk);process.stdin.on("end",()=>{try{const health=JSON.parse(text);if(health.status!=="ok"||health.commit!==process.argv[1])process.exitCode=1}catch{process.exitCode=1}})' "$commit"; then
+  if [[ -n "$previous" ]]; then
+    ln -s "$previous" "$root/current.rollback"
+    mv -Tf "$root/current.rollback" "$root/current"
+    systemctl restart strategy-arena
+  fi
+  echo "Health check failed. Previous symlink restored when available. Inspect service logs." >&2
+  exit 1
+fi
+echo "Loopback health passed for $commit. Public HTTPS, real-model smoke and owner isolation still require acceptance."

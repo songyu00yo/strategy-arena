@@ -1,7 +1,10 @@
 {
-  "configVersion": "1.0.0",
+  "configVersion": "1.2.1",
   "provider": "deepseek",
-  "baseUrl": "https://api.deepseek.com",
+  "baseUrl": "https://api.deepseek.com/beta",
+  "structuredOutput": "strict-tool",
+  "strictToolBaseUrl": "https://api.deepseek.com/beta",
+  "structuredOutputSource": "https://api-docs.deepseek.com/guides/tool_calls/",
   "model": "deepseek-flash",
   "documentedModelVersion": "DeepSeek-V4.1-Flash-1017",
   "thinking": "disabled",
@@ -12,5 +15,6 @@
   "estimatedOutputCnyPerMillion": 9.6,
   "pricingNote": "Conservative estimates at 8 CNY/USD using peak uncached rates; not an invoice. Record provider-reported model and usage on every response.",
   "source": "https://api-docs.deepseek.com/quick_start/pricing/",
-  "verifiedAt": "2026-11-04"
+  "verifiedAt": "2026-11-04",
+  "structuredOutputNote": "Explicit beta strict-function schema with dynamic reference IDs; local Zod and evidence guards still apply. No automatic mode fallback."
 }

@@ -1,26 +1,30 @@
 {
   "name": "strategy-arena",
-  "version": "0.1.0-dev",
+  "version": "0.2.0",
   "private": true,
   "packageManager": "pnpm@11.19.0",
-  "engines": { "node": ">=24 <25" },
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
-    "build": "next build",
+    "build": "node scripts/build.mjs",
     "start": "next start --hostname 127.0.0.1",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "format": "prettier --write src prompts scripts tests config",
+    "format:check": "prettier --check src prompts scripts tests config"
   },
   "dependencies": {
+    "lucide-react": "^0.577.0",
     "next": "16.4.5",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "zod": "4.6.7",
-    "lucide-react": "^0.577.0"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
@@ -31,7 +35,9 @@
     "@types/react-dom": "^19.2.3",
     "eslint": "^9.39.3",
     "eslint-config-next": "16.4.5",
+    "prettier": "3.7.4",
     "tailwindcss": "^4.2.1",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "5.1.0"
   }

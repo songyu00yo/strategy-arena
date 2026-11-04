@@ -1,0 +1,38 @@
+{
+  "version": "2.1.0",
+  "status": "runner-implemented-no-formal-results-recorded-here",
+  "modes": ["strong-single", "independent", "arena"],
+  "conditions": ["initial", "changed"],
+  "normalModelCallsPerCondition": {
+    "propose": 3,
+    "attack": 3,
+    "revise": 3,
+    "judge": 1
+  },
+  "maximumKnownFormatRepairsPerStep": 1,
+  "uncertainRequests": "retain reservation, stop trajectory, never automatically retry or resume",
+  "trajectoryCaps": {
+    "maxCny": 1.5,
+    "maxTokens": 600000,
+    "maxToolCalls": 12
+  },
+  "commandCapCny": 20,
+  "capScope": "initial and changed conditions together; identical caps do not mean identical actual consumption",
+  "toolPolicy": "same search_materials and calculate implementations; deterministic constraint comparisons do not count as model-requested tools",
+  "schedule": "cryptographically shuffled case-by-mode trajectories; 1-3 concurrent trajectories, sequential calls within each trajectory; synchronous shared global reservations",
+  "development": {
+    "cases": 4,
+    "trajectories": 12,
+    "conditionOutputs": 24
+  },
+  "heldOut": {
+    "cases": 8,
+    "trajectories": 24,
+    "conditionOutputs": 48
+  },
+  "humanScoring": "required; four metrics each 0-2; blank labels must never become quality results",
+  "blinding": "random trajectory labels; identity map stored separately; generated prose may still reveal method clues",
+  "holdoutBoundary": "repository-visible inputs are frozen holdout definitions, not a sealed blinded input set",
+  "maxConcurrency": 3,
+  "defaultConcurrency": 1
+}

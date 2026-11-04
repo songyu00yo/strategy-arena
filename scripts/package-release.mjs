@@ -1,22 +1,16 @@
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { allowedReleaseSource, assertReleaseSafe } from "./release-safety.mjs";
+import { assertBuildMatchesSource } from "./build.mjs";
 
 const output = process.argv[2];
 if (!output || !output.endsWith(".tar.gz"))
   throw new Error("Usage: node scripts/package-release.mjs <output.tar.gz>");
 if (!existsSync(".next/standalone/server.js"))
   throw new Error("Run pnpm build first; standalone/server.js is missing.");
+const buildInfo = assertBuildMatchesSource();
 const destination = resolve(output);
 const staging = mkdtempSync(join(tmpdir(), "strategy-arena-release-"));
 try {
@@ -46,31 +40,30 @@ try {
       filter: (path) => allowedReleaseSource(path, "."),
       verbatimSymlinks: true,
     });
-  const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const workingTreeDirty = Boolean(
-    execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim(),
-  );
-  const pkg = JSON.parse(readFileSync("package.json", "utf8"));
   writeFileSync(
     join(staging, "release-info.json"),
     JSON.stringify(
       {
-        commit,
-        workingTreeDirty,
-        sourceIdentity: workingTreeDirty
+        commit: buildInfo.commit,
+        workingTreeDirty: buildInfo.workingTreeDirty,
+        sourceFingerprint: buildInfo.sourceFingerprint,
+        outputFingerprint: buildInfo.outputFingerprint,
+        builtAt: buildInfo.builtAt,
+        sourceIdentity: buildInfo.workingTreeDirty
           ? "Development bundle includes uncommitted changes; commit does not identify exact source."
           : "Clean working tree at recorded commit.",
-        version: pkg.version,
-        platform: process.platform,
-        arch: process.arch,
-        node: process.version,
-        packageManager: pkg.packageManager,
+        version: buildInfo.version,
+        platform: buildInfo.platform,
+        arch: buildInfo.arch,
+        node: buildInfo.node,
+        packageManager: buildInfo.packageManager,
       },
       null,
       2,
     ) + "\n",
   );
   assertReleaseSafe(staging);
+  assertBuildMatchesSource();
   mkdirSync(resolve(destination, ".."), { recursive: true });
   execFileSync("tar", ["-czf", destination, "-C", staging, "."]);
   console.log(`Standalone bundle written: ${destination}`);

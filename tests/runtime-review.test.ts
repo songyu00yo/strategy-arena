@@ -149,6 +149,51 @@ afterEach(() => {
 });
 
 describe("runtime adversarial review", () => {
+  it("preserves an identified restriction conflict when another resource estimate is unknown", () => {
+    const input = pairedInput(300);
+    input.challenge.constraints = "全部画面必须来自真实记录，禁止生成虚构画面";
+    input.strategies[0].estimatedCost = null;
+    const verdict = proposedVerdict("A");
+    verdict.comparisons = [
+      { strategyId: "A", status: "violates", reason: "此路线仍计划生成虚构画面" },
+      { strategyId: "B", status: "unknown", reason: "导出权限待确认" },
+    ];
+    const checked = validateVerdict(verdict, input);
+    expect(checked.comparisons[0]).toEqual(verdict.comparisons[0]);
+    expect(checked.preferred).toBeNull();
+    expect(checked.headline).toContain("违反限制");
+    expect(checked.comparisons[1].status).toBe("unknown");
+  });
+  it("retains the parsed model output separately from the normalized proposal", async () => {
+    const arena = createArena(challenge, "review-owner");
+    fixture.generate.mockResolvedValueOnce({
+      value: {
+        ...structuredClone(strategy),
+        claims: [
+          {
+            id: "original-id",
+            text: "尚无证据的判断",
+            status: "supported",
+            sourceIds: ["made-up"],
+          },
+        ],
+      },
+      usage,
+    });
+    const snapshot = await advanceArena(arena.id, "review-owner", arena.activeVersionId);
+    const saved = snapshot.events.find((event) => event.type === "step_completed")?.data as {
+      modelOutput: Strategy;
+      result: Strategy;
+      modelOutputScope: string;
+    };
+    expect(saved.modelOutput.claims[0]).toMatchObject({ id: "original-id", status: "supported" });
+    expect(saved.result.claims[0]).toMatchObject({
+      id: "A-claim-1",
+      status: "unknown",
+      sourceIds: [],
+    });
+    expect(saved.modelOutputScope).toBe("parsed-structured-output-before-server-rules");
+  });
   it("does not overwrite a reconciled step when an old request rejects late", async () => {
     const arena = createArena(challenge, "review-owner");
     let reject!: (reason: Error) => void;

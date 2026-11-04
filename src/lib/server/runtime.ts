@@ -427,6 +427,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           ]
         : null;
     let value: Strategy | Attack | Revision | Verdict | undefined;
+    const modelOutput = result ? structuredClone(result.value) : undefined;
     try {
       if (step.stage === "propose" && (result!.value as Strategy).id !== input.role)
         throw new Error("模型返回的方案编号与指定角色不一致。");
@@ -550,6 +551,12 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       saveVersion(version);
       event(arenaId, versionId, "step_completed", `${step.role} 已完成。`, step.stage, step.role, {
         usage: result?.usage ?? null,
+        ...(modelOutput
+          ? {
+              modelOutput,
+              modelOutputScope: "parsed-structured-output-before-server-rules",
+            }
+          : {}),
         result: value ?? evidence,
       });
     });

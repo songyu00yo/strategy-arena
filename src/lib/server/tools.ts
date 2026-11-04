@@ -332,6 +332,8 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
         status: "violates" as const,
         reason: "按当前方案自己的估计超出明确限制；估计的准确性仍需验证。",
       };
+    // A separate unknown must not erase an already identified conflict.
+    if (existing?.status === "violates") return existing;
     if (
       (input.challenge.budget !== null && s.estimatedCost === null) ||
       (input.challenge.timeHours !== null && s.estimatedHours === null)

@@ -1,5 +1,5 @@
 {
-  "configVersion": "1.2.0",
+  "configVersion": "1.2.1",
   "provider": "deepseek",
   "baseUrl": "https://api.deepseek.com/beta",
   "structuredOutput": "strict-tool",

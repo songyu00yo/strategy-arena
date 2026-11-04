@@ -9,6 +9,13 @@ if (
   throw new Error(
     "Evaluation protocol modes, call schedule or repair policy changed; review the runner and tests together.",
   );
+if (
+  !Number.isInteger(protocol.maxConcurrency) ||
+  protocol.maxConcurrency < 1 ||
+  protocol.maxConcurrency > 3 ||
+  protocol.defaultConcurrency !== 1
+)
+  throw new Error("Evaluation concurrency must default to one and never exceed three.");
 const suite = JSON.parse(readFileSync("evals/cases.json", "utf8"));
 if (suite.cases.filter((item) => item.partition === "development").length !== 4)
   throw new Error("Expected four development cases.");

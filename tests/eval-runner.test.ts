@@ -8,6 +8,7 @@ import {
   exportBlinded,
   ledger,
   runTrajectory,
+  runEvaluationSchedule,
   type EvaluationAdapter,
   type EvaluationCase,
   type EvaluationMode,
@@ -309,6 +310,108 @@ describe("explicit mock adapter evaluation orchestration", () => {
     expect(result.conditions[0].failedStage).toBe("verify");
     expect(result.conditions[0].evidence).toHaveLength(0);
     expect(result.accounting.toolCalls).toBe(0);
+  });
+  it("runs at most three trajectories concurrently while preserving each trajectory order", async () => {
+    const fixture = adapter();
+    const original = fixture.value.generate;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let inFlight = 0,
+      peak = 0;
+    fixture.value.generate = async (stage, input, mode) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      try {
+        await gate;
+        return await original(stage, input, mode);
+      } finally {
+        inFlight--;
+      }
+    };
+    const schedule = EVALUATION_MODES.map((mode) => ({ caseId: item.id, mode }));
+    const pending = runEvaluationSchedule({
+      schedule,
+      cases: [item],
+      global: ledger({ maxCny: 20, maxTokens: 2_000_000, maxToolCalls: 100 }),
+      adapter: fixture.value,
+      checkpoint: () => {},
+      concurrency: 3,
+    });
+    expect(inFlight).toBe(3);
+    release();
+    const results = await pending;
+    expect(peak).toBe(3);
+    expect(results.map((result) => result.arm)).toEqual([...EVALUATION_MODES]);
+    expect(results.every((result) => result.status === "completed")).toBe(true);
+    for (const mode of EVALUATION_MODES)
+      expect(fixture.calls.filter((call) => call.mode === mode).map((call) => call.stage)).toEqual([
+        "propose",
+        "propose",
+        "propose",
+        "attack",
+        "attack",
+        "attack",
+        "revise",
+        "revise",
+        "revise",
+        "judge",
+        "propose",
+        "propose",
+        "propose",
+        "attack",
+        "attack",
+        "attack",
+        "revise",
+        "revise",
+        "revise",
+        "judge",
+      ]);
+  });
+  it("reserves a concurrent shared command cap before awaiting and retains every unfinished trajectory", async () => {
+    const fixture = adapter();
+    const original = fixture.value.generate;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = 0,
+      finishedTrajectories = 0;
+    fixture.value.generate = async (stage, input, mode) => {
+      started++;
+      await gate;
+      return original(stage, input, mode);
+    };
+    const global = ledger({ maxCny: 0.08, maxTokens: 2_000_000, maxToolCalls: 100 });
+    const reservations: number[] = [];
+    const pending = runEvaluationSchedule({
+      schedule: EVALUATION_MODES.map((mode) => ({ caseId: item.id, mode })),
+      cases: [item],
+      global,
+      adapter: fixture.value,
+      concurrency: 3,
+      checkpoint: (event) => {
+        if (event.type === "call_started") {
+          const account = event.global as { spentCny: number; heldCny: number };
+          reservations.push(account.spentCny + account.heldCny);
+        }
+      },
+      onResult: () => {
+        finishedTrajectories++;
+      },
+    });
+    // The first call holds 0.05; two further 0.05 reservations cannot fit 0.08.
+    expect(started).toBe(1);
+    expect(global.heldCny).toBeCloseTo(0.05);
+    release();
+    const results = await pending;
+    expect(reservations.every((amount) => amount <= 0.08 + 1e-9)).toBe(true);
+    expect(global.spentCny + global.heldCny).toBeLessThanOrEqual(0.08);
+    expect(results).toHaveLength(3);
+    expect(finishedTrajectories).toBe(3);
+    expect(results.flatMap((result) => result.conditions)).toHaveLength(6);
+    expect(results.every((result) => result.status === "budget_exhausted")).toBe(true);
   });
   it("exports paired blinded cards without arm identity, usage, history or quality scores", async () => {
     const results: TrajectoryResult[] = [];

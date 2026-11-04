@@ -32,6 +32,7 @@ import {
 } from "../src/lib/contracts";
 import {
   estimateCallCost,
+  estimateCallTokens,
   generateEvaluation,
   getModelConfig,
   ModelCallError,
@@ -583,6 +584,56 @@ export async function runTrajectory(options: {
   return result;
 }
 
+export interface ScheduleEntry {
+  caseId: string;
+  mode: EvaluationMode;
+}
+/** One JS process reserves the shared ledger synchronously before any network await. */
+export async function runEvaluationSchedule(options: {
+  schedule: ScheduleEntry[];
+  cases: EvaluationCase[];
+  global: Ledger;
+  caps?: EvaluationCaps;
+  adapter: EvaluationAdapter;
+  checkpoint: Checkpoint;
+  concurrency?: number;
+  onResult?: (result: TrajectoryResult, scheduleIndex: number) => void;
+}): Promise<TrajectoryResult[]> {
+  const concurrency = options.concurrency ?? protocol.defaultConcurrency;
+  if (
+    !Number.isInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > Math.min(protocol.maxConcurrency, 3)
+  )
+    throw new Error("Concurrency must be an integer from 1 to 3.");
+  if (options.schedule.some((entry) => !options.cases.some((item) => item.id === entry.caseId)))
+    throw new Error("Schedule refers to an unknown case.");
+  const results = new Array<TrajectoryResult>(options.schedule.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < options.schedule.length) {
+      // Selecting a job and reserving its next model call happen without an await gap.
+      const scheduleIndex = cursor++;
+      const entry = options.schedule[scheduleIndex];
+      const item = options.cases.find((item) => item.id === entry.caseId)!;
+      const result = await runTrajectory({
+        item,
+        mode: entry.mode,
+        global: options.global,
+        caps: options.caps,
+        adapter: options.adapter,
+        checkpoint: options.checkpoint,
+      });
+      results[scheduleIndex] = result;
+      options.onResult?.(result, scheduleIndex);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, options.schedule.length) }, () => worker()),
+  );
+  return results;
+}
+
 function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
   for (let index = copy.length - 1; index > 0; index--) {
@@ -687,6 +738,7 @@ function cliOptions(argv: string[]) {
     "--trajectory-cny",
     "--max-tokens",
     "--max-tools",
+    "--concurrency",
   ]);
   for (let index = 0; index < argv.length; index += 2)
     if (!allowed.has(argv[index]) || !argv[index + 1] || argv[index + 1].startsWith("--"))
@@ -701,6 +753,13 @@ function cliOptions(argv: string[]) {
   if (!["development", "held-out"].includes(split))
     throw new Error("--split must be development or held-out.");
   const maxCny = Number(option("--max-cny", String(protocol.commandCapCny)));
+  const concurrency = Number(option("--concurrency", String(protocol.defaultConcurrency)));
+  if (
+    !Number.isInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > Math.min(protocol.maxConcurrency, 3)
+  )
+    throw new Error("--concurrency must be an integer from 1 to 3.");
   const caps = {
     maxCny: Number(option("--trajectory-cny", String(defaultCaps.maxCny))),
     maxTokens: Number(option("--max-tokens", String(defaultCaps.maxTokens))),
@@ -732,6 +791,7 @@ function cliOptions(argv: string[]) {
     output: option("--output", "artifacts/evaluations"),
     maxCny,
     caps,
+    concurrency,
   };
 }
 export async function main(argv = process.argv.slice(2)) {
@@ -805,6 +865,7 @@ export async function main(argv = process.argv.slice(2)) {
     toolPolicyHash,
     caps: options.caps,
     commandCapCny: options.maxCny,
+    concurrency: options.concurrency,
     schedule,
     modelIdentityNote:
       "Provider aliases are mutable. Actual returned model identities and response IDs are retained in each call usage.",
@@ -820,43 +881,40 @@ export async function main(argv = process.argv.slice(2)) {
   const adapter: EvaluationAdapter = {
     generate: generateEvaluation,
     estimateCost: estimateCallCost,
-    estimateTokens: (input) =>
-      Buffer.byteLength(JSON.stringify(input), "utf8") + 22000 + model.maxOutputTokens,
+    estimateTokens: estimateCallTokens,
   };
-  const results: TrajectoryResult[] = [];
-  for (const entry of schedule) {
-    const item = cases.find((item) => item.id === entry.caseId)!;
-    const result = await runTrajectory({
-      item,
-      mode: entry.mode,
-      global,
-      caps: options.caps,
-      adapter,
-      checkpoint,
-    });
-    results.push(result);
-    savePrivate(resolve(directory, "raw", `${result.id}.json`), {
-      metadata: {
-        commit,
-        workingTreeDirty,
-        promptVersion: model.promptVersion,
-        schemaVersion: SCHEMA_VERSION,
-        modelConfigHash,
-        toolPolicyHash,
-        declaredModel: model.id,
-      },
-      ...result,
-    });
-    console.log(
-      JSON.stringify({
-        caseId: result.caseId,
-        arm: result.arm,
-        status: result.status,
-        costCny: result.accounting.spentCny,
-        heldCny: result.accounting.heldCny,
-      }),
-    );
-  }
+  const results = await runEvaluationSchedule({
+    schedule,
+    cases,
+    global,
+    caps: options.caps,
+    adapter,
+    checkpoint,
+    concurrency: options.concurrency,
+    onResult: (result) => {
+      savePrivate(resolve(directory, "raw", `${result.id}.json`), {
+        metadata: {
+          commit,
+          workingTreeDirty,
+          promptVersion: model.promptVersion,
+          schemaVersion: SCHEMA_VERSION,
+          modelConfigHash,
+          toolPolicyHash,
+          declaredModel: model.id,
+        },
+        ...result,
+      });
+      console.log(
+        JSON.stringify({
+          caseId: result.caseId,
+          arm: result.arm,
+          status: result.status,
+          costCny: result.accounting.spentCny,
+          heldCny: result.accounting.heldCny,
+        }),
+      );
+    },
+  });
   const cards = exportBlinded(results, cases, directory);
   savePrivate(resolve(directory, "summary.json"), {
     status: results.every((result) => result.status === "completed")
@@ -865,6 +923,7 @@ export async function main(argv = process.argv.slice(2)) {
     protocolVersion: EVAL_PROTOCOL_VERSION,
     commit,
     workingTreeDirty,
+    concurrency: options.concurrency,
     selectedCases: cases.length,
     plannedTrajectories: schedule.length,
     recordedTrajectories: results.length,

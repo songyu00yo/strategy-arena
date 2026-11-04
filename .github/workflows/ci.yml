@@ -14,7 +14,8 @@ jobs:
     env:
       MODEL_API_KEY: ""
       MODEL_ID: deepseek-flash
-      MODEL_BASE_URL: https://api.deepseek.com
+      MODEL_BASE_URL: https://api.deepseek.com/beta
+      MODEL_STRUCTURED_OUTPUT: strict-tool
       ARENA_DATABASE_PATH: ./test-results/unit.sqlite
       ARENA_SESSION_SECRET: ci-fixture-session-secret-do-not-use-in-production-12345678
       NEXT_TELEMETRY_DISABLED: "1"

@@ -21,7 +21,7 @@ Node.js 版本固定为 `24.19.0`，pnpm 版本固定为 `11.19.0`。SQLite 需�
 
 由管理员创建专用低权限用户 `strategy-arena`，并让该用户可写数据目录。环境文件放在发布目录外，权限设为仅管理员和服务账号可读。不要把填写后的环境文件提交到仓库。
 
-根据 `.env.example` 填写真实模型密钥、随机会话密钥和预览访问口令。默认模型配置 `1.2.0` 使用 `MODEL_BASE_URL=https://api.deepseek.com/beta`、`MODEL_STRUCTURED_OUTPUT=strict-tool` 和 `MODEL_ID=deepseek-flash`；提示词版本为 `1.1.1`。strict-tool 模式不会自动把普通接口改成 Beta，也不会在失败后切换输出模式。设置 `ARENA_DATABASE_PATH=/srv/strategy-arena/data/arena.sqlite`，把 `ARENA_PUBLIC_ORIGIN` 设为实际 HTTPS 源站地址（例如 `https://你的域名`），并把 `RELEASE_COMMIT` 设为完整的提交 SHA。源站校验不信任任意转发头；反向代理必须保留正确的 Host。预览口令用于限制进入付费推演，不能代替每个浏览器的所有者隔离。
+根据 `.env.example` 填写真实模型密钥、随机会话密钥和预览访问口令。默认模型配置 `1.2.1` 使用 `MODEL_BASE_URL=https://api.deepseek.com/beta`、`MODEL_STRUCTURED_OUTPUT=strict-tool` 和 `MODEL_ID=deepseek-flash`；提示词版本为 `1.1.1`。strict-tool 模式不会自动把普通接口改成 Beta，也不会在失败后切换输出模式。设置 `ARENA_DATABASE_PATH=/srv/strategy-arena/data/arena.sqlite`，把 `ARENA_PUBLIC_ORIGIN` 设为实际 HTTPS 源站地址（例如 `https://你的域名`），并把 `RELEASE_COMMIT` 设为完整的提交 SHA。源站校验不信任任意转发头；反向代理必须保留正确的 Host。预览口令用于限制进入付费推演，不能代替每个浏览器的所有者隔离。
 
 生产环境默认要求 `ARENA_ACCESS_CODE`。只有明确决定开放公开演示时，才设置 `ARENA_PUBLIC_DEMO=true`；公开演示仍需费用和请求限制。不要把测试口令或测试会话密钥用在生产服务中。
 
@@ -129,6 +129,8 @@ bash scripts/deploy-standalone.sh.example artifacts/strategy-arena-build.tar.gz 
 回环健康检查只能说明服务有响应。正式验收还要检查公网 HTTPS、健康信息中的 SHA、访问口令、独立浏览器隔离，以及一轮真实模型推演。确认完成后，用 `--kind deployed --deploy-url https://实际地址` 重新生成清单，并附上外部检查证据。不要为了生成清单编造地址。
 
 保留上一版本的构建包、清单和数据库备份。代码回滚不保证数据库结构向后兼容；有迁移时先核对兼容性，再决定恢复备份。
+
+修复前配置 `1.2.0` 的历史评测不能替代当前 `1.2.1` 的发布验收。当前候选修复了明确违规状态被未知估算覆盖的优先级，并保存解析后、服务端规则处理前的 `modelOutput`。发布前仍需核对真实输出是否遵守文字限制与时间安排；状态规则修复不能证明模型语义已正确。
 
 ## 最终提交
 

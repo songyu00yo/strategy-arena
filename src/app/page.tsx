@@ -353,7 +353,7 @@ export default function Page() {
                   <span>三种策略，接受追问。</span>
                 </div>
                 <h2>
-                  三路并行。
+                  三路独立。
                   <br />
                   一轮交锋。
                 </h2>
@@ -757,13 +757,23 @@ export default function Page() {
                 <dd>{arena.health?.version ?? "—"}</dd>
               </div>
               <div>
-                <dt>提示词版本</dt>
+                <dt>当前提示词版本</dt>
                 <dd>{arena.health?.model.promptVersion ?? "—"}</dd>
               </div>
               <div>
                 <dt>数据契约版本</dt>
                 <dd>{arena.health?.model.schemaVersion ?? "—"}</dd>
               </div>
+              {selected && (
+                <div>
+                  <dt>本局生成配置</dt>
+                  <dd>
+                    {selected.runConfiguration
+                      ? `${String(selected.runConfiguration.id)} · ${String(selected.runConfiguration.promptVersion)}`
+                      : "早期记录：未保存完整配置"}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt>构建标识</dt>
                 <dd>{arena.health?.commit || "本地开发"}</dd>

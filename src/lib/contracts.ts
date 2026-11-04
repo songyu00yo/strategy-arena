@@ -174,6 +174,8 @@ export interface ArenaVersion {
   changeReason: string;
   parentVersionId: string | null;
   error: string | null;
+  runConfiguration?: Record<string, unknown>;
+  configurationHash?: string;
 }
 export interface ArenaSnapshot {
   id: string;

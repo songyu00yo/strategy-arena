@@ -149,6 +149,35 @@ afterEach(() => {
 });
 
 describe("runtime adversarial review", () => {
+  it("does not overwrite a reconciled step when an old request rejects late", async () => {
+    const arena = createArena(challenge, "review-owner");
+    let reject!: (reason: Error) => void;
+    fixture.generate.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    const pending = advanceArena(arena.id, "review-owner", arena.activeVersionId);
+    const version = getVersion(arena.activeVersionId);
+    version.reservedCny = 0;
+    version.costCny = 0.03;
+    version.status = "failed";
+    version.error = "operator reconciled";
+    saveVersion(version);
+    db()
+      .prepare(
+        "UPDATE steps SET status='failed',reservation=0,error='operator reconciled' WHERE version_id=? AND status='running'",
+      )
+      .run(version.id);
+    reject(new ModelCallError("late error", false, usage));
+    await pending;
+    expect(getVersion(version.id)).toMatchObject({
+      costCny: 0.03,
+      reservedCny: 0,
+      error: "operator reconciled",
+    });
+  });
   it("does not create a second duplicate retry after repairing the first duplicate retry", async () => {
     const arena = prepareB();
     fixture.generate
@@ -351,6 +380,7 @@ describe("runtime adversarial review", () => {
     const actual =
       await vi.importActual<typeof import("../src/lib/server/model")>("../src/lib/server/model");
     vi.stubEnv("MODEL_API_KEY", "explicit-review-fixture");
+    vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "json");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(null)));
     await expect(
       actual.generateStrategy({
@@ -368,17 +398,16 @@ describe("runtime adversarial review", () => {
     const actual =
       await vi.importActual<typeof import("../src/lib/server/model")>("../src/lib/server/model");
     vi.stubEnv("MODEL_API_KEY", "explicit-review-fixture");
+    vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "json");
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          Response.json({
-            id: "review-response",
-            usage: { prompt_tokens: 10, completion_tokens: 10 },
-            choices: [{ finish_reason: "stop", message: { content: { unexpected: "object" } } }],
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        Response.json({
+          id: "review-response",
+          usage: { prompt_tokens: 10, completion_tokens: 10 },
+          choices: [{ finish_reason: "stop", message: { content: { unexpected: "object" } } }],
+        }),
+      ),
     );
     await expect(
       actual.generateStrategy({

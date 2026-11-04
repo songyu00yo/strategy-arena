@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ArenaSnapshot,
   ArenaVersion,
@@ -55,6 +56,20 @@ export function modelInfo(): ArenaSnapshot["model"] {
     schemaVersion: c.schemaVersion,
   };
 }
+function runConfiguration() {
+  const configuration = { ...getModelConfig() } as Record<string, unknown>;
+  delete configuration.configured; // Key rotation does not change the strategy protocol.
+  return {
+    configuration,
+    hash: createHash("sha256").update(JSON.stringify(configuration)).digest("hex"),
+  };
+}
+function pinConfiguration(version: ArenaVersion) {
+  const current = runConfiguration();
+  version.runConfiguration = current.configuration;
+  version.configurationHash = current.hash;
+  saveVersion(version);
+}
 export function getArena(arenaId: string, owner: string) {
   atomic(() => {
     assertOwner(arenaId, owner);
@@ -69,7 +84,7 @@ export function createArena(challenge: Challenge, owner: string) {
     db()
       .prepare("INSERT INTO arenas(id,owner,active_version_id,created_at) VALUES(?,?,?,?)")
       .run(arenaId, owner, "", now());
-    addVersion(arenaId, challenge, "首次讨论", null);
+    pinConfiguration(addVersion(arenaId, challenge, "首次讨论", null));
     return arenaId;
   });
   return getArena(arenaId, owner);
@@ -108,6 +123,7 @@ export function newVersion(
       );
     }
     const version = addVersion(arenaId, challenge, reason, previous.id);
+    pinConfiguration(version);
     for (const text of [...userChallenges(previous.id), ...(intervention ? [intervention] : [])])
       db()
         .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
@@ -312,6 +328,19 @@ function claim(
       return null;
     if (db().prepare("SELECT id FROM steps WHERE version_id=? AND status='running'").get(versionId))
       return null;
+    if (version.configurationHash && version.configurationHash !== runConfiguration().hash) {
+      version.status = "failed";
+      version.error =
+        "服务的模型或提示词配置已更新；为避免同一版本混用配置，已停止后续步骤。请创建新版本重赛。";
+      db()
+        .prepare(
+          "UPDATE steps SET status='skipped',finished_at=? WHERE version_id=? AND status='pending'",
+        )
+        .run(now(), versionId);
+      saveVersion(version);
+      event(arenaId, versionId, "configuration_changed", version.error, version.stage);
+      return null;
+    }
     let step: StepRow | undefined;
     while (
       (step = db()
@@ -369,6 +398,7 @@ function claim(
     version.error = null;
     saveVersion(version);
     event(arenaId, versionId, "step_started", `${step.role} 开始执行。`, step.stage, step.role, {
+      configuration: getModelConfig(),
       reservedCny: step.reservation,
       model: getModelConfig().id,
       promptVersion: getModelConfig().promptVersion,
@@ -536,6 +566,10 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
         ? `协议校验未通过：${validationMessage} 已记录实际用量，未生成替代内容。`
         : "此步骤处理失败，已有记录已保留；未生成替代内容。请检查模型响应或服务日志。");
     atomic(() => {
+      const currentStep = db().prepare("SELECT status FROM steps WHERE id=?").get(step.id) as {
+        status: string;
+      };
+      if (!["running", "uncertain"].includes(currentStep.status)) return;
       const version = getVersion(versionId);
       if (!uncertain) settle(version, step, usage);
       db()

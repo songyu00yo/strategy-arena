@@ -9,7 +9,12 @@ import {
   type Verdict,
 } from "../src/lib/contracts";
 
-const model = vi.hoisted(() => ({ generate: vi.fn(), configured: true, estimate: 0.2 }));
+const model = vi.hoisted(() => ({
+  generate: vi.fn(),
+  configured: true,
+  estimate: 0.2,
+  id: "test-model",
+}));
 vi.mock("../src/lib/server/model", () => {
   class ModelCallError extends Error {
     constructor(
@@ -24,7 +29,7 @@ vi.mock("../src/lib/server/model", () => {
   return {
     ModelCallError,
     getModelConfig: () => ({
-      id: "test-model",
+      id: model.id,
       configured: model.configured,
       promptVersion: "test",
       schemaVersion: "1.0.0",
@@ -96,6 +101,7 @@ beforeEach(() => {
   vi.stubEnv("ARENA_PUBLIC_ORIGIN", "");
   vi.stubEnv("ARENA_WORKER_ENABLED", "false");
   model.configured = true;
+  model.id = "test-model";
   model.estimate = 0.2;
   model.generate.mockReset();
   model.generate.mockImplementation(async (input: StageInput) => result(input.role));
@@ -108,6 +114,19 @@ afterEach(() => {
 });
 
 describe("durable execution and ownership", () => {
+  it("pins non-secret configuration and stops before mixing models within one version", async () => {
+    const arena = createArena(challenge, "owner");
+    expect(arena.versions[0].runConfiguration?.id).toBe("test-model");
+    expect(arena.versions[0].runConfiguration).not.toHaveProperty("configured");
+    model.id = "different-model";
+    const stopped = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(stopped.versions[0].status).toBe("failed");
+    expect(stopped.versions[0].error).toContain("混用配置");
+    expect(model.generate).not.toHaveBeenCalled();
+    const changed = newVersion(arena.id, "owner", challenge, "使用新的模型配置");
+    expect(changed.versions[1].runConfiguration?.id).toBe("different-model");
+    expect(changed.versions[0].configurationHash).not.toBe(changed.versions[1].configurationHash);
+  });
   it("runs the complete protocol with real local retrieval, arithmetic, revision and a conditional verdict", async () => {
     const arena = createArena(
       {

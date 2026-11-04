@@ -4,9 +4,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { ChallengeSchema } from "../src/lib/contracts";
 import { videoChallenge } from "../src/lib/sample";
-import { createArena, advanceArena, newVersion } from "../src/lib/server/runtime";
+import { getModelConfig } from "../src/lib/server/model";
+import { createArena, advanceArena, newVersion, stopArena } from "../src/lib/server/runtime";
 
 async function main() {
+  const modelConfiguration = getModelConfig();
   const fixture = ChallengeSchema.parse(videoChallenge);
   const owner = `live-smoke-${randomUUID()}`;
   let snapshot = createArena(fixture, owner);
@@ -34,6 +36,9 @@ async function main() {
     }
   }
   await run();
+  if (process.argv.includes("--first-call")) {
+    snapshot = stopArena(snapshot.id, owner, snapshot.activeVersionId);
+  }
   if (process.argv.includes("--rematch") && snapshot.versions.at(-1)?.status === "completed") {
     snapshot = newVersion(
       snapshot.id,
@@ -52,6 +57,7 @@ async function main() {
   );
   const record = {
     kind: "live-api-on-synthetic-input",
+    modelConfiguration,
     timestamp: new Date().toISOString(),
     commit: sha,
     dirty,

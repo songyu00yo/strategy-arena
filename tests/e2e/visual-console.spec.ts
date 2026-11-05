@@ -180,7 +180,7 @@ test.describe("behaviour", () => {
   test.setTimeout(120_000);
 
   test("opening titles report real counts and any key skips them", async ({ page }, testInfo) => {
-    await mountFixture(page, snapshot());
+    await mountFixture(page, snapshotOf([version(1, { status: "running" })]));
     await openArena(page);
     await expect(page.locator(".c-intro")).toContainText("七天内");
     await page.waitForTimeout(900);
@@ -291,9 +291,24 @@ test.describe("behaviour", () => {
     await capture(page, testInfo, "console-edit", false);
   });
 
-  test("the opening runs the game from its first step, then hands over", async ({ page }) => {
-    test.setTimeout(120_000);
+  test("a finished game opens on its result with its panels ready", async ({ page }) => {
     await mountFixture(page, snapshot());
+    await openArena(page);
+    await expect(page.locator(".c-intro")).toHaveCount(0);
+    await expect(page.locator(".c-root.theater")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
+    await page
+      .getByRole("region", { name: "全部质疑" })
+      .getByRole("button", { name: /样片 2 小时没有算上/ })
+      .click();
+    await expect(page.getByRole("dialog", { name: "这一条，站得住吗？" })).toBeVisible();
+  });
+
+  test("a game in progress plays from its first step, and the viewer can take over", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await mountFixture(page, snapshotOf([version(1, { status: "running" })]));
     await openArena(page);
     // Taking over with a key must stop on the first step, not on the result.
     await page.locator(".c-intro").waitFor();

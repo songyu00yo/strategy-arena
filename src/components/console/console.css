@@ -1155,10 +1155,10 @@
 }
 /* Home */
 .console-shell.home {
-  overflow-x: clip;
   height: auto;
   min-height: 100dvh;
   overflow: visible;
+  overflow-x: clip;
 }
 .console-shell.home .site-header {
   right: 16px;

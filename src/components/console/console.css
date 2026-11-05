@@ -2924,6 +2924,101 @@
   animation: none !important;
   transition: none !important;
 }
+/* ------ Sample fill: light hands the form from field to field. ------ */
+.c-fill-dot {
+  position: fixed;
+  z-index: 90;
+  top: 0;
+  left: 0;
+  border-radius: 50%;
+  offset-rotate: 0deg;
+  pointer-events: none;
+}
+.form-topline {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.sample-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 4px;
+}
+.console-shell .sample-button {
+  padding: 1px 7px;
+  min-height: 24px;
+}
+.console-shell .sample-button.picked {
+  background: var(--c-t0);
+  color: #fff;
+}
+.fill-on {
+  position: relative;
+  --glow: rgb(var(--route));
+}
+.console-shell .fill-on :is(textarea, input) {
+  border-color: var(--glow);
+  box-shadow:
+    0 0 0 1px var(--glow),
+    0 6px 20px rgb(var(--route) / 0.22);
+  background-size: 100% 2px;
+  background-image: linear-gradient(var(--glow), var(--glow));
+}
+.console-shell .fill-on > span:first-child {
+  color: var(--glow);
+  font-weight: 700;
+}
+.console-shell textarea.fill-on,
+.console-shell .goal-input.fill-on {
+  box-shadow: inset 3px 0 0 var(--glow);
+}
+.console-shell .primary-button.ready {
+  animation: c-ready 0.9s cubic-bezier(0.2, 1.3, 0.3, 1);
+}
+@keyframes c-ready {
+  0% {
+    box-shadow: 0 0 0 0 rgb(11 13 16 / 0.5);
+    transform: scale(1);
+  }
+  35% {
+    box-shadow: 0 0 0 9px rgb(11 13 16 / 0.12);
+    transform: scale(1.045);
+  }
+  100% {
+    box-shadow: 0 0 0 18px rgb(11 13 16 / 0);
+    transform: scale(1);
+  }
+}
+/* Optional fields open and close on one smooth motion. */
+.extra-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows 0.42s cubic-bezier(0.65, 0, 0.15, 1),
+    opacity 0.3s,
+    visibility 0s linear 0.42s;
+}
+.extra-wrap.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    grid-template-rows 0.42s cubic-bezier(0.65, 0, 0.15, 1),
+    opacity 0.3s 0.08s,
+    visibility 0s;
+}
+.extra-wrap > .extra-fields {
+  min-height: 0;
+  overflow: hidden;
+}
+.console-shell .option-row {
+  animation: c-rise 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.console-shell .details-toggle svg {
+  transition: rotate 0.35s cubic-bezier(0.2, 1.2, 0.3, 1);
+}
 @media (max-width: 1100px) {
   .c-live {
     position: static;

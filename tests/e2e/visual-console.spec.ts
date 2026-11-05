@@ -1,6 +1,8 @@
 // Explicit synthetic UI fixture: the arena console. All API traffic is intercepted.
 import { expect, test, type Page } from "@playwright/test";
 import type { ArenaEvent, ArenaSnapshot, ArenaStep, Attack } from "../../src/lib/contracts";
+import { ChallengeSchema } from "../../src/lib/contracts";
+import { samples } from "../../src/lib/sample";
 import {
   attacks as fixtureAttacks,
   capture,
@@ -623,6 +625,60 @@ test.describe("behaviour", () => {
       }
     });
   }
+
+  test("every sample is valid and writes itself into the form", async ({ page }, testInfo) => {
+    for (const sample of samples) ChallengeSchema.parse(sample.challenge);
+    await mountFixture(page, snapshot());
+    await page.goto("/");
+    const goal = page.getByLabel("你的目标、备选方案或想法");
+    const chosen = samples[1];
+    await page.getByRole("button", { name: chosen.label }).click();
+    await page.waitForTimeout(750);
+    const midway = await goal.inputValue();
+    expect(midway.length).toBeGreaterThan(0);
+    expect(midway.length).toBeLessThan(chosen.challenge.goal.length);
+    await expect(page.locator(".fill-on")).toHaveCount(1);
+    await capture(page, testInfo, "home-filling", false);
+    await expect(goal).toHaveValue(chosen.challenge.goal, { timeout: 6000 });
+    await expect(page.getByLabel("备选方案 3", { exact: true })).toHaveValue(
+      chosen.challenge.options[2],
+      {
+        timeout: 6000,
+      },
+    );
+    await expect(page.getByLabel("预算上限")).toHaveValue(String(chosen.challenge.budget), {
+      timeout: 6000,
+    });
+    await expect(page.locator(".fill-on")).toHaveCount(0);
+    await expect(page.locator(".primary-button.ready")).toHaveCount(1);
+    // The fill ends with the way forward on screen.
+    await expect(page.getByRole("button", { name: "让方案上场" })).toBeInViewport();
+    await page.waitForTimeout(500);
+    await capture(page, testInfo, "home-filled", false);
+    // Choosing another sample mid-way, or typing, takes over at once.
+    await page.getByRole("button", { name: samples[2].label }).click();
+    await page.waitForTimeout(300);
+    await goal.fill("我自己写的问题，要优先于试填内容。");
+    await page.waitForTimeout(1500);
+    await expect(goal).toHaveValue("我自己写的问题，要优先于试填内容。");
+  });
+
+  test("submitting during a fill sends the whole sample", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    await mountFixture(page, snapshot());
+    let sent: { goal?: string; options?: string[] } = {};
+    await page.route("**/api/arenas", async (route) => {
+      sent = route.request().postDataJSON();
+      await route.fulfill({ json: snapshot() });
+    });
+    await page.goto("/");
+    const chosen = samples[3];
+    await page.getByRole("button", { name: chosen.label }).click();
+    await page.getByRole("button", { name: "让方案上场" }).click();
+    await expect(page.locator(".c-root")).toBeVisible();
+    expect(sent.goal).toBe(chosen.challenge.goal);
+    expect(sent.options).toEqual(chosen.challenge.options);
+  });
 
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {
     await skipIntro(page);

@@ -1,22 +1,24 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { ArenaEvent, ArenaVersion, Attack } from "@/lib/contracts";
+import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { outputOf, type Beat } from "./beats";
+import { Decode, reducedMotion } from "./effects";
 
-const reduced = () =>
-  typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+const reduced = reducedMotion;
 
-/** Opening: the question, then what this game really holds, counted line by line. */
+/** Cold open: the question on black, what this game holds, then a shutter opens on the room. */
 export function Intro({
   version,
   events,
   model,
+  onReveal,
   onDone,
 }: {
   version: ArenaVersion;
   events: ArenaEvent[];
   model: { id: string; promptVersion: string; schemaVersion: string };
+  onReveal: () => void;
   onDone: () => void;
 }) {
   const lines = [
@@ -27,28 +29,114 @@ export function Intro({
     `同一模型 ${model.id} 分成五个角色`,
   ];
   const [count, setCount] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (reduced()) return onDone();
-    const timer = setTimeout(
-      () => (count < lines.length ? setCount(count + 1) : onDone()),
-      count < lines.length ? 190 : 650,
-    );
+    if (reducedMotion()) {
+      onReveal();
+      return onDone();
+    }
+    if (count < lines.length) {
+      const timer = setTimeout(() => setCount(count + 1), count === 0 ? 1100 : 210);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => {
+      onReveal();
+      const open = box.current?.animate(
+        [{ clipPath: "inset(0 0 0 0)" }, { clipPath: "inset(50% 0 50% 0)" }],
+        { duration: 760, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
+      );
+      if (open) open.onfinish = onDone;
+      else onDone();
+    }, 620);
     return () => clearTimeout(timer);
-  }, [count, lines.length, onDone]);
+  }, [count, lines.length, onDone, onReveal]);
   useEffect(() => {
-    addEventListener("keydown", onDone, { once: true });
-    addEventListener("mousedown", onDone, { once: true });
-    return () => {
-      removeEventListener("keydown", onDone);
-      removeEventListener("mousedown", onDone);
+    const skip = () => {
+      onReveal();
+      onDone();
     };
-  }, [onDone]);
+    addEventListener("keydown", skip, { once: true });
+    addEventListener("mousedown", skip, { once: true });
+    return () => {
+      removeEventListener("keydown", skip);
+      removeEventListener("mousedown", skip);
+    };
+  }, [onDone, onReveal]);
   return (
-    <div className="c-intro" aria-hidden="true">
-      <p className="q">{version.challenge.goal}</p>
+    <div className="c-intro" ref={box} aria-hidden="true">
+      <p className="q">
+        <Decode text={version.challenge.goal} active />
+      </p>
       <ul>
         {lines.slice(0, count).map((line) => (
-          <li key={line}>{line}</li>
+          <li key={line}>
+            <Decode text={line} active />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** The verdict lands: black bursts out of the chosen board, then folds into the verdict panel. */
+export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || reducedMotion()) return onDone();
+    const pick = document
+      .querySelector(`[data-board="${verdict.preferred ?? "B"}"]`)
+      ?.getBoundingClientRect();
+    const x = pick ? pick.left + pick.width / 2 : innerWidth / 2;
+    const y = pick ? pick.top + pick.height / 2 : innerHeight / 2;
+    el.animate(
+      [
+        { clipPath: `circle(0px at ${x}px ${y}px)` },
+        { clipPath: `circle(150vmax at ${x}px ${y}px)` },
+      ],
+      { duration: 850, easing: "cubic-bezier(.7,0,.2,1)", fill: "both" },
+    );
+    let closing: Animation | undefined;
+    const close = () => {
+      if (closing) return;
+      const panel = document.querySelector(".c-verdict")?.getBoundingClientRect();
+      const inset = panel
+        ? `inset(${panel.top}px ${innerWidth - panel.right}px ${innerHeight - panel.bottom}px ${panel.left}px)`
+        : "inset(50%)";
+      closing = el.animate(
+        [
+          { clipPath: "inset(0 0 0 0)", opacity: 1 },
+          { clipPath: inset, opacity: 1, offset: 0.85 },
+          { clipPath: inset, opacity: 0 },
+        ],
+        { duration: 800, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
+      );
+      closing.onfinish = onDone;
+    };
+    const timer = setTimeout(close, 3300);
+    addEventListener("keydown", close);
+    return () => {
+      clearTimeout(timer);
+      removeEventListener("keydown", close);
+    };
+  }, [verdict, onDone]);
+  return (
+    <div className="c-film" ref={box} aria-hidden="true">
+      <small>
+        <Decode
+          text={verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
+          active
+          delay={350}
+        />
+      </small>
+      <div className="head">
+        <Decode text={verdict.headline} active delay={520} />
+      </div>
+      <ul>
+        {verdict.conditions.slice(0, 2).map((line, i) => (
+          <li key={line}>
+            <Decode text={line} active delay={1100 + i * 220} />
+          </li>
         ))}
       </ul>
     </div>
@@ -229,25 +317,33 @@ export function FloatingWindows({
   version,
   beats,
   index,
+  directed,
 }: {
   version: ArenaVersion;
   beats: Beat[];
   index: number;
+  directed: boolean;
 }) {
   const current = beats[index];
   const shown = beats.slice(0, index + 1);
   const box = useRef<HTMLDivElement>(null);
   const attack = current?.attack;
   useEffect(() => {
-    if (!box.current || !attack || reduced()) return;
+    if (!box.current || !attack || !directed || reduced()) return;
     box.current.animate(
       [
-        { transform: "translateY(70px) scale(0.78)", opacity: 0, filter: "blur(6px)" },
+        {
+          transform: "translateY(90px) rotateX(24deg) scale(0.74)",
+          opacity: 0,
+          filter: "blur(10px)",
+        },
         { transform: "none", opacity: 1, filter: "none" },
       ],
-      { duration: 520, easing: "cubic-bezier(.2,.8,.2,1)" },
+      { duration: 620, delay: 620, easing: "cubic-bezier(.2,.9,.2,1)", fill: "backwards" },
     );
-  }, [attack?.id, attack]);
+    // Rising only belongs to a new dispute, not to each later step of the same one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attack?.id]);
   const stateOf = (a: Attack) => (shown.some((b) => b.id === `v:${a.id}`) ? a.status : "pending");
   const past = shown
     .filter((b) => b.stage === "attack" && b.attack!.id !== attack?.id)
@@ -316,7 +412,13 @@ export function FloatingWindows({
           {rows.map(([label, text], i) => (
             <div key={label} className={`ln ${i === running ? "run" : i < running ? "ran" : ""}`}>
               <em>{label}</em>
-              <span>{text}</span>
+              <span>
+                <Decode
+                  text={text}
+                  active={directed && i === running}
+                  delay={i === 0 ? 1000 : 150}
+                />
+              </span>
             </div>
           ))}
         </div>

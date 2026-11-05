@@ -1,4 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
+import { e2eAddress } from "./scripts/test-address.mjs";
+
+const { origin } = e2eAddress();
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -12,7 +15,7 @@ export default defineConfig({
     ["junit", { outputFile: "test-results/e2e.xml" }],
   ],
   use: {
-    baseURL: "http://127.0.0.1:3100",
+    baseURL: origin,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -27,14 +30,14 @@ export default defineConfig({
   ],
   webServer: {
     command: "node scripts/start-e2e-server.mjs",
-    url: "http://127.0.0.1:3100",
+    url: origin,
     reuseExistingServer: false,
     timeout: 60_000,
     env: {
       MODEL_API_KEY: "",
       ARENA_ACCESS_CODE: "e2e-only-access-code",
       ARENA_PUBLIC_DEMO: "false",
-      ARENA_PUBLIC_ORIGIN: "http://127.0.0.1:3100",
+      ARENA_PUBLIC_ORIGIN: origin,
       ARENA_WORKER_ENABLED: "false",
       ARENA_SESSION_SECRET: "e2e-only-session-secret-never-use-in-production-12345678",
       ARENA_DATABASE_PATH: "./test-results/e2e.sqlite",

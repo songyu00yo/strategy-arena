@@ -1,7 +1,15 @@
 // Explicit synthetic UI fixture: the arena console. All API traffic is intercepted.
 import { expect, test, type Page } from "@playwright/test";
 import type { ArenaEvent, ArenaSnapshot, ArenaStep, Attack } from "../../src/lib/contracts";
-import { capture, mountFixture, openArena, snapshotOf, version } from "./visual.fixture";
+import {
+  attacks as fixtureAttacks,
+  capture,
+  mountFixture,
+  openArena,
+  snapshotOf,
+  strategies as fixtureStrategies,
+  version,
+} from "./visual.fixture";
 
 test.use({ video: process.env.VISUAL_VIDEO ? "on" : "off" });
 
@@ -322,6 +330,71 @@ test.describe("behaviour", () => {
     await expect(page.locator(".c-film")).toHaveCount(0);
   });
 
+  test("results arriving faster than the film never stall it or make it jump", async ({ page }) => {
+    test.setTimeout(120_000);
+    await skipIntro(page);
+    const full = version(1);
+    const plan = [
+      ...full.strategies.map(() => "propose"),
+      ...full.attacks.map(() => "attack"),
+      "verify",
+      ...full.revisions.map(() => "revise"),
+      "judge",
+    ];
+    let done = 0;
+    const current = () => {
+      const count = (stage: string) => plan.slice(0, done).filter((s) => s === stage).length;
+      const verified = count("verify") > 0;
+      const finished = done >= plan.length;
+      return snapshotOf([
+        version(1, {
+          status: finished ? "completed" : "ready",
+          stage: (plan[done] ?? "judge") as ArenaStep["stage"],
+          strategies: full.strategies.slice(0, count("propose")),
+          attacks: full.attacks
+            .slice(0, count("attack"))
+            .map((a) => (verified ? a : { ...a, status: "pending" as const })),
+          evidence: verified ? full.evidence : [],
+          revisions: full.revisions.slice(0, count("revise")),
+          verdict: finished ? full.verdict : null,
+        }),
+      ]);
+    };
+    await mountFixture(page, current());
+    // Each result lands 1.5 s after the last, quicker than any shot in the film.
+    await page.route("**/api/arenas**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/events"))
+        return route.fulfill({ contentType: "text/event-stream", body: ": explicit fixture\n\n" });
+      if (path.endsWith("/advance")) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        done = Math.min(done + 1, plan.length);
+      }
+      await route.fulfill({ json: current() });
+    });
+    await openArena(page);
+
+    const counter = page.locator(".c-now .fl span");
+    const seen: { step: number; total: number; arrived: number }[] = [];
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline) {
+      const text = await counter.textContent().catch(() => null);
+      const parts = text?.match(/(\d+)\/(\d+)/);
+      if (parts) seen.push({ step: +parts[1], total: +parts[2], arrived: done });
+      if (seen.at(-1)?.step === 15 && (await page.locator(".c-root.theater").count()) === 0) break;
+      await page.waitForTimeout(100);
+    }
+
+    // It moves while results are still arriving, instead of waiting for the game to finish.
+    const midGame = seen.filter((s) => s.arrived < plan.length).map((s) => s.step);
+    expect(Math.max(...midGame)).toBeGreaterThanOrEqual(4);
+    // Every recorded step gets shown; none is skipped by jumping ahead.
+    for (let i = 1; i < seen.length; i++)
+      expect(seen[i].step - seen[i - 1].step).toBeLessThanOrEqual(1);
+    expect(seen.at(-1)?.step).toBe(15);
+    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
+  });
+
   test("stepping onto the verdict plays it full screen and folds into the panel", async ({
     page,
   }, testInfo) => {
@@ -383,6 +456,49 @@ test.describe("behaviour", () => {
     await expect(page.locator(".c-film")).toBeVisible();
     await expect(page.locator(".c-film")).toHaveCount(0, { timeout: 7000 });
     await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
+  });
+
+  test("results arriving steadily play step by step, without stalling then jumping", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    const partial = (n: number) =>
+      snapshotOf([
+        version(1, {
+          status: "ready",
+          strategies: fixtureStrategies.slice(0, n),
+          attacks: fixtureAttacks.slice(0, Math.max(0, n - 3)),
+          evidence: [],
+          revisions: [],
+          verdict: null,
+        }),
+      ]);
+    await mountFixture(page, partial(0));
+    let arrived = 0;
+    const total = 3 + fixtureAttacks.length;
+    // Arrivals come faster than a single step plays, as they did in the reported stall.
+    await page.route("**/api/arenas/*/advance", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      arrived += 1;
+      await route.fulfill({
+        json: arrived > total ? snapshotOf([version(1)]) : partial(arrived),
+      });
+    });
+    await openArena(page);
+    const seen: number[] = [];
+    for (let i = 0; i < 80; i++) {
+      await page.waitForTimeout(300);
+      const label = await page.locator(".c-now .fl span").textContent();
+      seen.push(Number(label?.split("/")[0] ?? 0));
+      if (seen.at(-1) === 15) break;
+    }
+    // It moved while results were still arriving, not only after the last one.
+    expect(seen[Math.min(19, seen.length - 1)]).toBeGreaterThanOrEqual(3);
+    // It reached the end by walking there, never by a sudden leap.
+    expect(seen.at(-1)).toBe(15);
+    const leaps = seen.slice(1).map((n, i) => n - seen[i]);
+    expect(Math.max(...leaps)).toBeLessThanOrEqual(1);
   });
 
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {

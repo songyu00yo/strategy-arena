@@ -478,7 +478,6 @@
   background: #c08a1e;
 }
 .c-time .ticks .cur {
-  box-shadow: 0 -3px 0 var(--c-t0);
   background: var(--c-t0);
 }
 .c-metrics {
@@ -1384,9 +1383,7 @@
   filter: drop-shadow(0 0 3px rgb(var(--route) / 0.7));
 }
 .c-root.theater .c-time .ticks .cur {
-  box-shadow:
-    0 -4px 0 var(--c-t0),
-    0 0 14px 2px rgb(11 13 16 / 0.35);
+  box-shadow: 0 0 10px 1px rgb(11 13 16 / 0.3);
 }
 .c-outline {
   position: absolute;
@@ -1683,7 +1680,7 @@
 }
 .c-time .ticks button:hover,
 .c-time .ticks .cur {
-  transform: scaleY(1.5);
+  transform: none;
 }
 .c-claim {
   transition:

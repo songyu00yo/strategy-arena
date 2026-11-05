@@ -131,7 +131,7 @@ for (const screen of screens) {
       await capture(page, testInfo, `console-${screen.name}-verdict`, false);
       await page.keyboard.press("Home");
       await page.getByRole("button", { name: "从头放映" }).click();
-      await page.waitForTimeout(3400 * 3 + 2000);
+      await page.waitForTimeout(2300 * 3 + 760 + 1000);
       await capture(page, testInfo, `console-${screen.name}-challenge`, false);
       expect(await noScroll(page)).toBeLessThanOrEqual(0);
       await expect(page.locator(".c-board")).toHaveCount(3);
@@ -360,8 +360,12 @@ test.describe("behaviour", () => {
       await page.waitForTimeout(1150);
       const cropped = await page.evaluate(() => {
         const stage = document.querySelector(".c-stage3")!.getBoundingClientRect();
-        const shot = document.querySelector(".c-board.target, .c-board.speaking");
-        return shot ? shot.getBoundingClientRect().top < stage.top - 1 : false;
+        return [...document.querySelectorAll(".c-board.target, .c-board.speaking")].some((node) => {
+          const box = node.getBoundingClientRect();
+          return (
+            box.top < stage.top - 1 || box.left < stage.left - 1 || box.right > stage.right + 1
+          );
+        });
       });
       expect(cropped).toBe(false);
     }

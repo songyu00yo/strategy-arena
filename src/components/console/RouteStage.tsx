@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
-import { FloatingWindows } from "./fx";
+import { ChainDeck } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
 import type { Beat } from "./beats";
 
@@ -13,9 +13,9 @@ const WORD: Record<Attack["status"], string> = {
   unresolved: "未决",
   pending: "待核验",
 };
-
 /** CSS custom colours use the space-separated form so they can take an alpha. */
 const spaced = (rgb: string) => rgb.replaceAll(",", " ");
+const centre = (box: DOMRect) => ({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
 
 type Flight = {
   attack: Attack;
@@ -25,8 +25,16 @@ type Flight = {
   duration: number;
   landed: boolean;
 };
+/** A value on a spring: it can be redirected at any moment without a visible seam. */
+type Spring = { p: number; v: number };
+const spring = (s: Spring, target: number, k: number, c: number, dt: number) => {
+  s.v += (-k * (s.p - target) - c * s.v) * dt;
+  s.p += s.v * dt;
+};
+const axis = (): Spring => ({ p: 0, v: 0 });
+const bodyOf = () => ({ x: axis(), y: axis(), z: axis(), r: axis() });
 
-/** Three boards in real 3D space, filmed by a camera that follows each recorded step. */
+/** Three boards in real 3D space. A sprung camera and sprung boards keep every step flowing into the next. */
 export function RouteStage({
   version,
   beats,
@@ -34,6 +42,7 @@ export function RouteStage({
   speed,
   directed,
   camera,
+  lead,
   entering,
   readOnly,
   onClaim,
@@ -44,6 +53,8 @@ export function RouteStage({
   speed: number;
   directed: boolean;
   camera: boolean;
+  /** Pause before a step acts, leaving room for its stage word. */
+  lead: number;
   entering: boolean;
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
@@ -60,222 +71,285 @@ export function RouteStage({
   const rig = useRef<HTMLDivElement>(null);
   const world = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const fx = useRef<Sparks | null>(null);
   const packet = useRef<HTMLDivElement>(null);
+  const fx = useRef<Sparks | null>(null);
   const paths = useRef(new Map<string, SVGPathElement>());
+  const flows = useRef(new Map<string, SVGPathElement>());
   const flight = useRef<Flight | null>(null);
   const live = useRef(attacks);
   const filming = useRef(camera);
+  const shot = useRef({ x: 0, y: 0, s: 1, r: 0 });
+  const cam = useRef({ x: axis(), y: axis(), s: { p: 1, v: 0 }, r: axis() });
+  const bodies = useRef({ A: bodyOf(), B: bodyOf(), C: bodyOf() } as Record<
+    string,
+    ReturnType<typeof bodyOf>
+  >);
   useEffect(() => {
     live.current = attacks;
     filming.current = camera;
     if (!camera && rig.current) rig.current.style.transform = "none";
   });
 
-  // Each step that moves to another role launches one flight along its thread.
+  const push = (id: string, x: number, y: number, z: number, r: number) => {
+    const body = bodies.current[id];
+    if (!body) return;
+    body.x.v += x;
+    body.y.v += y;
+    body.z.v += z;
+    body.r.v += r;
+  };
+  /** A blow travels through the room: every board is shoved away from the point, the nearest hardest. */
+  const shockwave = (x: number, y: number, power: number) => {
+    const host = stage.current;
+    if (!host) return;
+    for (const id of ["A", "B", "C"]) {
+      const box = host.querySelector(`[data-board="${id}"]`)?.getBoundingClientRect();
+      if (!box) continue;
+      const at = centre(box);
+      const dx = at.x - x;
+      const dy = at.y - y;
+      const d = Math.max(90, Math.hypot(dx, dy));
+      const force = (power * 1000) / (d + 200);
+      push(id, (dx / d) * force, (dy / d) * force, -force * 0.8, (dx / d) * force * 0.14);
+    }
+    cam.current.s.v += 0.32 * power;
+    cam.current.y.v += 90 * power;
+    cam.current.x.v += (Math.random() - 0.5) * 170 * power;
+  };
+
   const beatId = current?.id;
+  const isDirected = () => directed && !reducedMotion();
+
+  // Each step launches one flight along its thread.
   useEffect(() => {
+    const host = stage.current;
     if (!activeAttack || !current || (current.stage !== "attack" && current.stage !== "verify")) {
       flight.current = null;
       return;
     }
-    const animate = directed && !reducedMotion();
+    const animate = isDirected();
     flight.current = {
       attack: activeAttack,
       kind: current.stage,
       began: performance.now(),
-      wait: animate ? (current.stage === "attack" ? 480 : 820) / speed : 0,
-      duration: animate ? 1000 / speed : 0,
+      wait: animate ? lead + (current.stage === "attack" ? 480 : 820) / speed : 0,
+      duration: animate ? 900 / speed : 0,
       landed: !animate,
     };
-    const host = stage.current;
     if (animate && current.stage === "verify" && host) {
-      // A scanning beam reads the whole board before the result lands.
-      const box = host.querySelector(`[data-board="${current.to}"]`)?.getBoundingClientRect();
-      const origin = host.getBoundingClientRect();
-      if (box) {
+      // A scanning beam reads the board before the result lands.
+      const timer = setTimeout(() => {
+        const box = host.querySelector(`[data-board="${current.to}"]`)?.getBoundingClientRect();
+        const origin = host.getBoundingClientRect();
+        if (!box) return;
         const beam = document.createElement("div");
         beam.className = "c-beam";
         beam.style.cssText = `left:${box.left - origin.left - 18}px;top:${box.top - origin.top}px;width:${box.width + 36}px`;
         host.appendChild(beam);
+        const reach = Math.min(box.height, 340);
         beam.animate(
           [
             { transform: "translateY(0)", opacity: 0 },
-            {
-              transform: `translateY(${Math.min(box.height, 340) * 0.5}px)`,
-              opacity: 1,
-              offset: 0.25,
-            },
-            { transform: `translateY(${Math.min(box.height, 340)}px)`, opacity: 1, offset: 0.7 },
+            { transform: `translateY(${reach * 0.5}px)`, opacity: 1, offset: 0.25 },
+            { transform: `translateY(${reach}px)`, opacity: 1, offset: 0.7 },
             { transform: "translateY(0)", opacity: 0 },
           ],
-          { duration: 1000 / speed, easing: "cubic-bezier(.5,0,.5,1)" },
+          { duration: 900 / speed, easing: "cubic-bezier(.5,0,.5,1)" },
         ).onfinish = () => beam.remove();
-      }
+      }, lead);
+      return () => clearTimeout(timer);
     }
-    // Only a new step launches a flight; speed changes apply to the next one.
+    // Only a new step launches a flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [beatId]);
 
-  // Each kind of step gets its own choreography on the board that acts.
+  // Energy hands the story on: timeline to board, then each step's own choreography.
   useEffect(() => {
     const host = stage.current;
-    if (!host || !current || !directed || reducedMotion()) return;
+    if (!host || !current || !isDirected()) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
+    const later = (ms: number, run: () => void) => timers.push(setTimeout(run, lead + ms / speed));
     const node = host.querySelector<HTMLElement>(`[data-board="${current.agent}"]`);
+    const color = ROUTE_COLOR[current.agent] ?? STATE_COLOR.pending;
+
+    later(0, () => {
+      const tick = document.querySelector(".c-time .cur")?.getBoundingClientRect();
+      const box = node?.getBoundingClientRect();
+      if (tick && box) {
+        const from = centre(tick);
+        fx.current?.stream(
+          from.x,
+          from.y,
+          box.left + box.width / 2,
+          box.top + 8,
+          color,
+          480 / speed,
+        );
+      }
+    });
+
     if (current.stage === "propose" && node) {
-      // The route's giant letter crosses the room and lands on its board.
-      const color = ROUTE_COLOR[current.agent];
-      const giant = document.createElement("div");
-      giant.className = "c-giant";
-      giant.textContent = current.agent;
-      giant.style.color = `rgb(${color})`;
-      host.appendChild(giant);
-      const W = host.clientWidth;
-      const H = host.clientHeight;
-      const tx = node.offsetLeft - W / 2;
-      const ty = -H * 0.34;
-      const fly = giant.animate(
-        [
-          {
-            transform: "translate(-50%,-50%) scale(1.7)",
-            opacity: 0,
-            filter: "blur(30px)",
-            offset: 0,
-          },
-          {
-            transform: "translate(-50%,-50%) scale(1)",
-            opacity: 1,
-            filter: "blur(0)",
-            offset: 0.34,
-          },
-          {
-            transform: "translate(-50%,-50%) scale(1)",
-            opacity: 1,
-            filter: "blur(0)",
-            offset: 0.5,
-          },
-          {
-            transform: `translate(-50%,-50%) translate(${tx}px,${ty}px) scale(.06)`,
-            opacity: 0.1,
-            filter: "blur(0)",
-            offset: 1,
-          },
-        ],
-        { duration: 1250, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
-      );
-      fly.onfinish = () => giant.remove();
-      timers.push(
-        setTimeout(() => {
-          const box = node.getBoundingClientRect();
-          const origin = host.getBoundingClientRect();
-          fx.current?.impact(box.left - origin.left + 26, box.top - origin.top + 18, color, 1);
-        }, 1180),
-      );
+      later(120, () => {
+        const giant = document.createElement("div");
+        giant.className = "c-giant";
+        giant.textContent = current.agent;
+        giant.style.color = `rgb(${color})`;
+        host.appendChild(giant);
+        const origin = host.getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        const tx = box.left + 18 - (origin.left + origin.width / 2);
+        const ty = box.top + 18 - (origin.top + origin.height / 2);
+        giant.animate(
+          [
+            {
+              transform: "translate(-50%,-50%) scale(1.8) rotate(-10deg)",
+              opacity: 0,
+              filter: "blur(36px)",
+              offset: 0,
+            },
+            {
+              transform: "translate(-50%,-50%) scale(1) rotate(0deg)",
+              opacity: 1,
+              filter: "blur(0)",
+              offset: 0.4,
+            },
+            {
+              transform: "translate(-50%,-50%) scale(.96)",
+              opacity: 1,
+              filter: "blur(0)",
+              offset: 0.52,
+            },
+            {
+              transform: `translate(-50%,-50%) translate(${tx}px,${ty}px) scale(.05)`,
+              opacity: 0.3,
+              filter: "blur(0)",
+              offset: 1,
+            },
+          ],
+          { duration: 1050 / speed, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
+        ).onfinish = () => giant.remove();
+      });
+      later(1120, () => {
+        const box = node.getBoundingClientRect();
+        fx.current?.impact(box.left + 22, box.top + 18, color, 1.1);
+        push(current.agent, 0, 120, 340, 0);
+      });
+      later(1450, () => {
+        const box = node.getBoundingClientRect();
+        const card = host.querySelector(".c-deck-now")?.getBoundingClientRect();
+        if (card) {
+          const to = centre(card);
+          fx.current?.stream(
+            box.left + box.width / 2,
+            box.bottom,
+            to.x,
+            card.top,
+            color,
+            520 / speed,
+          );
+        }
+      });
     }
-    if (current.stage === "attack" && node) {
-      // The challenger draws back, then lunges.
-      node.animate(
-        [
-          { translate: "0 0 0", rotate: "y 0deg" },
-          {
-            translate: "0 8px -130px",
-            rotate: `y ${node.dataset.board === "C" ? 7 : -7}deg`,
-            offset: 0.34,
-          },
-          { translate: "0 -6px 210px", rotate: "y 0deg", offset: 0.5 },
-          { translate: "0 0 0", rotate: "y 0deg" },
-        ],
-        { duration: 1500 / speed, easing: "cubic-bezier(.3,0,.1,1)" },
-      );
+    if (current.stage === "attack" && node && current.to) {
+      // The challenger draws back on its spring, then throws itself forward as the light leaves.
+      const away = node.dataset.board === "C" ? 1 : -1;
+      push(current.agent, away * 90, 30, -620, away * 26);
+      later(420, () => push(current.agent, -away * 420, -60, 1500, -away * 46));
     }
     if (current.stage === "revise" && node) {
-      // The old sentence burns off while the whole board turns over and comes back rewritten.
-      const origin = host.getBoundingClientRect();
-      node.querySelectorAll(".struck").forEach((line) => {
-        const box = line.getBoundingClientRect();
-        fx.current?.burn(
-          box.left - origin.left,
-          box.top - origin.top,
-          box.width,
-          ROUTE_COLOR[current.agent],
+      later(0, () => {
+        node.querySelectorAll(".struck").forEach((line) => {
+          const box = line.getBoundingClientRect();
+          fx.current?.burn(box.left, box.top, box.width, color);
+        });
+        node.animate(
+          [
+            { rotate: "y 0deg", filter: "blur(0)", scale: "1" },
+            { rotate: "y 180deg", filter: "blur(4px)", scale: "0.86", offset: 0.5 },
+            { rotate: "y 372deg", filter: "blur(0)", scale: "1.03", offset: 0.86 },
+            { rotate: "y 360deg", filter: "blur(0)", scale: "1" },
+          ],
+          { duration: 1150 / speed, easing: "cubic-bezier(.65,0,.2,1)" },
         );
       });
-      node.animate(
-        [
-          { rotate: "y 0deg", filter: "blur(0)", scale: "1" },
-          { rotate: "y 180deg", filter: "blur(5px)", scale: "0.88", offset: 0.5 },
-          { rotate: "y 360deg", filter: "blur(0)", scale: "1" },
-        ],
-        { duration: 1250 / speed, delay: 200, easing: "cubic-bezier(.7,0,.2,1)" },
-      );
+    }
+    if (current.stage === "judge") {
+      // Everything converges: light runs from every board into the chosen route, the rest fall away.
+      const pick = version.verdict?.preferred;
+      const target = host.querySelector(`[data-board="${pick}"]`)?.getBoundingClientRect();
+      later(0, () => {
+        for (const id of ["A", "B", "C"]) {
+          const box = host.querySelector(`[data-board="${id}"]`)?.getBoundingClientRect();
+          if (!box) continue;
+          if (id === pick) {
+            push(id, 0, -90, 1000, 0);
+          } else {
+            push(id, 0, 110, -1300, (id === "A" ? -1 : 1) * 34);
+            if (target) {
+              const a = centre(box);
+              const b = centre(target);
+              fx.current?.stream(a.x, a.y, b.x, b.y, ROUTE_COLOR[id], 620 / speed);
+            }
+          }
+        }
+      });
     }
     return () => timers.forEach(clearTimeout);
     // A step's choreography plays once, when that step arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [beatId]);
 
-  // Threads are re-measured every frame from the real claims, so they stay attached through any camera move.
+  // One loop runs everything, so every moving part stays in phase.
   useEffect(() => {
     const host = stage.current;
     const dot = packet.current;
     const surface = canvas.current;
-    if (!host || !dot || !surface) return;
+    const el = world.current;
+    if (!host || !dot || !surface || !el) return;
     const sparks = new Sparks(surface);
     fx.current = sparks;
+    const reduce = reducedMotion();
 
     const stamp = (x: number, y: number, attack: Attack) => {
-      const el = document.createElement("div");
-      el.className = `c-stamp is-${attack.status}`;
-      el.textContent = attackMeta[attack.status].label;
-      el.style.left = `${x}px`;
-      el.style.top = `${y}px`;
-      host.appendChild(el);
-      const fade = el.animate(
+      const mark = document.createElement("div");
+      mark.className = `c-stamp is-${attack.status}`;
+      mark.textContent = attackMeta[attack.status].label;
+      mark.style.left = `${x}px`;
+      mark.style.top = `${y}px`;
+      host.appendChild(mark);
+      mark.animate(
         [
           {
-            transform: "translate(-50%,-50%) scale(3.4) rotate(-14deg)",
+            transform: "translate(-50%,-50%) scale(4) rotate(-16deg)",
             opacity: 0,
-            filter: "blur(6px)",
+            filter: "blur(8px)",
             offset: 0,
           },
           {
-            transform: "translate(-50%,-50%) scale(1) rotate(-5deg)",
+            transform: "translate(-50%,-50%) scale(.93) rotate(-4deg)",
             opacity: 1,
             filter: "blur(0)",
-            offset: 0.12,
+            offset: 0.1,
           },
-          { transform: "translate(-50%,-50%) scale(1) rotate(-5deg)", opacity: 1, offset: 0.78 },
-          { transform: "translate(-50%,-50%) scale(1.06) rotate(-5deg)", opacity: 0, offset: 1 },
+          { transform: "translate(-50%,-50%) scale(1) rotate(-5deg)", opacity: 1, offset: 0.16 },
+          { transform: "translate(-50%,-50%) scale(1) rotate(-5deg)", opacity: 1, offset: 0.66 },
+          { transform: "translate(-50%,-50%) scale(.3) rotate(-5deg)", opacity: 0, offset: 1 },
         ],
-        { duration: 1700, easing: "cubic-bezier(.2,.9,.2,1)", fill: "forwards" },
-      );
-      fade.onfinish = () => el.remove();
+        { duration: 1750, easing: "cubic-bezier(.2,.9,.2,1)", fill: "forwards" },
+      ).onfinish = () => mark.remove();
       const flash = document.createElement("div");
       flash.className = "c-flash";
       flash.style.setProperty("--flash", spaced(STATE_COLOR[attack.status]));
       flash.style.setProperty("--x", `${x}px`);
       flash.style.setProperty("--y", `${y}px`);
       host.appendChild(flash);
-      flash.animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: 760,
+      flash.animate([{ opacity: 0.9 }, { opacity: 0 }], {
+        duration: 800,
         easing: "ease-out",
       }).onfinish = () => flash.remove();
-      if (attack.status === "supported")
-        rig.current?.animate(
-          [
-            { translate: "0 0" },
-            { translate: "-24px 15px" },
-            { translate: "20px -14px" },
-            { translate: "-13px 9px" },
-            { translate: "6px -4px" },
-            { translate: "0 0" },
-          ],
-          { duration: 620, easing: "ease-out" },
-        );
     };
 
-    // The doubted sentence lifts off its board and flies to the floating window.
+    // The doubted sentence lifts off its board and flies into the chain.
     const tear = (attack: Attack) => {
       const claim = host.querySelector(
         `[data-claim="${attack.targetStrategyId}:${attack.targetClaimId}"]`,
@@ -285,32 +359,67 @@ export function RouteStage({
       const origin = host.getBoundingClientRect();
       const from = claim.getBoundingClientRect();
       const to = row.getBoundingClientRect();
-      const el = document.createElement("div");
-      el.className = "c-tear";
-      el.textContent = attack.claimQuote;
-      el.style.cssText = `left:${from.left - origin.left}px;top:${from.top - origin.top}px;width:${from.width}px`;
-      host.appendChild(el);
-      const fly = el.animate(
+      const piece = document.createElement("div");
+      piece.className = "c-tear";
+      piece.textContent = attack.claimQuote;
+      piece.style.cssText = `left:${from.left - origin.left}px;top:${from.top - origin.top}px;width:${from.width}px`;
+      host.appendChild(piece);
+      piece.animate(
         [
           { transform: "none", opacity: 1 },
-          { transform: "translateY(-16px) scale(1.07) rotate(-1.5deg)", opacity: 1, offset: 0.25 },
+          { transform: "translateY(-18px) scale(1.08) rotate(-2deg)", opacity: 1, offset: 0.28 },
           {
-            transform: `translate(${to.left - from.left}px,${to.top + 26 - from.top}px) scale(.96)`,
-            opacity: 0.2,
+            transform: `translate(${to.left - from.left}px,${to.top + 26 - from.top}px) scale(.94)`,
+            opacity: 0.15,
           },
         ],
-        { duration: 680, easing: "cubic-bezier(.65,0,.2,1)", fill: "forwards" },
-      );
-      fly.onfinish = () => el.remove();
+        { duration: 720, easing: "cubic-bezier(.65,0,.2,1)", fill: "forwards" },
+      ).onfinish = () => piece.remove();
     };
 
     let frame = 0;
     let last = performance.now();
     const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const dt = Math.min(0.033, (now - last) / 1000);
       last = now;
       const origin = host.getBoundingClientRect();
-      sparks.fit(origin.width, origin.height);
+      sparks.fit(innerWidth, innerHeight);
+      sparks.dust += ((filming.current ? 1 : 0) - sparks.dust) * Math.min(1, dt * 2);
+
+      // Camera: sprung, with a slow drift so a held shot never goes dead.
+      const c = cam.current;
+      const t = now / 1000;
+      const on = filming.current && !reduce;
+      const aim = on ? shot.current : { x: 0, y: 0, s: 1, r: 0 };
+      const drift = on ? 1 : 0;
+      spring(c.x, aim.x + drift * Math.sin(t * 0.37) * 9, 30, 9.5, dt);
+      spring(c.y, aim.y + drift * Math.cos(t * 0.29) * 6, 30, 9.5, dt);
+      spring(c.s, aim.s + drift * Math.sin(t * 0.5) * 0.012, 30, 9.5, dt);
+      spring(c.r, aim.r + drift * Math.sin(t * 0.23) * 1, 30, 9.5, dt);
+      const still =
+        !on &&
+        Math.abs(c.x.p) + Math.abs(c.y.p) + Math.abs(c.r.p) < 0.05 &&
+        Math.abs(c.s.p - 1) < 0.0005;
+      el.style.transform = still
+        ? "none"
+        : `translate3d(${c.x.p}px,${c.y.p}px,0) scale(${c.s.p}) rotateY(${c.r.p}deg)`;
+
+      // Boards: each on its own spring, so a blow rings through them and settles.
+      for (const id of ["A", "B", "C"]) {
+        const b = bodies.current[id];
+        const node = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
+        if (!node) continue;
+        spring(b.x, 0, 70, 9, dt);
+        spring(b.y, 0, 70, 9, dt);
+        spring(b.z, 0, 55, 8, dt);
+        spring(b.r, 0, 60, 8, dt);
+        const quiet =
+          Math.abs(b.x.p) + Math.abs(b.y.p) + Math.abs(b.z.p) + Math.abs(b.r.p) < 0.05 &&
+          Math.abs(b.x.v) + Math.abs(b.z.v) < 0.5;
+        node.style.translate = quiet ? "" : `${b.x.p}px ${b.y.p}px ${b.z.p}px`;
+        node.style.rotate = quiet ? "" : `y ${b.r.p}deg`;
+      }
+
       const flying = flight.current;
       const elapsed = flying ? now - flying.began - flying.wait : 0;
       const k = flying
@@ -318,11 +427,11 @@ export function RouteStage({
           ? Math.max(0, Math.min(1, elapsed / flying.duration))
           : 1
         : 0;
-      sparks.dust += ((filming.current ? 1 : 0) - sparks.dust) * Math.min(1, dt * 2);
       const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 
       live.current.forEach((a, i) => {
         const path = paths.current.get(a.id);
+        const flow = flows.current.get(a.id);
         const from = host.querySelector(`[data-board="${a.from}"]`)?.getBoundingClientRect();
         const box = host
           .querySelector(`[data-board="${a.targetStrategyId}"]`)
@@ -340,7 +449,9 @@ export function RouteStage({
         const tx = (rightward ? box.left : box.right) - origin.left;
         const ty = y - origin.top;
         const bend = Math.max(36, Math.abs(tx - sx) * 0.42) * (rightward ? 1 : -1);
-        path.setAttribute("d", `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
+        const d = `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`;
+        path.setAttribute("d", d);
+        flow?.setAttribute("d", d);
         path.style.strokeDashoffset =
           flying?.kind === "attack" && flying.attack.id === a.id ? String(1 - eased) : "0";
       });
@@ -353,29 +464,41 @@ export function RouteStage({
             ? STATE_COLOR[flying.attack.status]
             : (ROUTE_COLOR[flying.attack.from] ?? STATE_COLOR.attack);
         const point = path.getPointAtLength(path.getTotalLength() * eased);
+        const px = point.x + origin.left;
+        const py = point.y + origin.top;
         dot.style.left = `${point.x}px`;
         dot.style.top = `${point.y}px`;
         dot.style.opacity = elapsed < 0 ? "0" : "1";
-        if (elapsed < 0 && flying.kind === "attack") sparks.charge(point.x, point.y, color);
-        if (elapsed >= 0 && k < 1 && flying.duration) sparks.comet(point.x, point.y, color);
+        if (elapsed < 0 && flying.kind === "attack" && elapsed > -480) sparks.charge(px, py, color);
+        if (elapsed >= 0 && k < 1 && flying.duration) sparks.comet(px, py, color);
         if (k >= 1 && !flying.landed) {
           flying.landed = true;
           const strong = flying.kind === "verify" && flying.attack.status === "supported";
-          sparks.impact(point.x, point.y, color, strong ? 2.6 : 1.5);
-          host.querySelector(`[data-board="${flying.attack.targetStrategyId}"]`)?.animate(
-            [
-              { rotate: "y 0deg", translate: "0 0 0" },
-              {
-                rotate: `y ${point.x > origin.width / 2 ? 11 : -11}deg`,
-                translate: "0 0 -90px",
-                offset: 0.2,
-              },
-              { rotate: "y 0deg", translate: "0 0 0" },
-            ],
-            { duration: 900, easing: "cubic-bezier(.2,1.3,.3,1)" },
-          );
-          if (flying.kind === "attack") tear(flying.attack);
-          else stamp(point.x + (point.x > origin.width / 2 ? -60 : 60), point.y, flying.attack);
+          sparks.impact(px, py, color, strong ? 2.4 : 1.4);
+          shockwave(px, py, strong ? 2.1 : 1);
+          if (flying.kind === "attack") {
+            tear(flying.attack);
+          } else {
+            stamp(point.x + (point.x > origin.width / 2 ? -70 : 70), point.y, flying.attack);
+            host
+              .querySelectorAll(
+                `[data-claim="${flying.attack.targetStrategyId}:${flying.attack.targetClaimId}"] .struck`,
+              )
+              .forEach((line) => {
+                const box = line.getBoundingClientRect();
+                sparks.burn(box.left, box.top, box.width, color);
+              });
+            // The result flows up into the running count, which rolls as it arrives.
+            const metric = document
+              .querySelector(`.c-metrics [data-state="${flying.attack.status}"] dd`)
+              ?.getBoundingClientRect();
+            if (metric) {
+              const to = centre(metric);
+              sparks.stream(px, py, to.x, to.y, color, 620);
+            }
+          }
+          const log = document.querySelector(".c-log .hot")?.getBoundingClientRect();
+          if (log) sparks.stream(px, py, log.left + 30, log.top + 8, color, 720);
         }
       }
       sparks.tick(dt);
@@ -383,19 +506,17 @@ export function RouteStage({
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
+    // The loop reads current state through refs and lives as long as the stage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The camera: push in on whoever acts, frame both sides of a dispute, pull back for the verdict.
+  // The shot for this step. Every board stays in frame: the camera leans and pushes, it never hides.
   useLayoutEffect(() => {
     const el = world.current;
-    if (!el) return;
-    if (!camera || !current || reducedMotion()) {
-      el.style.transform = "none";
-      return;
-    }
+    if (!el || !current) return;
     const W = el.clientWidth;
     const H = el.clientHeight;
-    const centre = (id?: string) => {
+    const middle = (id?: string) => {
       const board = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
       return board
         ? {
@@ -404,42 +525,49 @@ export function RouteStage({
           }
         : { x: W / 2, y: H / 2 };
     };
-    let scale = 1.38;
-    let at = centre(current.agent);
-    let turn = 0;
+    let scale = 1.14;
+    let at = middle(current.agent);
+    let turn = at.x < W / 2 ? 3.5 : at.x > W / 2 + 20 ? -3.5 : 0;
     if (current.stage === "attack" && current.to) {
-      const a = centre(current.agent);
-      const b = centre(current.to);
-      at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) + 30 };
-      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1.02 : 1.32;
-      turn = a.x < b.x ? -3 : 3;
+      const a = middle(current.agent);
+      const b = middle(current.to);
+      at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) };
+      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1.02 : 1.12;
+      turn = a.x < b.x ? -4 : 4;
     } else if (current.stage === "verify" && current.to) {
-      const board = el.querySelector<HTMLElement>(`[data-board="${current.to}"]`);
-      const claim = el.querySelector<HTMLElement>(`[data-claim="${hot}"]`);
-      const body = claim?.closest<HTMLElement>(".c-board-body");
-      if (board && claim && body)
-        at = {
-          x: board.offsetLeft + board.offsetWidth / 2,
-          y: board.offsetTop + body.offsetTop + claim.offsetTop - body.scrollTop + 60,
-        };
-      scale = 1.72;
+      at = middle(current.to);
+      scale = 1.24;
+      turn = at.x < W / 2 ? 2.5 : at.x > W / 2 + 20 ? -2.5 : 0;
     } else if (current.stage === "judge") {
       at = { x: W / 2, y: H / 2 };
-      scale = 0.84;
+      scale = 0.9;
+      turn = 0;
     }
-    const focusY = current.stage === "judge" ? H / 2 : H * 0.34;
-    const roomX = Math.max(0, ((scale - 1) * W) / 2 + 30);
-    const roomY = Math.max(0, ((scale - 1) * H) / 2 + 30);
-    const x = Math.max(-roomX, Math.min(roomX, W / 2 - at.x * scale - ((1 - scale) * W) / 2));
-    const framed = el.querySelector<HTMLElement>(`[data-board="${current.to ?? current.agent}"]`);
-    // However close the camera gets, the top of the board in shot stays on screen.
-    const lowest = 10 - H / 2 - ((framed?.offsetTop ?? 0) - H / 2) * scale;
-    const y = Math.max(
-      scale > 1 ? lowest : -roomY,
-      Math.min(roomY, focusY - at.y * scale - ((1 - scale) * H) / 2),
-    );
-    el.style.transform = `translate3d(${x}px,${y}px,0) scale(${scale}) rotateY(${turn}deg)`;
-  }, [camera, current, hot]);
+    // Every board in shot stays fully inside the frame, with room left for drift and tilt.
+    const margin = 26;
+    const inShot = [current.agent, current.to]
+      .map((id) => el.querySelector<HTMLElement>(`[data-board="${id}"]`))
+      .filter((node): node is HTMLElement => !!node);
+    const left = Math.min(...inShot.map((n) => n.offsetLeft), W);
+    const right = Math.max(...inShot.map((n) => n.offsetLeft + n.offsetWidth), 0);
+    const top = Math.min(...inShot.map((n) => n.offsetTop), H);
+    if (current.stage !== "judge" && right - left > 0)
+      scale = Math.min(scale, Math.max(1, (W - margin * 2) / (right - left)));
+    if (scale <= 1.01 && current.stage !== "judge") turn = Math.sign(turn) * 1.2;
+    const screen = (p: number, size: number) => size / 2 + (p - size / 2) * scale;
+    const wantX = W / 2 - screen(at.x, W);
+    const minX = margin - screen(left, W);
+    const maxX = W - margin - screen(right, W);
+    const x =
+      current.stage === "judge"
+        ? 0
+        : minX > maxX
+          ? (minX + maxX) / 2
+          : Math.max(minX, Math.min(maxX, wantX));
+    const wantY = (current.stage === "judge" ? H / 2 : H * 0.26) - screen(at.y, H);
+    const y = current.stage === "judge" ? 0 : Math.max(margin - screen(top, H), wantY);
+    shot.current = { x, y, s: scale, r: turn };
+  }, [current]);
 
   // Bring the doubted claim into view inside its board, without moving the page.
   useEffect(() => {
@@ -452,32 +580,37 @@ export function RouteStage({
   // Boards fly out of the depth as the shutter opens.
   useEffect(() => {
     if (entering || reducedMotion()) return;
+    const kick = setTimeout(() => {
+      push("A", -160, 120, 2600, 60);
+      push("B", 0, 140, 2900, 0);
+      push("C", 160, 120, 2600, -60);
+    }, 80);
     stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
       node.animate(
         [
-          { translate: "0 140px -700px", opacity: 0, filter: "blur(16px)" },
-          { translate: "0 0 0", opacity: 1, filter: "blur(0)" },
+          { opacity: 0, filter: "blur(14px)" },
+          { opacity: 1, filter: "blur(0)" },
         ],
         {
-          duration: 1000,
-          delay: 120 + i * 130,
-          easing: "cubic-bezier(.16,1,.3,1)",
+          duration: 620,
+          delay: 80 + i * 90,
+          easing: "ease-out",
           fill: "backwards",
         },
       );
     });
+    return () => clearTimeout(kick);
   }, [entering]);
 
-  // The room leans a little toward the pointer, and the wall moves the other way.
+  // The room leans toward the pointer during a replay; at rest the boards hold still for clicking.
   useEffect(() => {
     if (reducedMotion()) return;
     const onMove = (e: MouseEvent) => {
       const nx = e.clientX / innerWidth - 0.5;
       const ny = e.clientY / innerHeight - 0.5;
-      // At rest the boards hold still so their claims can be clicked; only the wall moves.
       if (rig.current)
         rig.current.style.transform = filming.current
-          ? `rotateY(${nx * 2.6}deg) rotateX(${-ny * 2}deg)`
+          ? `rotateY(${nx * 3}deg) rotateX(${-ny * 2.2}deg)`
           : "none";
       const wall = document.querySelector<HTMLElement>(".c-stage");
       if (wall) wall.style.translate = `${-nx * 46}px ${-ny * 30}px`;
@@ -526,7 +659,7 @@ export function RouteStage({
         {present && strategy && view ? (
           <div className="c-board-body">
             <h3>
-              <Chars text={view.title} active={enter} delay={700} />
+              <Chars text={view.title} active={enter} delay={lead + 700} />
             </h3>
             <p>{view.thesis}</p>
             <div className="est">
@@ -568,7 +701,7 @@ export function RouteStage({
                   </span>
                   {before && after && before.text !== after.text && (
                     <span className={`changed ${rewriting ? "fresh" : ""}`}>
-                      <Chars text={after.text} active={rewriting} delay={800} />
+                      <Chars text={after.text} active={rewriting} delay={lead + 800} />
                     </span>
                   )}
                 </button>
@@ -601,16 +734,24 @@ export function RouteStage({
       </div>
       <svg className="c-threads" aria-hidden="true">
         {attacks.map((a) => (
-          <path
-            key={a.id}
-            pathLength={1}
-            ref={(node) => {
-              if (node) paths.current.set(a.id, node);
-              else paths.current.delete(a.id);
-            }}
-            className={`c-thread is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""}`}
-            style={{ "--route": spaced(ROUTE_COLOR[a.from]) } as CSSProperties}
-          />
+          <g key={a.id} style={{ "--route": spaced(ROUTE_COLOR[a.from]) } as CSSProperties}>
+            <path
+              pathLength={1}
+              ref={(node) => {
+                if (node) paths.current.set(a.id, node);
+                else paths.current.delete(a.id);
+              }}
+              className={`c-thread is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""}`}
+            />
+            <path
+              pathLength={1}
+              ref={(node) => {
+                if (node) flows.current.set(a.id, node);
+                else flows.current.delete(a.id);
+              }}
+              className={`c-thread-flow is-${stateOf(a)}`}
+            />
+          </g>
         ))}
       </svg>
       <canvas className="c-fx" ref={canvas} aria-hidden="true" />
@@ -622,7 +763,7 @@ export function RouteStage({
       >
         {current?.packet}
       </div>
-      <FloatingWindows version={version} beats={beats} index={index} directed={directed} />
+      <ChainDeck version={version} beats={beats} index={index} directed={directed} lead={lead} />
     </div>
   );
 }

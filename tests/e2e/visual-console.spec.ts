@@ -504,6 +504,56 @@ test.describe("behaviour", () => {
     expect(Math.max(...leaps)).toBeLessThanOrEqual(1);
   });
 
+  test("every clickable control answers hover and press", async ({ page }, testInfo) => {
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    await mountFixture(page, snapshot());
+    const audit = () =>
+      page.evaluate(() => {
+        const dead: string[] = [];
+        document
+          .querySelectorAll<HTMLElement>("button, a[href], select, summary, input, textarea")
+          .forEach((el) => {
+            const style = getComputedStyle(el);
+            if (style.display === "none" || el.matches(":disabled")) return;
+            const moves = style.transitionDuration.split(",").some((t) => parseFloat(t) > 0);
+            if (!moves) dead.push(`${el.tagName}.${el.className}`);
+          });
+        return dead;
+      });
+    const ring = page.locator(".c-press-ring");
+    await page.goto("/");
+    expect(await audit()).toEqual([]);
+    await page.getByRole("button", { name: "试填一个视频任务" }).click();
+    await expect(ring).toHaveCount(1);
+    await page.getByRole("button", { name: "工作业务" }).click();
+    expect(await audit()).toEqual([]);
+    await openArena(page);
+    expect(await audit()).toEqual([]);
+    // A hovered challenge lights its thread and claim.
+    const row = page.getByRole("region", { name: "全部质疑" }).getByRole("button").first();
+    await row.hover();
+    await expect(page.locator(".c-thread.lit")).toHaveCount(1);
+    await expect(page.locator(".c-claim.lit")).toHaveCount(1);
+    await page.waitForTimeout(400);
+    await capture(page, testInfo, "console-hover-row", false);
+    // Finding a challenge from its evidence really shows it on the boards.
+    await row.click();
+    await expect(ring.first()).toBeAttached();
+    const drawer = page.getByRole("dialog", { name: "这一条，站得住吗？" });
+    expect(await audit()).toEqual([]);
+    await drawer.getByRole("button", { name: /中定位/ }).click();
+    await expect(drawer).toHaveCount(0);
+    await expect(page.locator(".c-claim.located")).toHaveCount(1);
+    await expect(page.locator(".c-row.located")).toBeFocused();
+    await page.locator(".c-claim", { hasText: "A2" }).hover();
+    await page.waitForTimeout(350);
+    await capture(page, testInfo, "console-hover-claim", false);
+    await page.locator(".c-claim", { hasText: "A2" }).click();
+    const dialog = page.getByRole("dialog", { name: "向这条判断发起挑战" });
+    await expect(dialog).toBeVisible();
+    expect(await audit()).toEqual([]);
+  });
+
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {
     await skipIntro(page);
     await mountFixture(

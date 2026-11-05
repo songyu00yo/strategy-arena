@@ -28,7 +28,7 @@ import {
 import { ChallengeForm } from "@/components/challenge-form";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
-import { Chars, Dust } from "@/components/console/effects";
+import { Chars, ClickFx, Dust } from "@/components/console/effects";
 import { HomeFlow } from "@/components/console/HomeFlow";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
@@ -169,6 +169,7 @@ export default function Page() {
     parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
   return (
     <div className={`site-shell console-shell ${arena.snapshot ? "" : "home"}`}>
+      <ClickFx />
       <a href="#main" className="skip-link">
         跳转到主要内容
       </a>

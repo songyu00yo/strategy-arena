@@ -2353,6 +2353,386 @@
     font-size: 12.5px;
   }
 }
+/* ------ Interaction: every control hovers, presses and focuses in one language. ------ */
+.c-press-ring {
+  position: fixed;
+  z-index: 90;
+  width: 92px;
+  height: 92px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.c-press-spark {
+  position: fixed;
+  z-index: 90;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.console-shell :is(button, a, select, summary, input, textarea) {
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.25s,
+    transform 0.25s cubic-bezier(0.2, 1.4, 0.3, 1),
+    outline-offset 0.2s;
+}
+.console-shell :is(input, textarea) {
+  cursor: text;
+}
+.console-shell :is(button, select):disabled {
+  cursor: not-allowed;
+}
+.console-shell :is(button, a, select, summary):focus-visible {
+  outline: 2px solid var(--c-t0);
+  outline-offset: 3px;
+}
+.console-shell button svg,
+.console-shell a svg {
+  transition:
+    transform 0.28s cubic-bezier(0.2, 1.6, 0.3, 1),
+    rotate 0.4s cubic-bezier(0.2, 1.2, 0.3, 1);
+}
+/* Ink fills in from the left on hover. */
+.console-shell
+  :is(
+    .text-button,
+    .secondary-button,
+    .sample-button,
+    .details-toggle,
+    .c-ctrl button,
+    .model-pill,
+    .global-error button
+  ) {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.console-shell
+  :is(
+    .text-button,
+    .secondary-button,
+    .sample-button,
+    .details-toggle,
+    .c-ctrl button,
+    .model-pill,
+    .global-error button
+  )::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: var(--c-t0);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.28s cubic-bezier(0.65, 0, 0.15, 1);
+}
+.c-ctrl button::before {
+  background: #fff !important;
+}
+.console-shell .stop-button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.console-shell .stop-button::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: var(--c-bad);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.28s cubic-bezier(0.65, 0, 0.15, 1);
+}
+@media (hover: hover) {
+  .console-shell
+    :is(
+      .text-button,
+      .secondary-button,
+      .sample-button,
+      .details-toggle,
+      .c-ctrl button,
+      .model-pill,
+      .global-error button,
+      .stop-button
+    ):not(:disabled):hover::before {
+    transform: scaleX(1);
+  }
+  .console-shell
+    :is(
+      .text-button,
+      .secondary-button,
+      .sample-button,
+      .details-toggle,
+      .model-pill,
+      .global-error button,
+      .stop-button
+    ):not(:disabled):hover {
+    background: transparent;
+    color: #fff;
+    text-decoration: none;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgb(11 13 16 / 0.18);
+  }
+  .console-shell
+    :is(.text-button, .sample-button, .details-toggle, .model-pill):not(:disabled):hover
+    span {
+    color: inherit;
+  }
+  .c-ctrl button:not(:disabled):hover {
+    background: transparent;
+    color: var(--c-t0);
+    transform: translateY(-1px);
+  }
+  .console-shell button:not(:disabled):hover svg {
+    transform: translateX(2px) scale(1.12);
+  }
+  .console-shell .model-pill:hover svg,
+  .console-shell .text-button:hover svg.lucide-sliders-horizontal {
+    transform: none;
+    rotate: 90deg;
+  }
+  .console-shell .text-button:hover svg.lucide-plus,
+  .console-shell .details-toggle:hover svg {
+    transform: none;
+    rotate: 90deg;
+  }
+  .console-shell .icon-button:not(:disabled):hover {
+    background: var(--c-t0);
+    color: #fff;
+    transform: scale(1.08);
+  }
+  .console-shell .icon-button:not(:disabled):hover svg {
+    transform: none;
+    rotate: 90deg;
+  }
+  .console-shell .primary-button:not(:disabled):hover svg {
+    transform: translateX(5px);
+  }
+  .console-shell .wordmark:hover .brand-symbol i {
+    animation: c-bars 0.5s cubic-bezier(0.2, 1.4, 0.3, 1);
+  }
+  .console-shell .wordmark:hover .brand-symbol i:nth-child(2) {
+    animation-delay: 0.06s;
+  }
+  .console-shell .wordmark:hover .brand-symbol i:nth-child(3) {
+    animation-delay: 0.12s;
+  }
+  .c-slate .version-select:hover {
+    box-shadow: inset 0 -2px 0 var(--c-t0);
+  }
+  .console-shell a:hover {
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+  }
+  /* Timeline */
+  .c-time .ticks button:hover {
+    background: var(--c-t0);
+    transform: scaleY(1.35);
+  }
+  /* A claim lifts and says what a click will do. */
+  .c-claim:not(:disabled):hover {
+    transform: translateX(4px);
+    background: rgb(var(--route) / 0.09);
+    box-shadow: -3px 0 0 rgb(var(--route));
+  }
+  .c-claim:not(:disabled):hover::after {
+    opacity: 1;
+    transform: none;
+  }
+  /* A challenge row slides toward its evidence. */
+  .c-row:hover {
+    padding-left: 10px;
+  }
+  .c-row:hover::after {
+    opacity: 1;
+    transform: none;
+  }
+  .c-root .c-row:hover,
+  .c-root .c-row:hover em {
+    background: var(--c-t0);
+    color: #fff;
+  }
+  .console-shell .domain-chip:not(.selected):hover {
+    border-color: var(--c-t0);
+    color: var(--c-t0);
+    transform: translateY(-1px);
+    box-shadow: 0 5px 12px rgb(11 13 16 / 0.14);
+  }
+}
+.console-shell button:not(:disabled):active {
+  box-shadow: none;
+}
+.c-claim {
+  position: relative;
+}
+.c-claim:not(:disabled)::after {
+  content: "发起挑战 →";
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  padding: 0 5px;
+  background: rgb(var(--route));
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-8px);
+  transition:
+    opacity 0.2s,
+    transform 0.25s cubic-bezier(0.2, 1.4, 0.3, 1);
+}
+.c-row {
+  position: relative;
+  transition:
+    background-color 0.18s,
+    color 0.18s,
+    padding-left 0.25s cubic-bezier(0.2, 1.3, 0.3, 1);
+}
+.c-row::after {
+  content: "看证据 →";
+  position: absolute;
+  top: 0;
+  right: 4px;
+  padding-left: 18px;
+  background: linear-gradient(90deg, transparent, var(--c-t0) 16px);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-8px);
+  transition:
+    opacity 0.18s,
+    transform 0.25s cubic-bezier(0.2, 1.4, 0.3, 1);
+}
+/* Timeline tips */
+.c-time .ticks button {
+  position: relative;
+}
+.c-time .ticks button::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 8;
+  bottom: calc(100% + 5px);
+  left: 50%;
+  padding: 0 6px;
+  background: var(--c-t0);
+  font-size: 11px;
+  color: #fff;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px) scaleY(0.74);
+  transition:
+    opacity 0.16s,
+    transform 0.2s;
+}
+.c-time .ticks button:hover::after {
+  opacity: 1;
+  transform: translate(-50%, 0) scaleY(0.74);
+}
+/* Linked highlights */
+.c-root .c-thread.lit {
+  stroke-width: 2.4;
+  stroke: rgb(var(--route));
+  filter: drop-shadow(0 0 4px rgb(var(--route) / 0.7));
+}
+.c-root .c-claim.lit {
+  background: rgb(var(--route) / 0.14);
+  box-shadow: -3px 0 0 rgb(var(--route));
+}
+.c-root .c-claim.located,
+.c-root .c-row.located {
+  animation: c-located 1.5s ease-out 2;
+}
+.c-root .c-thread.located {
+  stroke-width: 2.6;
+  stroke: rgb(var(--route));
+}
+/* Chips fill from where they were pressed. */
+.console-shell .domain-chip {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: transparent;
+}
+.console-shell .domain-chip::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: var(--c-t0);
+  clip-path: circle(0 at var(--cx, 50%) var(--cy, 50%));
+  transition: clip-path 0.4s cubic-bezier(0.3, 0, 0.1, 1);
+}
+.console-shell .domain-chip.selected {
+  background: transparent;
+  color: #fff;
+}
+.console-shell .domain-chip.selected::before {
+  clip-path: circle(150% at var(--cx, 50%) var(--cy, 50%));
+}
+/* Fields draw an underline in from the left when focused. */
+.console-shell
+  :is(.field textarea, .field input, .option-row input, .access-input-row input, .goal-input) {
+  background-image: linear-gradient(var(--c-t0), var(--c-t0));
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 0 2px;
+  transition:
+    background-size 0.32s cubic-bezier(0.65, 0, 0.15, 1),
+    border-color 0.2s,
+    box-shadow 0.25s;
+}
+.console-shell
+  :is(
+    .field textarea,
+    .field input,
+    .option-row input,
+    .access-input-row input,
+    .goal-input
+  ):focus {
+  background-size: 100% 2px;
+  outline: none;
+}
+.console-shell .field > span:first-child {
+  transition: color 0.2s;
+}
+.console-shell .field:focus-within > span:first-child {
+  color: var(--c-t0);
+  font-weight: 700;
+}
+/* Dialogs grow out of the place that opened them. */
+.console-shell .modal[open] {
+  animation: c-modal-from 0.46s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes c-modal-from {
+  from {
+    opacity: 0;
+    transform: translate(var(--press-dx, 0), var(--press-dy, 18px)) scale(0.32);
+  }
+}
+@keyframes c-bars {
+  40% {
+    transform: scaleY(1.5);
+  }
+}
+@keyframes c-located {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  30% {
+    box-shadow: 0 0 0 3px var(--c-t0);
+  }
+}
 @media (max-width: 1100px) {
   .c-deck {
     position: static;

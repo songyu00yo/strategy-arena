@@ -10,11 +10,9 @@ import {
   CircleHelp,
   Crosshair,
   FileSearch,
-  Flag,
   Layers3,
   LoaderCircle,
   Plus,
-  Radio,
   RefreshCw,
   Settings2,
   Square,
@@ -29,9 +27,7 @@ import {
   type Challenge,
 } from "@/lib/contracts";
 import { ChallengeForm } from "@/components/challenge-form";
-import { StrategyCard, PendingCard } from "@/components/strategy-card";
-import { DisputeBoard } from "@/components/dispute-board";
-import { comparisonMeta, findingMeta, StatusTag } from "@/components/status";
+import { CanvasRoom } from "@/components/sheet/canvas-room";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import { useArena } from "@/components/use-arena";
@@ -45,6 +41,13 @@ const statusLabels = {
   uncertain: "结果待确认",
   superseded: "历史版本",
 };
+const HOME_CURSORS = [
+  { id: "A", name: "方案 A", left: "-2%", top: "30%" },
+  { id: "B", name: "方案 B", left: "52%", top: "9%" },
+  { id: "C", name: "方案 C", left: "91%", top: "9%" },
+  { id: "verify", name: "核验", left: "88%", top: "66%" },
+  { id: "judge", name: "裁判", left: "9%", top: "72%" },
+];
 function money(value: number) {
   return value < 0.01 && value > 0 ? "< ¥0.01" : `¥${value.toFixed(2)}`;
 }
@@ -117,120 +120,6 @@ function RunNotice({
     </div>
   );
 }
-function Verdict({
-  version,
-  onEvidence,
-}: {
-  version: ArenaVersion;
-  onEvidence: (a: Attack) => void;
-}) {
-  const v = version.verdict;
-  if (!v) return null;
-  return (
-    <section id="verdict" tabIndex={-1} className="verdict" aria-labelledby="verdict-heading">
-      <div className="verdict-side">
-        <span className="verdict-kicker">
-          <Flag size={15} aria-hidden="true" />
-          条件裁决
-        </span>
-        {v.preferred && <span className="verdict-letter">{v.preferred}</span>}
-      </div>
-      <div className="verdict-main">
-        <div className="verdict-label">
-          <span>
-            {
-              {
-                recommendation: "当前条件下的建议",
-                tie: "两条路线，各有成立条件",
-                insufficient: "现有依据不足以判断",
-                infeasible: "当前条件下无法成立",
-                partial: "阶段性判断",
-              }[v.outcome]
-            }
-          </span>
-          <span>V{version.number.toString().padStart(2, "0")}</span>
-        </div>
-        <h2 id="verdict-heading">{v.headline}</h2>
-        <p className="verdict-rationale">{v.rationale}</p>
-        <div className="verdict-columns">
-          <div>
-            <h3>建议成立的条件</h3>
-            {v.conditions.length ? (
-              <ul>
-                {v.conditions.map((c, i) => (
-                  <li key={i}>
-                    <Check size={14} />
-                    {c}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="muted">暂未给出明确成立条件。</p>
-            )}
-            {v.uncertainties.length > 0 && (
-              <div className="uncertainties">
-                <h3>仍需确认</h3>
-                {v.uncertainties.map((u, i) => (
-                  <p key={i}>{u}</p>
-                ))}
-              </div>
-            )}
-          </div>
-          <div>
-            <h3>现在可以做什么</h3>
-            <ol className="verdict-actions">
-              {v.nextActions.map((a, i) => (
-                <li key={i}>
-                  <span>0{i + 1}</span>
-                  {a}
-                </li>
-              ))}
-            </ol>
-            <p className="exit-condition">
-              <strong>何时退出或改道</strong>
-              {v.exitCondition}
-            </p>
-          </div>
-        </div>
-        {v.comparisons.length > 0 && (
-          <div className="comparison-list">
-            {v.comparisons.map((c) => (
-              <div key={c.strategyId}>
-                <span className="comparison-route">{c.strategyId}</span>
-                <StatusTag meta={comparisonMeta[c.status]} className="comparison-status" />
-                <p>{c.reason}</p>
-              </div>
-            ))}
-          </div>
-        )}
-        {v.attackFindings.length > 0 && (
-          <details className="verdict-findings">
-            <summary>
-              查看裁决对质疑的逐条回应
-              <ChevronDown size={14} />
-            </summary>
-            {v.attackFindings.map((f) => {
-              const attack = version.attacks.find((a) => a.id === f.attackId);
-              return (
-                <button
-                  key={f.attackId}
-                  type="button"
-                  disabled={!attack}
-                  onClick={() => attack && onEvidence(attack)}
-                >
-                  <StatusTag meta={findingMeta[f.status]} />
-                  <p>{f.reason}</p>
-                  <ArrowUpRight size={15} />
-                </button>
-              );
-            })}
-          </details>
-        )}
-      </div>
-    </section>
-  );
-}
-
 export default function Page() {
   const arena = useArena();
   const [versionId, setVersionId] = useState<string | null>(null);
@@ -242,8 +131,6 @@ export default function Page() {
     null,
   );
   const [challengeText, setChallengeText] = useState("");
-  const [mobileRoute, setMobileRoute] = useState("A");
-  const [showEvents, setShowEvents] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
   const [accessCode, setAccessCode] = useState("");
   const accessRequired = !!arena.health?.requiresAccessCode && !arena.health?.accessGranted;
@@ -258,19 +145,15 @@ export default function Page() {
     setLocatedId(null);
     setAttackId(a.id);
   };
-  const goToRoute = (id: string, targetId = `route-${id}`) => {
-    setMobileRoute(id);
-    // Runs after the tab switch commits and after a closing drawer has returned focus.
-    requestAnimationFrame(() => {
-      const target = document.getElementById(targetId);
-      target?.scrollIntoView({ block: "start" });
-      target?.focus({ preventScroll: true });
-    });
-  };
   const locateAttack = (a: Attack) => {
     setAttackId(null);
     setLocatedId(a.id);
-    goToRoute(a.targetStrategyId, `dispute-${a.id}`);
+    // Runs after a closing drawer has returned focus.
+    requestAnimationFrame(() => {
+      const target = document.getElementById(`dispute-${a.id}`);
+      target?.scrollIntoView({ block: "center" });
+      target?.focus({ preventScroll: true });
+    });
   };
   // Entering an arena or a new version starts at its goal, not where the form's button was.
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -290,7 +173,7 @@ export default function Page() {
   const parentChanges =
     parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
   return (
-    <div className="site-shell">
+    <div className={`site-shell ${arena.snapshot ? "studio-shell" : "studio-shell home-shell"}`}>
       <a href="#main" className="skip-link">
         跳转到主要内容
       </a>
@@ -349,6 +232,24 @@ export default function Page() {
         )}
         {!arena.snapshot ? (
           <>
+            <div className="home-cursors" aria-hidden="true">
+              {HOME_CURSORS.map((c) => (
+                <div
+                  key={c.id}
+                  className={`cursor busy agent-${c.id}`}
+                  style={{ left: c.left, top: c.top }}
+                >
+                  <div className="cursor-inner">
+                    <svg width="16" height="18" viewBox="0 0 16 18">
+                      <path d="M1 1l5.6 15.2 2.2-6.4 6.4-2.2z" />
+                    </svg>
+                    <span>
+                      <span className="cursor-full">{c.name}</span>
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
             <section className="hero">
               <h1>
                 <span>让好想法，</span>
@@ -464,349 +365,228 @@ export default function Page() {
         ) : (
           selected && (
             <div className="arena-view">
-              <div className="arena-topline">
-                <span className="eyebrow">推演现场</span>
-                <div className="arena-top-actions">
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => {
-                      setEditing(true);
-                    }}
-                    disabled={arena.busy}
-                  >
-                    <Settings2 size={14} />
-                    修改条件再开局
-                  </button>
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={!!running}
-                    onClick={() => {
-                      arena.reset();
-                      setVersionId(null);
-                    }}
-                  >
-                    <Plus size={14} />
-                    新问题
-                  </button>
-                </div>
-              </div>
-              <section className="arena-intro">
-                <div>
-                  <div className="arena-version-line">
-                    <label className="version-select">
-                      <Layers3 size={13} />
-                      <select
-                        aria-label="选择推演版本"
-                        value={selected.id}
-                        onChange={(e) => {
-                          setVersionId(e.target.value);
-                          setAttackId(null);
-                          setLocatedId(null);
-                        }}
-                      >
-                        {arena.snapshot.versions.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            V{String(v.number).padStart(2, "0")}{" "}
-                            {v.id === arena.snapshot?.activeVersionId ? "当前版本" : "历史版本"}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown size={12} />
-                    </label>
-                    <span className={`run-status ${selected.status}`} role="status">
-                      {selected.status === "running" && <span className="working-dot" />}
-                      {statusLabels[selected.status]}
-                    </span>
-                    {historical && <span className="historical-tag">只读</span>}
-                  </div>
-                  <h1 ref={headingRef} tabIndex={-1}>
-                    {selected.challenge.goal}
-                  </h1>
-                  <div className="arena-conditions">
-                    {selected.challenge.constraints && (
-                      <span>
-                        <strong>硬性限制</strong>
-                        {selected.challenge.constraints}
-                      </span>
-                    )}
-                    {selected.challenge.preferences && (
-                      <span>
-                        <strong>偏好</strong>
-                        {selected.challenge.preferences}
-                      </span>
-                    )}
-                    {selected.challenge.budget !== null && (
-                      <span>
-                        <strong>预算上限</strong>¥{selected.challenge.budget.toLocaleString()}
-                      </span>
-                    )}
-                    {selected.challenge.timeHours !== null && (
-                      <span>
-                        <strong>可用时间</strong>
-                        {selected.challenge.timeHours} 小时
-                      </span>
-                    )}
-                  </div>
-                  {selected.changeReason && (
-                    <p className="version-reason">
-                      <CornerIcon />
-                      本轮改动：{selected.changeReason}
-                    </p>
-                  )}
-                  {parentVersion && parentChanges.length > 0 && (
-                    <div className="condition-delta">
-                      <span>相比 V{String(parentVersion.number).padStart(2, "0")}</span>
-                      <ul>
-                        {parentChanges.map((c) => (
-                          <li key={c.label}>
-                            <strong>{c.label}</strong>
-                            {c.detail}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-                <div className="arena-cost">
-                  <span>本轮费用估算</span>
-                  <strong>{money(selected.costCny)}</strong>
-                  {selected.reservedCny > 0 && (
-                    <small>另有 {money(selected.reservedCny)} 调用中预留</small>
-                  )}
-                  <small>按已记录用量估算，非最终账单</small>
-                </div>
-              </section>
-              {historical && (
-                <div className="history-notice">
-                  <Layers3 size={15} />
-                  <p>你正在查看历史版本。条件、证据与结果保留在当时的状态。</p>
-                  <button className="text-button" type="button" onClick={() => setVersionId(null)}>
-                    回到当前版本
-                    <ArrowRight size={13} />
-                  </button>
-                </div>
-              )}
-              <RunNotice
+              <CanvasRoom
+                key={selected.id}
                 version={selected}
+                steps={selectedSteps}
+                events={versionEvents}
                 historical={historical}
                 busy={arena.busy}
-                onRefresh={() => arena.sync()}
-              />
-              <section className="stage-rail" aria-label="推演进度">
-                {STAGES.map((stage, i) => {
-                  const steps = selectedSteps.filter((s) => s.stage === stage);
-                  const completed =
-                    steps.length > 0 &&
-                    steps.every((s) => s.status === "completed" || s.status === "skipped");
-                  const failed = steps.some((s) => s.status === "failed");
-                  const unknown = steps.some((s) => s.status === "uncertain");
-                  const current = selected.stage === stage && !completed;
-                  return (
-                    <div
-                      key={stage}
-                      className={`stage ${completed ? "done" : ""} ${current ? "current" : ""} ${failed ? "failed" : ""} ${unknown ? "unknown" : ""}`}
-                      aria-current={current ? "step" : undefined}
-                    >
-                      <span className="stage-index">
-                        {failed ? (
-                          <X size={13} aria-hidden="true" />
-                        ) : unknown ? (
-                          <CircleHelp size={13} aria-hidden="true" />
-                        ) : completed ? (
-                          <Check size={13} aria-hidden="true" />
-                        ) : (
-                          String(i + 1).padStart(2, "0")
-                        )}
-                      </span>
-                      <span>
-                        {STAGE_LABELS[stage]}
-                        {failed ? (
-                          <small>失败</small>
-                        ) : unknown ? (
-                          <small>待确认</small>
-                        ) : (
-                          current && selectedRunning && <small>进行中</small>
-                        )}
-                      </span>
-                      {i < 4 && <ArrowRight size={13} />}
-                    </div>
-                  );
-                })}
-                <div className="stage-controls">
-                  {running && !historical ? (
-                    <button
-                      type="button"
-                      className="stop-button"
-                      disabled={arena.busy}
-                      onClick={() => setStopConfirm(true)}
-                    >
-                      <Square size={10} fill="currentColor" />
-                      现在收束
-                    </button>
-                  ) : (
-                    <span className="stage-finished">
-                      {selected.status === "completed" ? "推演结束" : statusLabels[selected.status]}
-                    </span>
-                  )}
-                </div>
-              </section>
-              {!arena.auto && running && !historical && (
-                <div className="paused-notice">
-                  <span>自动推进已停止。刷新确认本轮状态后，可继续推进。</span>
-                  <button type="button" className="text-button" onClick={arena.resume}>
-                    继续推进
-                    <ArrowRight size={13} />
-                  </button>
-                </div>
-              )}
-              <div className="arena-section-title">
-                <h2>
-                  三条路线<span>{selected.strategies.length}/3 条已形成</span>
-                </h2>
-                <button
-                  className="events-toggle"
-                  type="button"
-                  onClick={() => setShowEvents(!showEvents)}
-                  aria-expanded={showEvents}
-                >
-                  <Radio size={14} />
-                  <span>现场记录</span>
-                  <span className="event-count">{versionEvents.length}</span>
-                  <ChevronDown size={13} />
-                </button>
-              </div>
-              {showEvents && (
-                <section className="event-rail" aria-label="现场记录">
-                  {versionEvents.length ? (
-                    versionEvents
-                      .slice(-30)
-                      .reverse()
-                      .map((e) => (
-                        <div className="event-item" key={e.seq}>
-                          <span className="event-time">
-                            {new Date(e.createdAt).toLocaleTimeString("zh-CN", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                            })}
+                selectedAttack={attack?.id ?? locatedId ?? undefined}
+                onEvidence={selectAttack}
+                onClaim={(strategy, claimId) => {
+                  setClaimTarget({ strategy, claimId });
+                  setChallengeText("");
+                }}
+                conditions={
+                  <section className="arena-intro">
+                    <div>
+                      <div className="arena-conditions">
+                        {selected.challenge.constraints && (
+                          <span>
+                            <strong>硬性限制</strong>
+                            {selected.challenge.constraints}
                           </span>
-                          <span
-                            className={`event-marker ${e.type.includes("fail") ? "red" : ""}`}
-                          />
-                          <p>{e.message}</p>
-                          {e.actor && <span className="event-actor">{e.actor}</span>}
+                        )}
+                        {selected.challenge.preferences && (
+                          <span>
+                            <strong>偏好</strong>
+                            {selected.challenge.preferences}
+                          </span>
+                        )}
+                        {selected.challenge.budget !== null && (
+                          <span>
+                            <strong>预算上限</strong>¥{selected.challenge.budget.toLocaleString()}
+                          </span>
+                        )}
+                        {selected.challenge.timeHours !== null && (
+                          <span>
+                            <strong>可用时间</strong>
+                            {selected.challenge.timeHours} 小时
+                          </span>
+                        )}
+                      </div>
+                      {selected.changeReason && (
+                        <p className="version-reason">
+                          <CornerIcon />
+                          本轮改动：{selected.changeReason}
+                        </p>
+                      )}
+                      {parentVersion && parentChanges.length > 0 && (
+                        <div className="condition-delta">
+                          <span>相比 V{String(parentVersion.number).padStart(2, "0")}</span>
+                          <ul>
+                            {parentChanges.map((c) => (
+                              <li key={c.label}>
+                                <strong>{c.label}</strong>
+                                {c.detail}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
-                      ))
-                  ) : (
-                    <p className="muted">等待首条真实事件…</p>
-                  )}
-                </section>
-              )}
-              {selected.strategies.length > 0 && (
-                <DisputeBoard
-                  version={selected}
-                  selectedAttack={attack?.id ?? locatedId ?? undefined}
-                  onEvidence={selectAttack}
-                  onLocate={locateAttack}
-                  onRoute={(id) => goToRoute(id)}
-                />
-              )}
-              <div className="mobile-route-tabs" role="tablist" aria-label="策略路线">
-                {["A", "B", "C"].map((id) => (
-                  <button
-                    type="button"
-                    role="tab"
-                    id={`tab-${id}`}
-                    tabIndex={mobileRoute === id ? 0 : -1}
-                    aria-selected={mobileRoute === id}
-                    aria-controls={`route-${id}`}
-                    key={id}
-                    onKeyDown={(e) => {
-                      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
-                      e.preventDefault();
-                      const ids = ["A", "B", "C"];
-                      const next =
-                        e.key === "Home"
-                          ? "A"
-                          : e.key === "End"
-                            ? "C"
-                            : ids[(ids.indexOf(id) + (e.key === "ArrowRight" ? 1 : 2)) % 3];
-                      setMobileRoute(next);
-                      document.getElementById(`tab-${next}`)?.focus();
-                    }}
-                    onClick={() => setMobileRoute(id)}
-                  >
-                    {id}
-                    <span>
-                      {selected.strategies.some((s) => s.id === id)
-                        ? `${selected.attacks.filter((a) => a.targetStrategyId === id).length} 条争议`
-                        : "等待提案"}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <section className="strategy-grid" aria-label="三条策略路线">
-                {["A", "B", "C"].map((id) => {
-                  const s = selected.strategies.find((s) => s.id === id);
-                  return (
-                    <div
-                      id={`route-${id}`}
-                      tabIndex={-1}
-                      role="tabpanel"
-                      aria-labelledby={`tab-${id}`}
-                      className={`strategy-column ${mobileRoute === id ? "mobile-active" : ""}`}
-                      key={id}
-                    >
-                      {s ? (
-                        <StrategyCard
-                          strategy={s}
-                          version={selected}
-                          historical={historical}
-                          busy={arena.busy}
-                          selectedAttack={attack?.id ?? locatedId ?? undefined}
-                          onAttack={selectAttack}
-                          onClaim={(strategy, claimId) => {
-                            setClaimTarget({ strategy, claimId });
-                            setChallengeText("");
-                          }}
-                        />
-                      ) : (
-                        <PendingCard
-                          id={id}
-                          running={selected.status === "running" && selected.stage === "propose"}
-                        />
                       )}
                     </div>
-                  );
-                })}
-              </section>
-              {selected.verdict ? (
-                <Verdict version={selected} onEvidence={selectAttack} />
-              ) : (
-                <section className="verdict-waiting">
-                  <Flag size={24} strokeWidth={1.3} />
-                  <div>
-                    <h2>
-                      {["paused", "failed", "uncertain"].includes(selected.status)
-                        ? "尚未形成最终裁决"
-                        : "裁决，留在交锋之后。"}
-                    </h2>
-                    <p>
-                      {["paused", "failed", "uncertain"].includes(selected.status)
-                        ? "请根据已经完成的提案与核验判断下一步。修改条件后可以重新开局。"
-                        : "待关键判断接受核验、路线完成修订后，这里会给出成立条件与下一步行动。"}
-                    </p>
-                  </div>
-                </section>
-              )}
-              <div className="arena-bottom-note">
-                <FileSearch size={14} />
-                <span>
-                  材料检索仅使用你提供的文本。工具证据与估算均可追溯；未知事项不会被当作事实。
-                </span>
-              </div>
+                    <div className="arena-cost">
+                      <span>本轮费用估算</span>
+                      <strong>{money(selected.costCny)}</strong>
+                      {selected.reservedCny > 0 && (
+                        <small>另有 {money(selected.reservedCny)} 调用中预留</small>
+                      )}
+                      <small>按已记录用量估算，非最终账单</small>
+                    </div>
+                  </section>
+                }
+                slate={
+                  <>
+                    <div className="arena-version-line">
+                      <label className="version-select">
+                        <Layers3 size={13} />
+                        <select
+                          aria-label="选择推演版本"
+                          value={selected.id}
+                          onChange={(e) => {
+                            setVersionId(e.target.value);
+                            setAttackId(null);
+                            setLocatedId(null);
+                          }}
+                        >
+                          {arena.snapshot.versions.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              V{String(v.number).padStart(2, "0")}{" "}
+                              {v.id === arena.snapshot?.activeVersionId ? "当前版本" : "历史版本"}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={12} />
+                      </label>
+                      <span className={`run-status ${selected.status}`} role="status">
+                        {selected.status === "running" && <span className="working-dot" />}
+                        {statusLabels[selected.status]}
+                      </span>
+                      {historical && <span className="historical-tag">只读</span>}
+                    </div>
+                    <h1 ref={headingRef} tabIndex={-1}>
+                      {selected.challenge.goal}
+                    </h1>
+                    <div className="arena-top-actions">
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => {
+                          setEditing(true);
+                        }}
+                        disabled={arena.busy}
+                      >
+                        <Settings2 size={14} />
+                        修改条件再开局
+                      </button>
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={!!running}
+                        onClick={() => {
+                          arena.reset();
+                          setVersionId(null);
+                        }}
+                      >
+                        <Plus size={14} />
+                        新问题
+                      </button>
+                    </div>
+                  </>
+                }
+                notices={
+                  <>
+                    {historical && (
+                      <div className="history-notice">
+                        <Layers3 size={15} />
+                        <p>你正在查看历史版本。条件、证据与结果保留在当时的状态。</p>
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => setVersionId(null)}
+                        >
+                          回到当前版本
+                          <ArrowRight size={13} />
+                        </button>
+                      </div>
+                    )}
+                    <RunNotice
+                      version={selected}
+                      historical={historical}
+                      busy={arena.busy}
+                      onRefresh={() => arena.sync()}
+                    />
+                    {selected.status !== "completed" && selected.status !== "superseded" && (
+                      <section className="stage-rail" aria-label="推演进度">
+                        {STAGES.map((stage, i) => {
+                          const steps = selectedSteps.filter((s) => s.stage === stage);
+                          const completed =
+                            steps.length > 0 &&
+                            steps.every((s) => s.status === "completed" || s.status === "skipped");
+                          const failed = steps.some((s) => s.status === "failed");
+                          const unknown = steps.some((s) => s.status === "uncertain");
+                          const current = selected.stage === stage && !completed;
+                          return (
+                            <div
+                              key={stage}
+                              className={`stage ${completed ? "done" : ""} ${current ? "current" : ""} ${failed ? "failed" : ""} ${unknown ? "unknown" : ""}`}
+                              aria-current={current ? "step" : undefined}
+                            >
+                              <span className="stage-index">
+                                {failed ? (
+                                  <X size={13} aria-hidden="true" />
+                                ) : unknown ? (
+                                  <CircleHelp size={13} aria-hidden="true" />
+                                ) : completed ? (
+                                  <Check size={13} aria-hidden="true" />
+                                ) : (
+                                  String(i + 1).padStart(2, "0")
+                                )}
+                              </span>
+                              <span>
+                                {STAGE_LABELS[stage]}
+                                {failed ? (
+                                  <small>失败</small>
+                                ) : unknown ? (
+                                  <small>待确认</small>
+                                ) : (
+                                  current && selectedRunning && <small>进行中</small>
+                                )}
+                              </span>
+                              {i < 4 && <ArrowRight size={13} />}
+                            </div>
+                          );
+                        })}
+                        <div className="stage-controls">
+                          {running && !historical ? (
+                            <button
+                              type="button"
+                              className="stop-button"
+                              disabled={arena.busy}
+                              onClick={() => setStopConfirm(true)}
+                            >
+                              <Square size={10} fill="currentColor" />
+                              现在收束
+                            </button>
+                          ) : (
+                            <span className="stage-finished">{statusLabels[selected.status]}</span>
+                          )}
+                        </div>
+                      </section>
+                    )}
+                    {!arena.auto && running && !historical && (
+                      <div className="paused-notice">
+                        <span>自动推进已停止。刷新确认本轮状态后，可继续推进。</span>
+                        <button type="button" className="text-button" onClick={arena.resume}>
+                          继续推进
+                          <ArrowRight size={13} />
+                        </button>
+                      </div>
+                    )}
+                  </>
+                }
+              />
             </div>
           )
         )}

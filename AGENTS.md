@@ -22,9 +22,15 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## 分支与最终提交
 
-围绕具体任务修改，并保留其他协作者的变更。由主代理统一管理分支、提交和集成，子代理不自行切分支或提交。
+围绕具体任务修改，并保留其他协作者的变更。Codex 临时派出的子代理不自行切分支或提交。用户手动打开的 Claude Code 是平级协作者，可以在独立工作区的任务分支提交；Codex 统一负责评审、PR 集成和发布。双方不得在对方工作区切分支、重置或覆盖未提交内容。
 
 省赛标签 `v1.0.0-provincial` 对应最终材料的同一提交 SHA，创建后保持不可变。视频、PDF、仓库和发布清单需要核对 SHA。省赛之后在 `develop/national` 继续开发，不移动最终标签。
+
+## 交接与协作入口
+
+接手前阅读 [完整交接](docs/handoff.md) 和 [协作约定](docs/collaboration.md)。Claude 同时阅读 [CLAUDE.md](CLAUDE.md)。Claude 主要负责前端视觉和独立评审；Codex 负责后端、可靠性、测试和集成。共享类型、前端数据同步钩子、依赖、锁文件和 CI 由 Codex 协调修改。
+
+共享任务和各自状态位于主工作区的 `work/collaboration`，不包含密钥。双方只更新自己的状态文件。使用独立端口、数据库、依赖和浏览器资料；视觉开发默认禁用模型。同步记录不代表对方已接收或开始执行。
 
 ## 技能调用
 

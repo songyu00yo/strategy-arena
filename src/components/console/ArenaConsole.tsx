@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   STAGES,
   STAGE_LABELS,
@@ -11,7 +11,7 @@ import {
   type Strategy,
 } from "@/lib/contracts";
 import { attackMeta, comparisonMeta } from "@/components/status";
-import { Chars, Roll } from "./effects";
+import { Chars, reducedMotion, Roll } from "./effects";
 import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteStage } from "./RouteStage";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
@@ -67,8 +67,15 @@ export function ArenaConsole({
   const shown = beats.slice(0, index + 1);
   const seen = new Set(shown.map((b) => b.id));
 
+  // A game in progress plays out as its results arrive. A finished game opens on its result.
+  const live = version.status === "running" || version.status === "ready";
+  const startedLive = useRef(live);
   useEffect(() => {
+    if (!startedLive.current || reducedMotion()) return;
     const frame = requestAnimationFrame(() => {
+      setMotion(true);
+      setCursor(0);
+      setPlaying(true);
       try {
         if (!sessionStorage.getItem("arena-intro")) setIntro(true);
       } catch {
@@ -77,18 +84,7 @@ export function ArenaConsole({
     });
     return () => cancelAnimationFrame(frame);
   }, []);
-  // The film starts as the shutter opens, so the result is never shown before its first step.
-  const reveal = useCallback(() => {
-    setRevealed((done) => {
-      if (!done && last >= 1) {
-        setMotion(true);
-        setFilmDone(false);
-        setCursor(0);
-        setPlaying(true);
-      }
-      return true;
-    });
-  }, [last]);
+  const reveal = useCallback(() => setRevealed(true), []);
   const endFilm = useCallback(() => setFilmDone(true), []);
   const endIntro = useCallback(() => {
     setIntro(false);
@@ -102,15 +98,32 @@ export function ArenaConsole({
   const stage = current?.stage;
   useEffect(() => {
     if (!playing || !stage) return;
-    const timer = setTimeout(() => {
-      if (index >= last) return setPlaying(false);
-      setCursor(index + 1 >= last ? null : index + 1);
-    }, SHOT_MS[stage] / speed);
+    // A game that finished with much left to show goes straight to its result; nobody waits on a replay.
+    const behind = !live && startedLive.current && last - index > 2;
+    if (intro && !revealed && !behind) return;
+    const timer = setTimeout(
+      () => {
+        if (behind) {
+          setIntro(false);
+          setMotion(false);
+          setPlaying(false);
+          setCursor(null);
+          return;
+        }
+        // Results that arrive together queue up, so each one still gets its moment.
+        if (index < last) return setCursor(live || index + 1 < last ? index + 1 : null);
+        if (live) return;
+        setPlaying(false);
+        setCursor(null);
+      },
+      behind ? 0 : SHOT_MS[stage] / speed,
+    );
     return () => clearTimeout(timer);
-  }, [playing, index, last, stage, speed]);
+  }, [playing, index, last, stage, speed, live, intro, revealed]);
 
   const goTo = useCallback(
     (i: number) => {
+      startedLive.current = false;
       setPlaying(false);
       setMotion(i === index + 1);
       setFilmDone(false);
@@ -119,6 +132,7 @@ export function ArenaConsole({
     [last, index],
   );
   const replay = () => {
+    startedLive.current = false;
     if (playing) return setPlaying(false);
     setMotion(true);
     setFilmDone(false);
@@ -170,7 +184,7 @@ export function ArenaConsole({
   const tokens = used.reduce((t, u) => t + u.inputTokens + u.outputTokens, 0);
   const peak = Math.max(1, ...used.map((u) => u.inputTokens + u.outputTokens));
   const verdict = seen.has("judge") ? version.verdict : null;
-  const directed = motion || version.status === "running";
+  const directed = motion;
   const metrics: [string, number, string][] = [
     ["质疑", attacks.length, ""],
     ["成立", count("supported"), "bad"],

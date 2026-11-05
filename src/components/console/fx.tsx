@@ -28,7 +28,7 @@ export function Intro({
     `${version.evidence.length} 项证据`,
     `${events.length} 条步骤记录`,
     `同一模型 ${model.id} 分成五个角色`,
-  ];
+  ].filter((line) => !line.startsWith("0 "));
   const [count, setCount] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {

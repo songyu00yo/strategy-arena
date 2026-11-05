@@ -90,8 +90,16 @@ test("explicit UI fixture: choose model, see auto reason and preserve model on r
   await dialog.getByLabel("这次为什么修改？", { exact: false }).fill("测试：手动切换 GPT");
   await dialog.getByRole("button", { name: "按新条件重新推演" }).click();
   expect(requests[1].modelMode).toBe("gpt");
+  // The selector also appears inside the dialog; wait for the actual rematch UI to settle.
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("combobox", { name: "选择推演版本" })).toHaveValue(
+    "fixture-version-2",
+  );
   await expect(page.getByText("gpt-6.1-terra", { exact: false }).first()).toBeVisible();
   await page.getByRole("combobox", { name: "选择推演版本" }).selectOption("fixture-version-1");
+  await expect(page.getByRole("combobox", { name: "选择推演版本" })).toHaveValue(
+    "fixture-version-1",
+  );
   await expect(page.getByText("deepseek-flash", { exact: false }).first()).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "修改条件再开局" }).click();

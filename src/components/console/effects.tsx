@@ -466,6 +466,42 @@ export function leaveAs(
   }
 }
 
+/** A short stream of light between two places on screen, ending in a small ring. */
+export function flyLight(from: DOMRect, to: DOMRect, color: string, ms = 420) {
+  if (reducedMotion()) return;
+  const x0 = from.left + from.width / 2;
+  const y0 = from.top + from.height / 2;
+  const x1 = to.left + Math.min(to.width / 2, 60);
+  const y1 = to.top + Math.min(to.height / 2, 14);
+  const lift = Math.max(40, Math.abs(x1 - x0) * 0.16 + Math.abs(y1 - y0) * 0.12);
+  const route = `path("M${x0},${y0} C${x0},${y0 - lift} ${x1},${y1 - lift} ${x1},${y1}")`;
+  const count = 12;
+  for (let i = 0; i < count; i++) {
+    const dot = document.createElement("div");
+    dot.className = "c-fill-dot";
+    const size = 7 - i * 0.42;
+    dot.style.cssText = `width:${size}px;height:${size}px;background:rgb(${color});offset-path:${route};opacity:${1 - i / count}`;
+    document.body.appendChild(dot);
+    dot.animate([{ offsetDistance: "0%" }, { offsetDistance: "100%" }], {
+      duration: ms,
+      delay: i * 16,
+      easing: "cubic-bezier(.5,0,.2,1)",
+      fill: "both",
+    }).onfinish = () => dot.remove();
+  }
+  const ring = document.createElement("div");
+  ring.className = "c-press-ring";
+  ring.style.cssText = `left:${x1}px;top:${y1}px;color:rgb(${color});width:56px;height:56px`;
+  document.body.appendChild(ring);
+  ring.animate(
+    [
+      { transform: "translate(-50%,-50%) scale(.2)", opacity: 0.8 },
+      { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
+    ],
+    { duration: 420, delay: ms * 0.92, easing: "cubic-bezier(.16,1,.3,1)", fill: "both" },
+  ).onfinish = () => ring.remove();
+}
+
 /** A container that animates out when it is removed. */
 export function Leaving({
   frames,

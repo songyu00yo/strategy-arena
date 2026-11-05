@@ -571,6 +571,13 @@ test.describe("behaviour", () => {
       else await page.keyboard.press("Escape");
       await expect(drawer).toHaveCount(0);
       await expect(page.locator(".console-shell > .evidence-drawer")).toHaveCount(1);
+      // What leaves is what was on screen, not a blank panel replaying its entrance.
+      expect(
+        await page
+          .locator(".console-shell > .evidence-drawer .evidence-section")
+          .first()
+          .evaluate((el) => getComputedStyle(el).animationName),
+      ).toBe("none");
       await expect(page.locator(".console-shell > .evidence-drawer")).toHaveCount(0, {
         timeout: 2000,
       });

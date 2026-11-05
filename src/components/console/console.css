@@ -2918,6 +2918,12 @@
 .c-cw.now .body {
   color: var(--c-t2);
 }
+/* A closing stand-in shows exactly what was on screen: entrance animations must not replay inside it. */
+.console-shell .c-ghost,
+.console-shell .c-ghost * {
+  animation: none !important;
+  transition: none !important;
+}
 @media (max-width: 1100px) {
   .c-live {
     position: static;

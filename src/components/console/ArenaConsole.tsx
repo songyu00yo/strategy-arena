@@ -105,11 +105,21 @@ export function ArenaConsole({
   // The first step of a stage waits for its word to land, so the two never collide.
   const firstOfStage = !!stage && stage !== "judge" && beats[index - 1]?.stage !== stage;
   const lead = playing && firstOfStage ? 560 / speed : 0;
+  // Each step's clock starts when the step does, so a new result arriving never restarts it.
+  const shotClock = useRef({ index: -1, at: 0 });
   useEffect(() => {
     if (!playing || !stage) return;
-    // A game that finished with much left to show goes straight to its result; nobody waits on a replay.
-    const behind = !live && startedLive.current && last - index > 2;
+    // Only a game already complete at first sight skips ahead; one being watched walks to its end.
+    const behind = !live && startedLive.current && index <= 1 && last - index > 2;
     if (intro && !revealed && !behind) return;
+    const now = performance.now();
+    if (shotClock.current.index !== index) shotClock.current = { index, at: now };
+    // In a live game, steps shorten while results wait in line, so the screen catches up without a jump.
+    // A replay the viewer asked for keeps its full pace.
+    const backlog = last - index;
+    const full = SHOT_MS[stage] / speed + lead;
+    const hold =
+      backlog > 0 && startedLive.current ? Math.max(650 / speed, full / (1 + backlog * 0.5)) : full;
     const timer = setTimeout(
       () => {
         if (behind) {
@@ -119,13 +129,12 @@ export function ArenaConsole({
           setCursor(null);
           return;
         }
-        // Results that arrive together queue up, so each one still gets its moment.
         if (index < last) return setCursor(live || index + 1 < last ? index + 1 : null);
         if (live) return;
         setPlaying(false);
         setCursor(null);
       },
-      behind ? 0 : SHOT_MS[stage] / speed + lead,
+      behind ? 0 : Math.max(0, hold - (now - shotClock.current.at)),
     );
     return () => clearTimeout(timer);
   }, [playing, index, last, stage, speed, live, intro, revealed, lead]);

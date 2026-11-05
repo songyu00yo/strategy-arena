@@ -117,7 +117,7 @@ export function Chapter({ stage }: { stage: Stage }) {
             transform: `translate(${to.left + to.width / 2 - (from.left + from.width / 2)}px,${
               to.top + to.height / 2 - (from.top + from.height / 2)
             }px) scale(${scale})`,
-            opacity: 0.25,
+            opacity: 0,
           },
         ],
         { duration: 420, easing: "cubic-bezier(.7,0,.15,1)", fill: "forwards" },

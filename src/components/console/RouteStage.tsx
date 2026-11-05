@@ -60,7 +60,6 @@ export function RouteStage({
   const rig = useRef<HTMLDivElement>(null);
   const world = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const spot = useRef<HTMLDivElement>(null);
   const fx = useRef<Sparks | null>(null);
   const packet = useRef<HTMLDivElement>(null);
   const paths = useRef(new Map<string, SVGPathElement>());
@@ -134,7 +133,7 @@ export function RouteStage({
       host.appendChild(giant);
       const W = host.clientWidth;
       const H = host.clientHeight;
-      const tx = parseFloat(spot.current?.style.left || "0") - W / 2 - 120;
+      const tx = node.offsetLeft - W / 2;
       const ty = -H * 0.34;
       const fly = giant.animate(
         [
@@ -319,7 +318,6 @@ export function RouteStage({
           ? Math.max(0, Math.min(1, elapsed / flying.duration))
           : 1
         : 0;
-      sparks.dark = filming.current;
       sparks.dust += ((filming.current ? 1 : 0) - sparks.dust) * Math.min(1, dt * 2);
       const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 
@@ -441,10 +439,6 @@ export function RouteStage({
       Math.min(roomY, focusY - at.y * scale - ((1 - scale) * H) / 2),
     );
     el.style.transform = `translate3d(${x}px,${y}px,0) scale(${scale}) rotateY(${turn}deg)`;
-    if (spot.current) {
-      spot.current.style.left = `${W / 2 + (at.x - W / 2) * scale + x}px`;
-      spot.current.style.setProperty("--spot", spaced(ROUTE_COLOR[current.agent] ?? "255,255,255"));
-    }
   }, [camera, current, hot]);
 
   // Bring the doubted claim into view inside its board, without moving the page.
@@ -598,7 +592,6 @@ export function RouteStage({
 
   return (
     <div className={`c-stage3 ${activeAttack ? "has-float" : ""}`} ref={stage}>
-      <div className="c-spot" ref={spot} aria-hidden="true" />
       <div className="c-rig" ref={rig}>
         <div className="c-world" ref={world}>
           {board("A")}

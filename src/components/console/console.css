@@ -170,8 +170,8 @@
   flex-direction: column;
   justify-content: center;
   padding: 0 11vw;
-  background: #050608;
-  color: #fff;
+  background: #f4f5f7;
+  color: var(--c-t0);
 }
 .c-film {
   position: fixed;
@@ -181,14 +181,14 @@
   flex-direction: column;
   justify-content: center;
   padding: 0 9vw;
-  background: #050608;
-  color: #fff;
+  background: #f7f8fa;
+  color: var(--c-t0);
   pointer-events: none;
 }
 .c-film small {
   font-size: clamp(20px, 2vw, 32px);
   font-weight: 800;
-  color: #6fe0a4;
+  color: var(--c-ok);
 }
 .c-film .head {
   max-width: 17em;
@@ -204,7 +204,7 @@
   padding: 0;
   list-style: none;
   font-size: clamp(14px, 1.2vw, 19px);
-  color: #b8bcc2;
+  color: var(--c-t2);
 }
 .c-intro .c-dust {
   position: absolute;
@@ -223,7 +223,7 @@
   padding: 0;
   list-style: none;
   font-size: 15px;
-  color: #9da2a9;
+  color: var(--c-t2);
 }
 .c-intro li {
   animation: c-rise 0.22s ease-out;
@@ -1155,6 +1155,7 @@
 }
 /* Home */
 .console-shell.home {
+  overflow-x: clip;
   height: auto;
   min-height: 100dvh;
   overflow: visible;
@@ -1396,126 +1397,34 @@
 .c-board.dim {
   opacity: 0.5;
 }
-/* Lights down: during a replay the room goes dark and everything is lit from within. */
-.c-root::before {
-  content: "";
-  position: fixed;
-  z-index: 1;
-  inset: 0;
-  background: #04050a;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 1.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.c-root.theater::before {
-  opacity: 0.9;
-}
-.c-root.theater .c-slate,
-.c-root.theater .c-conditions,
-.c-root.theater .c-track,
-.c-root.theater .c-trace {
-  --c-t0: #fff;
-  --c-t1: #dfe3e8;
-  --c-t2: #aeb4bc;
-  --c-t3: #80868f;
-  --c-line: rgb(255 255 255 / 0.16);
-  --c-line2: rgb(255 255 255 / 0.3);
-  --ink: #fff;
-  --text: #dfe3e8;
-  color: #fff;
-}
-.console-shell:has(.c-root.theater) .model-pill {
-  border-color: rgb(255 255 255 / 0.3);
-  color: #fff;
-}
-.c-root.theater .c-slate select {
-  color: #fff;
-}
-.c-root.theater .c-slate select option {
-  color: #000;
-}
-.c-root.theater .c-trace {
-  background: rgb(255 255 255 / 0.05);
-  backdrop-filter: none;
-}
-.c-root.theater .c-log .hot {
-  background: #fff;
-  color: #000;
-}
-.c-root.theater .c-log .hot b {
-  color: #000;
-}
-.c-root.theater .c-now {
-  border: 1px solid rgb(255 255 255 / 0.3);
-  background: rgb(255 255 255 / 0.06);
-}
-.c-root.theater .c-time .ticks .cur {
-  background: #fff;
-  box-shadow:
-    0 -4px 0 #fff,
-    0 0 22px 5px #fff;
-}
+/* Replay on the daylight page: each route lights its own board and threads. */
 .c-root.theater .c-board {
-  background: rgb(250 251 253 / 0.97);
   backdrop-filter: none;
-  box-shadow: 0 0 60px rgb(255 255 255 / 0.07);
+  background: rgb(255 255 255 / 0.94);
 }
 .c-root.theater .c-board.speaking,
 .c-root.theater .c-board.target {
   box-shadow:
     0 0 0 1px rgb(var(--route)),
-    0 0 40px 2px rgb(var(--route) / 0.85),
-    0 0 150px 24px rgb(var(--route) / 0.5);
+    0 0 26px 2px rgb(var(--route) / 0.55),
+    0 22px 70px 8px rgb(var(--route) / 0.3);
 }
 .c-root.theater .c-board.dim {
-  opacity: 0.2;
-  filter: blur(3px);
-}
-.c-root.theater .c-float-back {
-  border-color: rgb(255 255 255 / 0.3);
-  background: rgb(16 18 24 / 0.8);
-  backdrop-filter: none;
-  color: #c9ced5;
-}
-.c-root.theater .c-float-card {
-  background: #fbfcfe;
-  backdrop-filter: none;
-  box-shadow:
-    0 0 0 1px #fff,
-    0 0 90px 10px rgb(255 255 255 / 0.28);
+  opacity: 0.32;
+  filter: blur(2px);
 }
 .c-root.theater .c-thread {
-  filter: drop-shadow(0 0 5px rgb(var(--route)));
+  filter: drop-shadow(0 0 3px rgb(var(--route) / 0.6));
 }
 .c-root.theater .c-thread.on {
-  stroke-width: 3.6;
-  filter: drop-shadow(0 0 14px rgb(var(--route))) drop-shadow(0 0 3px #fff);
-  stroke: #fff;
+  stroke-width: 3.2;
+  stroke: rgb(var(--route));
+  filter: drop-shadow(0 0 8px rgb(var(--route)));
 }
-.c-spot {
-  position: absolute;
-  z-index: 0;
-  top: -12%;
-  left: 50%;
-  width: 72%;
-  height: 130%;
-  opacity: 0;
-  background: linear-gradient(
-    180deg,
-    rgb(var(--spot, 255 255 255) / 0.75),
-    rgb(var(--spot, 255 255 255) / 0.05) 74%,
-    transparent
-  );
-  clip-path: polygon(40% 0, 60% 0, 100% 100%, 0 100%);
-  filter: blur(26px);
-  pointer-events: none;
-  transform: translateX(-50%);
-  transition:
-    left 1.05s cubic-bezier(0.65, 0, 0.15, 1),
-    opacity 0.9s;
-}
-.c-root.theater .c-spot {
-  opacity: 0.85;
+.c-root.theater .c-time .ticks .cur {
+  box-shadow:
+    0 -4px 0 var(--c-t0),
+    0 0 14px 2px rgb(11 13 16 / 0.35);
 }
 .c-outline {
   position: absolute;
@@ -1636,11 +1545,10 @@
   position: absolute;
   z-index: 5;
   height: 3px;
-  background: #fff;
+  background: rgb(40 120 255);
   box-shadow:
-    0 0 14px 4px #fff,
-    0 0 50px 12px rgb(120 190 255),
-    0 40px 70px 30px rgb(120 190 255 / 0.28);
+    0 0 12px 3px rgb(40 120 255 / 0.8),
+    0 34px 60px 26px rgb(40 120 255 / 0.16);
   pointer-events: none;
 }
 .c-flash {
@@ -1841,10 +1749,13 @@
   position: relative;
   animation: c-rowslide 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.9s backwards;
 }
-.h-flow .c-dust {
-  inset: -80px -60px;
-  width: calc(100% + 120px);
-  height: calc(100% + 160px);
+.h-grid {
+  position: relative;
+}
+.h-lead,
+.h-flow {
+  position: relative;
+  z-index: 1;
 }
 .h-flow li {
   animation: c-rowslide 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards;
@@ -2123,6 +2034,7 @@
   .console-shell {
     height: auto;
     overflow: visible;
+    overflow-x: clip;
   }
   .c-root,
   .c-hud {
@@ -2164,10 +2076,6 @@
   .console-shell *::after {
     animation: none !important;
     transition: none !important;
-  }
-  .c-spot,
-  .c-root::before {
-    display: none;
   }
   .h-packet {
     display: none;

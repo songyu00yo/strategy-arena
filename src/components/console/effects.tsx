@@ -43,7 +43,7 @@ export class Sparks {
   private width = 0;
   private height = 0;
   private time = 0;
-  dark = true;
+  dark = false;
   dust = 0;
 
   constructor(private canvas: HTMLCanvasElement) {

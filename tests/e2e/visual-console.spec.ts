@@ -116,7 +116,10 @@ const screens = [
   { name: "mbp14", width: 1512, height: 860 },
   { name: "mbp16", width: 1728, height: 1000 },
   { name: "fhd", width: 1920, height: 970 },
+  { name: "laptop", width: 1366, height: 768 },
+  { name: "qhd", width: 2560, height: 1440 },
 ];
+const homeScreens = screens.slice(0, 3);
 const noScroll = (page: Page) =>
   page.evaluate(() => {
     const root = document.documentElement;
@@ -153,7 +156,7 @@ for (const screen of screens) {
   });
 }
 
-for (const screen of screens) {
+for (const screen of homeScreens) {
   test(`home fits ${screen.name}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: screen.width, height: screen.height });
     await page.goto("/");

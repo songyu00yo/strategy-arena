@@ -202,43 +202,82 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
   );
 }
 
-type WallRecord = { id: string; title: string; meta: string; lines: string[] };
+type WallRecord = {
+  id: string;
+  row: number;
+  title: string;
+  meta: string;
+  lines: string[];
+};
+const WALL_ROW: Record<Stage, number> = { propose: 0, attack: 1, verify: 2, revise: 3, judge: 3 };
+const WALL_LIMIT = 24;
 
-/** What the wall may show: this game's stored records only. An empty game has an empty wall. */
-function wallRecords(version: ArenaVersion, events: ArenaEvent[]): WallRecord[] {
+/** The wall shows only what has happened so far: real proposals, challenges, checks and revisions. */
+function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[]): WallRecord[] {
   const records: WallRecord[] = [];
-  for (const s of version.strategies)
+  for (const beat of shown) {
+    const row = WALL_ROW[beat.stage];
+    const label = `${String(shown.indexOf(beat) + 1).padStart(2, "0")} ${STAGE_LABELS[beat.stage]}`;
+    let lines: string[] = [];
+    if (beat.strategy) {
+      const s = beat.strategy;
+      lines = [s.thesis, ...s.steps, ...s.claims.map((c) => `${c.id}：${c.text}`), s.firstAction];
+    } else if (beat.stage === "attack" && beat.attack) {
+      const a = beat.attack;
+      lines = [`原话：${a.claimQuote}`, `质疑：${a.reason}`, a.impact, `核验：${a.verification}`];
+    } else if (beat.stage === "verify" && beat.attack) {
+      lines = [
+        attackMeta[beat.attack.status].label,
+        ...version.evidence
+          .filter((e) => e.attackId === beat.attack!.id)
+          .flatMap((e) => [
+            e.title,
+            e.expression ? `${e.expression} = ${e.result ?? "无法计算"}` : "",
+            e.assumptions,
+            e.content,
+            e.source,
+          ])
+          .filter(Boolean),
+      ];
+    } else if (beat.revision) {
+      lines = [
+        beat.revision.summary,
+        ...(beat.changes ?? []).map((c) => `改动：${c}`),
+        ...beat.revision.responses.flatMap((r) => [
+          `${decisionMeta[r.decision].label}：${r.reason}`,
+          r.change,
+        ]),
+      ].filter(Boolean);
+    } else if (beat.verdict) {
+      const v = beat.verdict;
+      lines = [
+        v.headline,
+        v.rationale,
+        ...v.conditions.map((c) => `前提：${c}`),
+        ...v.uncertainties.map((c) => `待确认：${c}`),
+        ...v.nextActions.map((c) => `下一步：${c}`),
+      ];
+    }
     records.push({
-      id: `s:${s.id}`,
-      title: `方案 ${s.id} 提案`,
-      meta: s.title,
-      lines: [s.thesis, ...s.steps, ...s.claims.map((c) => `${c.id}: ${c.text}`), s.firstAction],
+      id: beat.id,
+      row,
+      title: label,
+      meta: `${nameOf(beat.agent)}${beat.to ? ` → ${nameOf(beat.to)}` : ""}`,
+      lines,
     });
-  for (const a of version.attacks)
-    records.push({
-      id: `a:${a.id}`,
-      title: `${a.from} 质疑 ${a.targetStrategyId}`,
-      meta: a.targetClaimId,
-      lines: [a.claimQuote, a.reason, a.impact, a.verification],
-    });
-  for (const e of version.evidence)
-    records.push({
-      id: `e:${e.id}`,
-      title: "核验证据",
-      meta: e.title,
-      lines: [e.expression ?? "", e.assumptions, e.content, e.source].filter(Boolean),
-    });
+  }
   for (const event of events) {
     const output = outputOf(event);
-    if (output)
+    if (output && event.stage)
       records.push({
         id: `o:${event.seq}`,
-        title: `模型输出 ${event.actor}`,
-        meta: event.stage ?? "",
+        row: WALL_ROW[event.stage],
+        title: "模型结构化输出",
+        meta: event.actor ?? "",
         lines: JSON.stringify(output, null, 1).split("\n"),
       });
   }
-  return records.slice(0, 18);
+  return records.slice(-WALL_LIMIT);
 }
 
 type Panel = {
@@ -246,85 +285,115 @@ type Panel = {
   x: number;
   y: number;
   z: number;
+  aim: number;
   phase: number;
   lines: string[];
   row: number;
   ch: number;
-  wait: number;
+  typing: boolean;
   rows: HTMLElement[];
-  fresh: boolean;
 };
 
-/** Real records typing themselves out on panels set back in space. */
-export function RecordWall({ version, events }: { version: ArenaVersion; events: ArenaEvent[] }) {
+/** Real records on panels set back in space, in rows by stage, the newest nearest. */
+export function RecordWall({
+  version,
+  shown,
+  currentId,
+  events,
+}: {
+  version: ArenaVersion;
+  shown: Beat[];
+  currentId?: string;
+  events: ArenaEvent[];
+}) {
   const stage = useRef<HTMLDivElement>(null);
   const panels = useRef(new Map<string, Panel>());
-  const records = wallRecords(version, events);
+  const records = wallRecords(version, shown, events);
   const signature = records.map((r) => r.id).join();
   const latest = useRef(records);
+  const settled = useRef(false);
   useEffect(() => {
     latest.current = records;
   });
   useEffect(() => {
     const host = stage.current;
     if (!host) return;
-    latest.current.forEach((record, i) => {
-      if (panels.current.has(record.id)) return;
-      const el = document.createElement("div");
-      el.className = "c-cw";
-      const head = document.createElement("div");
-      head.className = "tb";
-      const name = document.createElement("b");
-      name.textContent = record.title;
-      const meta = document.createElement("span");
-      meta.textContent = record.meta;
-      head.append(name, meta);
-      const body = document.createElement("div");
-      body.className = "body";
-      // Panels arrive already written, then retype one at a time, so the wall is never blank.
-      const rows = record.lines.map((line) => {
-        const row = document.createElement("div");
-        row.textContent = line;
-        body.appendChild(row);
-        return row;
-      });
-      el.append(head, body);
-      const col = i % 6;
-      const line = Math.floor(i / 6);
-      const z = -320 - ((i * 137) % 900);
-      const blur = Math.min(1.8, (-z - 320) / 480);
-      el.style.filter = `blur(${blur}px)`;
-      el.style.opacity = String(0.95 - blur * 0.18);
-      host.appendChild(el);
-      panels.current.set(record.id, {
-        el,
-        x: (col - 2.5) * 400 + (line % 2) * 120,
-        y: (line - 1.2) * 330,
-        z,
-        phase: (i * 1.7) % 6.28,
-        lines: record.lines,
-        row: 0,
-        ch: 0,
-        wait: -((i * 1700) % 9000) - 800,
-        fresh: true,
-        rows,
-      });
+    const counts = [0, 0, 0, 0];
+    const list = latest.current;
+    const animate = settled.current && !reduced();
+    settled.current = true;
+    list.forEach((record, i) => {
+      const col = counts[record.row]++;
+      const rank = list.length - 1 - i;
+      const focus = record.id === currentId;
+      let panel = panels.current.get(record.id);
+      if (!panel) {
+        const el = document.createElement("div");
+        const head = document.createElement("div");
+        head.className = "tb";
+        const name = document.createElement("b");
+        name.textContent = record.title;
+        const meta = document.createElement("span");
+        meta.textContent = record.meta;
+        head.append(name, meta);
+        const body = document.createElement("div");
+        body.className = "body";
+        const rows = record.lines.map((line) => {
+          const row = document.createElement("div");
+          row.textContent = animate ? "" : line;
+          body.appendChild(row);
+          return row;
+        });
+        el.append(head, body);
+        host.appendChild(el);
+        panel = {
+          el,
+          x: (col - 2.2) * 372 + (record.row % 2) * 70,
+          y: (record.row - 1.5) * 188,
+          z: -1100,
+          aim: -300,
+          phase: (i * 1.7) % 6.28,
+          lines: record.lines,
+          row: 0,
+          ch: 0,
+          typing: animate,
+          rows,
+        };
+        panels.current.set(record.id, panel);
+      }
+      panel.aim = focus ? -170 : -250 - Math.min(rank, 14) * 44;
+      const blur = focus ? 0 : Math.min(1.8, 0.25 + rank * 0.14);
+      panel.el.className = `c-cw ${focus ? "now" : ""}`;
+      panel.el.style.filter = blur ? `blur(${blur}px)` : "none";
+      panel.el.style.opacity = String(focus ? 1 : Math.max(0.5, 0.92 - rank * 0.035));
+      panel.el.style.zIndex = String(100 - rank);
     });
     for (const [id, panel] of panels.current)
-      if (!latest.current.some((r) => r.id === id)) {
+      if (!list.some((r) => r.id === id)) {
         panel.el.remove();
         panels.current.delete(id);
       }
-  }, [signature]);
+  }, [signature, currentId]);
+  // The wall fills the same share of the stage on any screen.
+  useEffect(() => {
+    const fit = () => {
+      if (stage.current)
+        stage.current.style.scale = String(Math.max(0.8, Math.min(1.75, innerHeight / 860)));
+    };
+    fit();
+    addEventListener("resize", fit);
+    return () => removeEventListener("resize", fit);
+  }, []);
   useEffect(() => {
     const all = panels.current;
     const place = (p: Panel, t: number) => {
-      const dx = Math.sin(t / 7000 + p.phase) * 30;
-      const dy = Math.cos(t / 9000 + p.phase) * 18;
-      p.el.style.transform = `translate3d(${p.x + dx - 180}px, ${p.y + dy - 150}px, ${p.z}px)`;
+      const dx = Math.sin(t / 7000 + p.phase) * 10;
+      const dy = Math.cos(t / 9000 + p.phase) * 7;
+      p.el.style.transform = `translate3d(${p.x + dx - 180}px, ${p.y + dy - 115}px, ${p.z}px)`;
     };
     if (reduced()) {
       for (const p of all.values()) {
+        p.z = p.aim;
         place(p, 0);
         p.rows.forEach((row, i) => (row.textContent = p.lines[i]));
       }
@@ -332,31 +401,41 @@ export function RecordWall({ version, events }: { version: ArenaVersion; events:
     }
     let frame = 0;
     let last = performance.now();
+    let budget = 0;
+    let nextRetype = last + 2600;
     const tick = (t: number) => {
       const dt = Math.min(64, t - last);
       last = t;
-      for (const p of all.values()) {
-        place(p, t);
-        p.wait += dt;
-        if (p.fresh) {
-          if (p.wait < 0) continue;
-          p.fresh = false;
-          p.rows.forEach((row) => (row.textContent = ""));
+      budget += dt;
+      const steps = Math.floor(budget / 16);
+      budget -= steps * 16;
+      // Rewrite one settled panel at a time, so the wall stays alive and never goes blank.
+      if (t > nextRetype) {
+        nextRetype = t + 1500;
+        const idle = [...all.values()].filter((p) => !p.typing && p.lines.length);
+        const pick = idle[Math.floor(Math.random() * idle.length)];
+        if (pick) {
+          pick.typing = true;
+          pick.row = 0;
+          pick.ch = 0;
+          pick.rows.forEach((row) => (row.textContent = ""));
         }
-        while (p.wait > 22 && p.row < p.lines.length) {
-          p.wait -= 22;
+      }
+      for (const p of all.values()) {
+        p.z += (p.aim - p.z) * Math.min(1, dt * 0.004);
+        place(p, t);
+        if (!p.typing) continue;
+        for (let n = 0; n < steps && p.typing; n++) {
+          if (p.row >= p.lines.length) {
+            p.typing = false;
+            break;
+          }
           p.ch += 1;
           p.rows[p.row].textContent = p.lines[p.row].slice(0, p.ch);
           if (p.ch >= p.lines[p.row].length) {
             p.row += 1;
             p.ch = 0;
           }
-        }
-        if (p.row >= p.lines.length && p.wait > 5000) {
-          p.rows.forEach((row) => (row.textContent = ""));
-          p.row = 0;
-          p.ch = 0;
-          p.wait = 0;
         }
       }
       frame = requestAnimationFrame(tick);
@@ -371,9 +450,25 @@ export function RecordWall({ version, events }: { version: ArenaVersion; events:
   );
 }
 
-const STAGE_WORD: Record<Stage, string> = STAGE_LABELS;
+/** The record behind the step in front, so the card carries substance and not only a caption. */
+function detailsOf(beat: Beat): string[] {
+  if (beat.strategy) return beat.strategy.claims.slice(0, 3).map((c) => `${c.id}：${c.text}`);
+  if (beat.revision)
+    return [
+      ...(beat.changes ?? []).map((c) => `改动：${c}`),
+      ...beat.revision.responses.map((r) => `${decisionMeta[r.decision].label}：${r.reason}`),
+    ].slice(0, 3);
+  if (beat.verdict)
+    return [
+      ...beat.verdict.nextActions.map((c) => `下一步：${c}`),
+      ...beat.verdict.conditions.map((c) => `前提：${c}`),
+    ].slice(0, 3);
+  return [];
+}
 
-/** The chain of thought: every step so far stays in view as a card, the newest in front. */
+const SHORT: Record<string, string> = { verify: "核验", judge: "裁判" };
+
+/** The chain of thought: every step so far stays in view, grouped by stage, the newest in front. */
 export function ChainDeck({
   version,
   beats,
@@ -390,6 +485,9 @@ export function ChainDeck({
   const shown = beats.slice(0, index + 1);
   const front = useRef<HTMLDivElement>(null);
   const current = beats[index];
+  const seenIds = new Set(shown.map((b) => b.id));
+  const attack = current?.attack;
+  const running = current?.stage === "attack" ? 1 : current?.stage === "verify" ? 2 : 3;
   useEffect(() => {
     if (!front.current || !directed || reduced()) return;
     front.current.animate(
@@ -408,9 +506,13 @@ export function ChainDeck({
     // Only a new step brings a card in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id]);
+  // Long records stay inside the card: the line being worked on is always the one in view.
+  useEffect(() => {
+    const body = front.current?.querySelector<HTMLElement>(".body");
+    const row = body?.querySelector<HTMLElement>(".ln.run");
+    if (body && row) body.scrollTop = Math.max(0, row.offsetTop - 2);
+  }, [current?.id]);
   if (!shown.length) return null;
-  const attack = current?.attack;
-  const seenIds = new Set(shown.map((b) => b.id));
   const checked = !!attack && seenIds.has(`v:${attack.id}`);
   const response =
     attack &&
@@ -418,7 +520,6 @@ export function ChainDeck({
       .find((b) => b.id === `r:${attack.targetStrategyId}`)
       ?.revision?.responses.find((r) => r.attackId === attack.id);
   const evidence = attack ? version.evidence.filter((e) => e.attackId === attack.id) : [];
-  const running = current?.stage === "attack" ? 1 : current?.stage === "verify" ? 2 : 3;
   const rows: [string, string][] = attack
     ? [
         [`${attack.targetStrategyId} 原话`, attack.claimQuote],
@@ -453,14 +554,18 @@ export function ChainDeck({
         const depth = shown.length - 1 - i;
         const isFront = depth === 0;
         const dispute = isFront && !!attack;
+        // A small extra gap between stages lets the fan read as groups.
+        const gaps = new Set(shown.slice(i).map((b) => b.stage)).size - 1;
+        const state = beat.stage === "verify" && beat.attack ? beat.attack.status : "";
         return (
           <div
             key={beat.id}
             ref={isFront ? front : undefined}
-            className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""}`}
+            className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""} ${state ? `is-${state}` : ""}`}
             style={
               {
                 "--d": depth,
+                "--g": gaps,
                 "--route": (ROUTE_COLOR[beat.agent] ?? "11,13,16").replaceAll(",", " "),
                 zIndex: 100 - depth,
               } as CSSProperties
@@ -468,15 +573,18 @@ export function ChainDeck({
           >
             <div className="tb">
               <b>
-                {String(i + 1).padStart(2, "0")} {nameOf(beat.agent)}
-                {beat.to ? ` → ${nameOf(beat.to)}` : ""}
+                {String(i + 1).padStart(2, "0")}{" "}
+                {isFront ? nameOf(beat.agent) : (SHORT[beat.agent] ?? beat.agent)}
+                {beat.to ? ` → ${isFront ? nameOf(beat.to) : beat.to}` : ""}
               </b>
               <span>
                 {dispute
                   ? checked
                     ? attackMeta[attack.status].label
                     : "核验中"
-                  : STAGE_WORD[beat.stage]}
+                  : state
+                    ? attackMeta[beat.attack!.status].label
+                    : STAGE_LABELS[beat.stage]}
               </span>
             </div>
             {dispute ? (
@@ -501,6 +609,13 @@ export function ChainDeck({
               <div className="body plain">
                 <strong>{beat.title}</strong>
                 <p>{beat.plain}</p>
+                {isFront && (
+                  <ul>
+                    {detailsOf(beat).map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
           </div>

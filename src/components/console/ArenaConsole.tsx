@@ -222,7 +222,7 @@ export function ArenaConsole({
 
   return (
     <div className={`c-root ${playing ? "theater" : ""} `}>
-      <RecordWall version={version} events={logged} />
+      <RecordWall version={version} shown={shown} currentId={current?.id} events={logged} />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
         <div className="c-conditions">{conditions}</div>

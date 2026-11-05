@@ -161,6 +161,73 @@
   line-height: 16px;
   color: var(--c-t2);
 }
+/* Opening */
+.c-intro {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 11vw;
+  background: #050608;
+  color: #fff;
+}
+.c-film {
+  position: fixed;
+  z-index: 55;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 9vw;
+  background: #050608;
+  color: #fff;
+  pointer-events: none;
+}
+.c-film small {
+  font-size: clamp(20px, 2vw, 32px);
+  font-weight: 800;
+  color: #6fe0a4;
+}
+.c-film .head {
+  max-width: 17em;
+  margin-top: 8px;
+  font-size: clamp(46px, 6vw, 104px);
+  line-height: 1.08;
+  font-weight: 900;
+  letter-spacing: -0.045em;
+}
+.c-film ul {
+  min-height: 4em;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: clamp(14px, 1.2vw, 19px);
+  color: #b8bcc2;
+}
+.c-intro .c-dust {
+  position: absolute;
+}
+.c-intro .q {
+  position: relative;
+  max-width: 26em;
+  font-size: clamp(30px, 3.4vw, 54px);
+  line-height: 1.16;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.c-intro ul {
+  min-height: 9em;
+  margin: 26px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 15px;
+  color: #9da2a9;
+}
+.c-intro li {
+  animation: c-rise 0.22s ease-out;
+}
 /* Skeleton */
 .c-hud {
   position: relative;
@@ -439,20 +506,83 @@
 .c-stage3 {
   position: relative;
   min-height: 0;
+  overflow: hidden;
+  perspective: 1400px;
+  perspective-origin: 50% 42%;
+}
+.c-rig,
+.c-world {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  /* Tilted boards dip behind these planes; only the boards may take a click. */
+  pointer-events: none;
+}
+.c-board {
+  pointer-events: auto;
+}
+.c-rig {
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.c-world {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.04fr) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: clamp(30px, 3.6vw, 62px);
+  padding: 6px;
+  transition: transform 1.05s cubic-bezier(0.65, 0, 0.15, 1);
+  will-change: transform;
 }
-.c-ring {
+.c-fx {
   position: absolute;
-  z-index: 5;
-  width: 30px;
-  height: 30px;
-  margin: -15px 0 0 -15px;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
+  z-index: 4;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
+}
+.c-stamp {
+  position: absolute;
+  z-index: 7;
+  padding: 2px 18px;
+  border: 5px solid currentColor;
+  background: rgb(255 255 255 / 0.9);
+  font-size: clamp(34px, 3.6vw, 62px);
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 0 60px currentColor;
+}
+.c-tear {
+  position: absolute;
+  z-index: 6;
+  padding: 2px 6px;
+  background: var(--c-t0);
+  color: #fff;
+  box-shadow: 0 18px 50px rgb(11 13 16 / 0.45);
+  pointer-events: none;
+}
+.c-board::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 38%,
+    rgb(255 255 255 / 0.95) 50%,
+    transparent 62%
+  );
+  pointer-events: none;
+}
+.c-board.speaking::after,
+.c-board.pick::after {
+  animation: c-sheen 1.1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.c-board.dim {
+  opacity: 0.42;
+  filter: blur(1.6px);
 }
 .c-board-B {
   max-height: 53%;
@@ -474,6 +604,14 @@
     box-shadow 0.2s,
     opacity 0.6s,
     filter 0.6s;
+}
+.c-board-A {
+  transform: rotateY(4deg);
+  transform-origin: left center;
+}
+.c-board-C {
+  transform: rotateY(-4deg);
+  transform-origin: right center;
 }
 .c-board.speaking {
   border-color: var(--c-t0);
@@ -599,7 +737,7 @@
   stroke: rgb(143 95 0 / 0.8);
 }
 .c-root .c-thread.on {
-  stroke-width: 2;
+  stroke-width: 2.8;
   stroke: var(--c-t0);
 }
 .c-packet {
@@ -1228,90 +1366,382 @@
     opacity: 0;
   }
 }
-/* Motion: quick and small. It points at what just changed and never moves the layout. */
+/* Theatre: while a film runs, the panels step aside and the stage takes the room. */
+.c-bottom {
+  transition:
+    height 0.8s cubic-bezier(0.65, 0, 0.15, 1),
+    opacity 0.5s;
+}
 .c-wall {
-  opacity: 0.45;
+  transition: opacity 0.8s;
+}
+.c-trace {
+  transition: opacity 0.5s;
+}
+.c-root.aside .c-bottom {
+  height: 0;
+  margin-top: -5px;
+  overflow: hidden;
+  opacity: 0;
+}
+.c-root.theater .c-float {
+  width: 54%;
+}
+.c-root.theater .c-float-card {
+  font-size: 14px;
+}
+.c-root.theater .c-now .big {
+  font-size: 22px;
 }
 .c-board.dim {
-  opacity: 0.55;
+  opacity: 0.5;
 }
-.c-board.pick {
-  transition: box-shadow 0.4s;
+/* Lights down: during a replay the room goes dark and everything is lit from within. */
+.c-root::before {
+  content: "";
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  background: #04050a;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.c-root.theater::before {
+  opacity: 0.9;
+}
+.c-root.theater .c-slate,
+.c-root.theater .c-conditions,
+.c-root.theater .c-track,
+.c-root.theater .c-trace {
+  --c-t0: #fff;
+  --c-t1: #dfe3e8;
+  --c-t2: #aeb4bc;
+  --c-t3: #80868f;
+  --c-line: rgb(255 255 255 / 0.16);
+  --c-line2: rgb(255 255 255 / 0.3);
+  --ink: #fff;
+  --text: #dfe3e8;
+  color: #fff;
+}
+.console-shell:has(.c-root.theater) .model-pill {
+  border-color: rgb(255 255 255 / 0.3);
+  color: #fff;
+}
+.c-root.theater .c-slate select {
+  color: #fff;
+}
+.c-root.theater .c-slate select option {
+  color: #000;
+}
+.c-root.theater .c-trace {
+  background: rgb(255 255 255 / 0.05);
+  backdrop-filter: none;
+}
+.c-root.theater .c-log .hot {
+  background: #fff;
+  color: #000;
+}
+.c-root.theater .c-log .hot b {
+  color: #000;
+}
+.c-root.theater .c-now {
+  border: 1px solid rgb(255 255 255 / 0.3);
+  background: rgb(255 255 255 / 0.06);
+}
+.c-root.theater .c-time .ticks .cur {
+  background: #fff;
+  box-shadow:
+    0 -4px 0 #fff,
+    0 0 22px 5px #fff;
+}
+.c-root.theater .c-board {
+  background: rgb(250 251 253 / 0.97);
+  backdrop-filter: none;
+  box-shadow: 0 0 60px rgb(255 255 255 / 0.07);
+}
+.c-root.theater .c-board.speaking,
+.c-root.theater .c-board.target {
+  box-shadow:
+    0 0 0 1px rgb(var(--route)),
+    0 0 40px 2px rgb(var(--route) / 0.85),
+    0 0 150px 24px rgb(var(--route) / 0.5);
+}
+.c-root.theater .c-board.dim {
+  opacity: 0.2;
+  filter: blur(3px);
+}
+.c-root.theater .c-float-back {
+  border-color: rgb(255 255 255 / 0.3);
+  background: rgb(16 18 24 / 0.8);
+  backdrop-filter: none;
+  color: #c9ced5;
+}
+.c-root.theater .c-float-card {
+  background: #fbfcfe;
+  backdrop-filter: none;
+  box-shadow:
+    0 0 0 1px #fff,
+    0 0 90px 10px rgb(255 255 255 / 0.28);
+}
+.c-root.theater .c-thread {
+  filter: drop-shadow(0 0 5px rgb(var(--route)));
+}
+.c-root.theater .c-thread.on {
+  stroke-width: 3.6;
+  filter: drop-shadow(0 0 14px rgb(var(--route))) drop-shadow(0 0 3px #fff);
+  stroke: #fff;
+}
+.c-spot {
+  position: absolute;
+  z-index: 0;
+  top: -12%;
+  left: 50%;
+  width: 72%;
+  height: 130%;
+  opacity: 0;
+  background: linear-gradient(
+    180deg,
+    rgb(var(--spot, 255 255 255) / 0.75),
+    rgb(var(--spot, 255 255 255) / 0.05) 74%,
+    transparent
+  );
+  clip-path: polygon(40% 0, 60% 0, 100% 100%, 0 100%);
+  filter: blur(26px);
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition:
+    left 1.05s cubic-bezier(0.65, 0, 0.15, 1),
+    opacity 0.9s;
+}
+.c-root.theater .c-spot {
+  opacity: 0.85;
+}
+.c-outline {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.c-outline rect {
+  fill: none;
+  stroke: rgb(var(--route));
+  stroke-width: 5;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  filter: drop-shadow(0 0 7px rgb(var(--route)));
+}
+.c-board.enter .c-outline rect {
+  animation: c-trace-out 1.9s cubic-bezier(0.6, 0, 0.2, 1) 0.2s;
+}
+.c-board.speaking .c-outline rect,
+.c-board.target .c-outline rect {
+  animation: c-trace-out 1.5s cubic-bezier(0.6, 0, 0.2, 1);
+}
+.c-board.enter::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  right: 0;
+  height: 90px;
+  background: linear-gradient(180deg, transparent, rgb(var(--route) / 0.65), transparent);
+  pointer-events: none;
+  animation: c-scan-down 1.5s cubic-bezier(0.5, 0, 0.3, 1) 0.45s backwards;
+  top: 110%;
+}
+.c-board.enter {
+  perspective: 700px;
+}
+.c-board.enter > header {
+  animation: c-rowin 0.75s cubic-bezier(0.16, 1, 0.3, 1) 0.45s backwards;
+}
+.c-board.enter .c-board-body > * {
+  animation: c-rowin 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.c-board.enter .c-board-body > :nth-child(1) {
+  animation-delay: 0.6s;
+}
+.c-board.enter .c-board-body > :nth-child(2) {
+  animation-delay: 0.95s;
+}
+.c-board.enter .c-board-body > :nth-child(3) {
+  animation-delay: 1.08s;
+}
+.c-board.enter .c-board-body > :nth-child(4) {
+  animation-delay: 1.2s;
+}
+.c-board.enter .c-board-body > :nth-child(5) {
+  animation-delay: 1.34s;
+}
+.c-board.enter .c-board-body > :nth-child(6) {
+  animation-delay: 1.48s;
+}
+.c-board.enter .c-board-body > :nth-child(7) {
+  animation-delay: 1.62s;
+}
+.c-board.enter .c-board-body > :nth-child(n + 8) {
+  animation-delay: 1.76s;
+}
+.c-giant {
+  position: absolute;
+  z-index: 8;
+  top: 50%;
+  left: 50%;
+  font-size: min(82vh, 760px);
+  line-height: 0.8;
+  font-weight: 900;
+  letter-spacing: -0.06em;
+  text-shadow: 0 0 90px currentColor;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+.c-chapter {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  mix-blend-mode: difference;
+  pointer-events: none;
+  animation: c-chapter-out 1.5s linear forwards;
+}
+.c-chapter b {
+  font-size: min(44vh, 34vw);
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  animation: c-chapter-word 1.5s cubic-bezier(0.65, 0, 0.1, 1) forwards;
+}
+.c-chapter small {
+  font-size: clamp(16px, 1.6vw, 26px);
+  letter-spacing: 0.4em;
+}
+.c-chapter i {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #fff;
+  animation: c-chapter-line 1.5s cubic-bezier(0.7, 0, 0.2, 1) forwards;
+}
+.c-beam {
+  position: absolute;
+  z-index: 5;
+  height: 3px;
+  background: #fff;
+  box-shadow:
+    0 0 14px 4px #fff,
+    0 0 50px 12px rgb(120 190 255),
+    0 40px 70px 30px rgb(120 190 255 / 0.28);
+  pointer-events: none;
+}
+.c-flash {
+  position: absolute;
+  z-index: 3;
+  inset: -30%;
+  background: radial-gradient(
+    circle at var(--x) var(--y),
+    rgb(var(--flash)),
+    rgb(var(--flash) / 0.35) 34%,
+    transparent 66%
+  );
+  pointer-events: none;
+}
+.c-packet {
+  background: rgb(var(--route));
+  padding: 2px 10px;
+  font-size: 14px;
+  box-shadow: 0 0 26px 5px rgb(var(--route));
 }
 .c-char {
   display: inline-block;
-  animation: c-char 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation: c-char 0.74s cubic-bezier(0.2, 1, 0.3, 1) backwards;
+  will-change: transform, opacity;
 }
-.c-fadein {
-  animation: c-fade 0.3s ease-out;
+.c-dust {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 .c-root .changed.fresh {
-  font-weight: 600;
+  font-weight: 700;
+  text-shadow: 0 0 14px rgb(19 112 66 / 0.55);
 }
-.c-board {
-  animation: c-rise 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+.c-hud > * {
+  animation: c-drop 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
-.c-board-B {
-  animation-delay: 0.05s;
+.c-hud > :nth-child(2) {
+  animation-delay: 0.08s;
 }
-.c-board-C {
-  animation-delay: 0.1s;
+.c-hud > :nth-child(4) {
+  animation-delay: 0.16s;
 }
-.c-board.enter .c-board-body > * {
-  animation: c-rise 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+.c-hud > :nth-child(5) {
+  animation-delay: 0.24s;
 }
-.c-board.enter .c-board-body > :nth-child(2) {
-  animation-delay: 0.05s;
+.c-hud > :nth-child(6) {
+  animation-delay: 0.32s;
 }
-.c-board.enter .c-board-body > :nth-child(3) {
-  animation-delay: 0.1s;
-}
-.c-board.enter .c-board-body > :nth-child(4) {
-  animation-delay: 0.15s;
-}
-.c-board.enter .c-board-body > :nth-child(5) {
-  animation-delay: 0.2s;
-}
-.c-board.enter .c-board-body > :nth-child(6) {
-  animation-delay: 0.25s;
-}
-.c-board.enter .c-board-body > :nth-child(n + 7) {
-  animation-delay: 0.3s;
-}
-.c-claim em i {
-  animation: c-pop 0.3s cubic-bezier(0.2, 1.3, 0.4, 1);
-  display: inline-block;
-}
-.c-now .big,
-.c-now p {
-  animation: c-fade 0.25s ease-out;
+/* Slides rather than wipes, so the panel is never seen cut in half. */
+.c-now {
+  animation: c-logline 0.45s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .c-log .hot {
-  animation: c-fade 0.3s ease-out;
+  animation: c-logline 0.5s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .c-row {
   transition:
-    background 0.15s,
-    color 0.15s;
+    background 0.2s,
+    color 0.2s,
+    padding-left 0.25s cubic-bezier(0.2, 1, 0.3, 1);
+  animation: c-rowslide 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.c-row:hover {
+  padding-left: 12px;
 }
 .c-scope i {
   transform-origin: bottom;
-  animation: c-bar 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation: c-bar 0.65s cubic-bezier(0.2, 1.5, 0.3, 1) backwards;
 }
 .c-time .ticks button {
   transition:
-    background 0.2s,
-    box-shadow 0.2s;
+    background 0.25s,
+    box-shadow 0.25s,
+    transform 0.25s cubic-bezier(0.2, 1.6, 0.3, 1);
+  transform-origin: bottom;
+}
+.c-time .ticks button:hover,
+.c-time .ticks .cur {
+  transform: scaleY(1.5);
 }
 .c-claim {
   transition:
-    background 0.15s,
-    color 0.15s;
+    background 0.2s,
+    color 0.2s,
+    transform 0.25s cubic-bezier(0.2, 1.4, 0.3, 1),
+    box-shadow 0.25s;
+}
+.c-claim:not(:disabled):hover {
+  transform: translateX(5px) scale(1.015);
+  box-shadow: -4px 0 0 rgb(var(--route));
+}
+.c-root .c-claim.hot {
+  animation: c-claim-hot 0.9s cubic-bezier(0.2, 1, 0.3, 1);
 }
 .c-verdict.ready .grid > div,
 .c-verdict.ready p,
 .c-verdict.ready .quiet {
-  animation: c-fade 0.4s ease-out 0.12s backwards;
+  animation: c-rowslide 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.3s backwards;
 }
 .console-shell .text-button,
 .console-shell .secondary-button,
@@ -1319,70 +1749,259 @@
 .console-shell .domain-chip,
 .c-ctrl button {
   transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s,
-    transform 0.1s;
+    background 0.22s,
+    color 0.22s,
+    border-color 0.22s,
+    transform 0.22s cubic-bezier(0.2, 1.6, 0.3, 1),
+    box-shadow 0.22s;
+}
+.console-shell .text-button:not(:disabled):hover,
+.console-shell .secondary-button:not(:disabled):hover,
+.console-shell .domain-chip:hover,
+.c-ctrl button:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgb(11 13 16 / 0.2);
 }
 .console-shell .text-button:not(:disabled):active,
-.console-shell .secondary-button:not(:disabled):active,
 .console-shell .primary-button:not(:disabled):active,
 .console-shell .domain-chip:active,
 .c-ctrl button:not(:disabled):active {
-  transform: scale(0.97);
+  transform: scale(0.95);
+}
+.console-shell .primary-button {
+  position: relative;
+  overflow: hidden;
+}
+.console-shell .primary-button:not(:disabled)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 35%,
+    rgb(255 255 255 / 0.55) 50%,
+    transparent 65%
+  );
+  animation: c-button-sheen 3.2s ease-in-out infinite;
+  pointer-events: none;
 }
 .console-shell .primary-button:not(:disabled):hover {
-  background: #2d3138;
+  transform: translateY(-3px) scale(1.03);
+  box-shadow: 0 16px 34px rgb(11 13 16 / 0.42);
 }
 .console-shell .field textarea,
-.console-shell .field input {
-  transition: border-color 0.15s;
+.console-shell .field input,
+.console-shell .goal-input {
+  transition:
+    border-color 0.25s,
+    box-shadow 0.25s;
 }
 .console-shell .field textarea:focus,
 .console-shell .field input:focus {
   border-color: var(--c-t0);
+  box-shadow: 0 8px 26px rgb(11 13 16 / 0.16);
 }
 .console-shell .drawer-backdrop {
-  animation: c-fade 0.2s ease-out;
+  animation: c-fade 0.35s ease-out;
 }
 .console-shell .evidence-drawer {
-  animation: c-drawer 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: c-drawer 0.62s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.console-shell .evidence-section {
+  animation: c-rowslide 0.65s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.console-shell .evidence-section:nth-of-type(1) {
+  animation-delay: 0.14s;
+}
+.console-shell .evidence-section:nth-of-type(2) {
+  animation-delay: 0.24s;
+}
+.console-shell .evidence-section:nth-of-type(3) {
+  animation-delay: 0.34s;
+}
+.console-shell .evidence-section:nth-of-type(n + 4) {
+  animation-delay: 0.44s;
 }
 .console-shell .modal[open] {
-  animation: c-rise 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: c-modal 0.55s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .console-shell .modal[open]::backdrop {
-  animation: c-fade 0.2s ease-out;
+  animation: c-fade 0.35s ease-out;
 }
-.console-shell.home .h-lead > p,
-.console-shell.home .h-form,
-.h-flow {
-  animation: c-rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) 0.1s backwards;
+.console-shell.home .h-lead > p {
+  animation: c-rowslide 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.65s backwards;
+}
+.console-shell.home .h-form {
+  animation: c-formin 1s cubic-bezier(0.16, 1, 0.3, 1) 0.75s backwards;
+}
+.console-shell.home .site-header {
+  animation: c-drop 0.8s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .h-flow {
-  animation-delay: 0.18s;
+  position: relative;
+  animation: c-rowslide 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.9s backwards;
+}
+.h-flow .c-dust {
+  inset: -80px -60px;
+  width: calc(100% + 120px);
+  height: calc(100% + 160px);
+}
+.h-flow li {
+  animation: c-rowslide 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.h-flow li:nth-child(1) {
+  animation-delay: 1.15s;
+}
+.h-flow li:nth-child(2) {
+  animation-delay: 1.3s;
+}
+.h-flow li:nth-child(3) {
+  animation-delay: 1.45s;
+}
+.h-board {
+  animation: c-float-a 7s ease-in-out infinite;
+}
+.h-board-B {
+  animation-name: c-float-b;
+  animation-duration: 5.6s;
+}
+.h-board-C {
+  animation-delay: -2.4s;
+  animation-duration: 6.4s;
+}
+.h-board-A {
+  --route: 70 130 255;
+  border-top-color: rgb(var(--route));
+}
+.h-board-B {
+  --route: 255 60 150;
+  border-top-color: rgb(var(--route));
+}
+.h-board-C {
+  --route: 255 175 40;
+  border-top-color: rgb(var(--route));
+}
+.h-diagram path {
+  stroke-dasharray: 6 5;
+  animation: c-flow 0.9s linear infinite;
+}
+@keyframes c-flow {
+  to {
+    stroke-dashoffset: -22;
+  }
+}
+@keyframes c-float-a {
+  50% {
+    translate: 0 -9px;
+  }
+}
+@keyframes c-float-b {
+  50% {
+    translate: 0 8px;
+  }
+}
+@keyframes c-trace-out {
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 1;
+  }
+  72% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+@keyframes c-scan-down {
+  from {
+    top: -90px;
+  }
+  to {
+    top: 100%;
+  }
+}
+@keyframes c-rowin {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 34px, -130px) rotateX(-62deg);
+    filter: blur(7px);
+  }
 }
 @keyframes c-char {
   from {
     opacity: 0;
-    transform: translateY(0.25em);
+    transform: translateY(0.7em) rotateX(-90deg) scale(0.6);
+    filter: blur(6px);
   }
 }
-@keyframes c-rise {
-  from {
+@keyframes c-chapter-out {
+  0% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
     opacity: 0;
-    transform: translateY(10px);
+    visibility: hidden;
   }
 }
-@keyframes c-fade {
-  from {
-    opacity: 0;
+@keyframes c-chapter-word {
+  0% {
+    clip-path: inset(0 100% 0 0);
+    transform: translateX(-9vw) scale(1.1);
+  }
+  34% {
+    clip-path: inset(0 0 0 0);
+    transform: translateX(-1vw) scale(1);
+  }
+  70% {
+    clip-path: inset(0 0 0 0);
+    transform: translateX(1vw) scale(1);
+  }
+  100% {
+    clip-path: inset(0 0 0 100%);
+    transform: translateX(9vw) scale(0.98);
   }
 }
-@keyframes c-pop {
+@keyframes c-chapter-line {
+  0% {
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  40% {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+  41% {
+    transform: scaleX(1);
+    transform-origin: right;
+  }
+  100% {
+    transform: scaleX(0);
+    transform-origin: right;
+  }
+}
+@keyframes c-drop {
   from {
     opacity: 0;
-    transform: scale(0.8);
+    transform: translateY(-22px);
+    filter: blur(5px);
+  }
+}
+@keyframes c-logline {
+  from {
+    opacity: 0;
+    transform: translateX(44px);
+  }
+}
+@keyframes c-rowslide {
+  from {
+    opacity: 0;
+    transform: translateX(26px);
+    filter: blur(4px);
   }
 }
 @keyframes c-bar {
@@ -1390,10 +2009,68 @@
     transform: scaleY(0);
   }
 }
+@keyframes c-claim-hot {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--route));
+  }
+  18% {
+    transform: scale(1.05) translateX(-5px);
+    box-shadow: 0 0 34px 8px rgb(var(--route));
+  }
+  34% {
+    transform: scale(1.05) translateX(5px);
+  }
+  50% {
+    transform: scale(1.03) translateX(-3px);
+  }
+  100% {
+    transform: none;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@keyframes c-button-sheen {
+  0% {
+    transform: translateX(-100%);
+  }
+  45%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+@keyframes c-fade {
+  from {
+    opacity: 0;
+  }
+}
 @keyframes c-drawer {
   from {
-    transform: translateX(28px);
+    opacity: 0.2;
+    transform: translateX(100%) skewX(-3deg);
+  }
+}
+@keyframes c-modal {
+  from {
     opacity: 0;
+    transform: translateY(46px) scale(0.92) rotateX(10deg);
+    filter: blur(8px);
+  }
+}
+@keyframes c-formin {
+  from {
+    opacity: 0;
+    transform: translateY(46px) scale(0.97);
+    filter: blur(8px);
+  }
+}
+@keyframes c-sheen {
+  0% {
+    opacity: 1;
+    transform: translateX(-100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(100%);
   }
 }
 @keyframes c-strike {
@@ -1401,7 +2078,16 @@
     background-size: 0 2px;
   }
 }
+@keyframes c-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
 @media (max-width: 1100px) {
+  .c-stage3 {
+    overflow: visible;
+  }
   .console-shell .h-form .access-panel {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1453,6 +2139,13 @@
     margin-bottom: 6px;
     transform: none;
   }
+  .c-rig,
+  .c-world {
+    position: static;
+    display: block;
+    transform: none !important;
+  }
+  .c-fx,
   .c-threads,
   .c-packet,
   .c-wall {
@@ -1472,7 +2165,18 @@
     animation: none !important;
     transition: none !important;
   }
+  .c-spot,
+  .c-root::before {
+    display: none;
+  }
   .h-packet {
     display: none;
+  }
+  .c-board,
+  .c-float-card .ln,
+  .c-verdict.ready,
+  .c-intro li {
+    animation: none !important;
+    transition: none !important;
   }
 }

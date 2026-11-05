@@ -28,6 +28,7 @@ import {
 import { ChallengeForm } from "@/components/challenge-form";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
+import { Chars } from "@/components/console/effects";
 import { HomeFlow } from "@/components/console/HomeFlow";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
@@ -227,7 +228,9 @@ export default function Page() {
         {!arena.snapshot ? (
           <div className="h-grid">
             <section className="h-lead" aria-label="开始一次方案推演">
-              <h1>先让三个方案互相挑错，再决定。</h1>
+              <h1>
+                <Chars text="先让三个方案互相挑错，再决定。" active />
+              </h1>
               <p>说出你的问题。三条路线各自提案、互相质疑、查证修正，最后给你一个带条件的建议。</p>
               <div className="h-form">
                 {accessRequired && (

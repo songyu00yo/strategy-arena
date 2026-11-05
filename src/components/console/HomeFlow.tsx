@@ -1,3 +1,6 @@
+"use client";
+import { Dust } from "./effects";
+
 /** A schematic of how a game runs. It holds no content, so nothing here can pass for a result. */
 const THREADS = [
   { d: "M140,92 C166,92 154,58 180,58", label: "质疑", delay: "0s" },
@@ -9,6 +12,7 @@ const THREADS = [
 export function HomeFlow() {
   return (
     <aside className="h-flow" aria-label="一场推演怎么进行">
+      <Dust />
       <div className="h-diagram" aria-hidden="true">
         {(["A", "B", "C"] as const).map((id) => (
           <div key={id} className={`h-board h-board-${id}`}>

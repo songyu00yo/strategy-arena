@@ -66,10 +66,7 @@ export function ChallengeForm({
   return (
     <form className={`challenge-form ${editing ? "editing-form" : ""}`} onSubmit={submit}>
       <div className="form-topline">
-        <span className="eyebrow">
-          <span className="tiny-square" />
-          {editing ? "重新定义比赛条件" : "01 / 把问题放上桌"}
-        </span>
+        <span className="eyebrow">{editing ? "重新定义条件" : "把问题放上桌"}</span>
         {!editing && (
           <button
             type="button"
@@ -264,11 +261,7 @@ export function ChallengeForm({
         </p>
       )}
       <div className="form-bottom">
-        <span className="form-assurance">
-          三种思路，独立出发。
-          <br />
-          真实调用，按用量估算费用。
-        </span>
+        <span className="form-assurance">真实调用模型，按用量估算费用。</span>
         <div className="submit-actions">
           {onCancel && (
             <button type="button" className="secondary-button" onClick={onCancel}>

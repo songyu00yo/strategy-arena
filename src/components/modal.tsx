@@ -15,12 +15,15 @@ export function Modal({
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const el = ref.current;
+    // The dialog unmounts before it closes, so the browser cannot restore focus by itself.
+    const previous = document.activeElement as HTMLElement | null;
     el?.showModal();
     const old = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = old;
       el?.close();
+      previous?.focus();
     };
   }, []);
   return (

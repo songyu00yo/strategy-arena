@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { assertBuildMatchesSource, build, sourceIdentity } from "./build.mjs";
+import { assertBuildMatchesSource, build, buildEnvironment, sourceIdentity } from "./build.mjs";
 const packagingScript = resolve("scripts/package-release.mjs");
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "arena-build-fixture-"));
@@ -191,4 +191,26 @@ test("failed builds and source changes during compilation remove any previous va
   } finally {
     f.cleanup();
   }
+});
+
+test("production compilation disables inherited model credentials and background execution", () => {
+  const inherited = {
+    MODEL_API_KEY: "legacy-test-value",
+    DEEPSEEK_API_KEY: "ds-test-value",
+    OPENAI_API_KEY: "openai-test-value",
+    ARENA_WORKER_ENABLED: "true",
+    ARENA_BILLING_DATABASE_PATH: "/production/billing.sqlite",
+    PATH: "/bin",
+  };
+  const env = buildEnvironment(inherited);
+  for (const key of [
+    "MODEL_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY",
+    "ARENA_BILLING_DATABASE_PATH",
+  ])
+    assert.equal(env[key], "");
+  assert.equal(env.ARENA_WORKER_ENABLED, "false");
+  assert.equal(env.PATH, "/bin");
+  assert.equal(inherited.ARENA_WORKER_ENABLED, "true");
 });

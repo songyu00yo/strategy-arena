@@ -79,6 +79,14 @@ export function reconcileUncertain(input: ReconciliationInput) {
       fail("仅结果未知的步骤可以核账；已核账、运行中或其他状态均不接受。");
     const version = getVersion(step.version_id);
     if (
+      version.modelSelection ||
+      version.runConfiguration?.provider ||
+      (step.usage && JSON.parse(step.usage).billingAttemptId)
+    )
+      fail(
+        "此步骤使用新模型或共享费用账本；旧人民币核账命令不支持跨账本核账，费用预留保持不变。请使用经审计的共享账本核账流程。",
+      );
+    if (
       !Number.isFinite(step.reservation) ||
       step.reservation < 0 ||
       !Number.isFinite(version.reservedCny) ||

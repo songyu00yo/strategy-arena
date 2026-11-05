@@ -108,6 +108,7 @@ describe("explicit offline operator reconciliation", () => {
     expect(getEvents(run.arenaId)).toHaveLength(events);
     expect(() => atomic(() => reserveCall(charged, 0.1))).toThrow("费用上限");
     vi.stubEnv("ARENA_RUN_BUDGET_CNY", "100");
+    vi.stubEnv("ARENA_RUN_BUDGET_USD", "100");
     vi.stubEnv("ARENA_GLOBAL_BUDGET_CNY", "2.15");
     expect(() => atomic(() => reserveCall(charged, 0.1))).toThrow("服务总费用额度");
   });
@@ -131,6 +132,35 @@ describe("explicit offline operator reconciliation", () => {
       expect(() => reconcileUncertain({ ...input(run.stepId), ...changes })).toThrow("金额");
     expect(getVersion(run.versionId)).toMatchObject({ reservedCny: 0.2, costCny: 0.1 });
   });
+  it.each(["USD", "CNY"] as const)(
+    "refuses centrally billed %s holds even without a saved usage record",
+    (currency) => {
+      const run = fixture();
+      const version = getVersion(run.versionId);
+      version.modelSelection = {
+        requestedMode: currency === "USD" ? "gpt" : "deepseek",
+        provider: currency === "USD" ? "openai" : "deepseek",
+        modelId: "synthetic-new-provider",
+        currency,
+        policyVersion: "fixture",
+        reason: "synthetic accounting test",
+      };
+      if (currency === "USD") {
+        version.reservedCny = 0;
+        version.reservedUsd = 0.2;
+      }
+      saveVersion(version);
+      expect(() => reconcileUncertain(input(run.stepId))).toThrow("共享费用账本");
+      expect(getVersion(run.versionId)).toMatchObject({
+        reservedCny: currency === "USD" ? 0 : 0.2,
+        ...(currency === "USD" ? { reservedUsd: 0.2 } : {}),
+        status: "uncertain",
+      });
+      expect(
+        db().prepare("SELECT status,reservation FROM steps WHERE id=?").get(run.stepId),
+      ).toMatchObject({ status: "uncertain", reservation: 0.2 });
+    },
+  );
   it("refuses secret paths and symlink receipts without touching the ledger", () => {
     const run = fixture();
     for (const name of [".env", "private-key.txt", "id_ed25519.txt", "secret.json", "key.txt"]) {

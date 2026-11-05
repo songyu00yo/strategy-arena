@@ -1,3 +1,4 @@
+import { getBillingSummary } from "../src/lib/server/billing";
 /** Paid evaluation runner. Importing this module never starts model calls. */
 import {
   appendFileSync,
@@ -798,6 +799,7 @@ export async function main(argv = process.argv.slice(2)) {
   const options = cliOptions(argv);
   const model = getModelConfig();
   if (!model.configured) throw new Error("MODEL_API_KEY is missing. No model calls were made.");
+  getBillingSummary(); // Fail before creating a paid batch if shared budget is unavailable.
   const definitionBytes = readFileSync("evals/cases.json");
   const definitions = JSON.parse(definitionBytes.toString("utf8")) as { cases: EvaluationCase[] };
   const partition = options.split === "held-out" ? "holdout" : "development";

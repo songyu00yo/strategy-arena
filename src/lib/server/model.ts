@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   AttackSchema,
@@ -7,9 +8,12 @@ import {
   SCHEMA_VERSION,
   type ModelResult,
   type ModelUsage,
+  type ModelProvider,
+  type Currency,
   type StageInput,
 } from "../contracts";
 import defaults from "../../../config/model.json";
+import { BillingError, reserveBilling, settleBilling, holdBilling } from "./billing";
 import { PROMPT_VERSION, SYSTEM, STAGE_PROMPTS } from "../../../prompts/protocol";
 import {
   bindStrictReferences,
@@ -25,40 +29,95 @@ function numberEnv(name: string, fallback: number, min: number, max: number) {
   if (!Number.isFinite(value) || value < min || value > max) throw new Error(`${name} 配置无效`);
   return value;
 }
-export function getModelConfig() {
-  const endpoint = new URL(process.env.MODEL_BASE_URL || defaults.baseUrl);
+export interface ModelConfig {
+  configurationVersion: string;
+  provider: ModelProvider;
+  currency: Currency;
+  reasoningEffort: "low" | null;
+  baseUrl: string;
+  temperature: number;
+  structuredOutput: "json" | "strict-tool";
+  id: string;
+  configured: boolean;
+  promptVersion: string;
+  schemaVersion: string;
+  maxOutputTokens: number;
+  timeoutMs: number;
+  inputPrice: number;
+  outputPrice: number;
+}
+function officialEndpoint(provider: ModelProvider, value: string) {
+  const endpoint = new URL(value);
+  const expected = provider === "openai" ? "https://api.openai.com" : "https://api.deepseek.com";
+  const paths = provider === "openai" ? ["/v1"] : ["", "/v1", "/beta"];
   if (
-    endpoint.protocol !== "https:" ||
+    endpoint.origin !== expected ||
     endpoint.username ||
     endpoint.password ||
     endpoint.search ||
-    endpoint.hash
+    endpoint.hash ||
+    !paths.includes(endpoint.pathname.replace(/\/$/, ""))
   )
-    throw new Error("模型接口必须是无查询参数、无凭据的 HTTPS 地址");
-  const structuredOutput = process.env.MODEL_STRUCTURED_OUTPUT || defaults.structuredOutput;
+    throw new Error("模型密钥只能发送到对应服务商的官方 HTTPS 接口");
+  return endpoint.toString().replace(/\/$/, "");
+}
+function apiKey(provider: ModelProvider) {
+  return (
+    provider === "openai"
+      ? process.env.OPENAI_API_KEY
+      : process.env.DEEPSEEK_API_KEY?.trim() || process.env.MODEL_API_KEY
+  )?.trim();
+}
+export function getModelConfig(provider: ModelProvider = "deepseek"): ModelConfig {
+  if (provider !== "deepseek" && provider !== "openai") throw new Error("未知模型服务商");
+  const openai = provider === "openai";
+  const structuredOutput =
+    (openai ? process.env.OPENAI_STRUCTURED_OUTPUT : process.env.MODEL_STRUCTURED_OUTPUT) ||
+    (openai ? "strict-tool" : defaults.structuredOutput);
   if (structuredOutput !== "json" && structuredOutput !== "strict-tool")
-    throw new Error("MODEL_STRUCTURED_OUTPUT 配置无效");
+    throw new Error(`${openai ? "OPENAI" : "MODEL"}_STRUCTURED_OUTPUT 配置无效`);
+  const id = openai
+    ? process.env.OPENAI_MODEL_ID || "gpt-6.1-terra"
+    : process.env.MODEL_ID || defaults.model;
+  if (openai && id !== "gpt-6.1-terra")
+    throw new Error("OPENAI_MODEL_ID 未配置对应价格；当前只支持 gpt-6.1-terra");
+  if (
+    openai &&
+    process.env.OPENAI_REASONING_EFFORT &&
+    process.env.OPENAI_REASONING_EFFORT !== "low"
+  )
+    throw new Error("OPENAI_REASONING_EFFORT 仅支持 low");
+  const prefix = openai ? "OPENAI" : "MODEL";
   return {
-    configurationVersion: defaults.configVersion,
-    baseUrl: endpoint.toString().replace(/\/$/, ""),
-    temperature: numberEnv("MODEL_TEMPERATURE", defaults.temperature, 0, 2),
+    configurationVersion: openai ? "openai-1.0.0" : defaults.configVersion,
+    provider,
+    currency: openai ? "USD" : "CNY",
+    reasoningEffort: openai ? "low" : null,
+    baseUrl: officialEndpoint(
+      provider,
+      openai
+        ? process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
+        : process.env.MODEL_BASE_URL || defaults.baseUrl,
+    ),
+    temperature: openai ? 0 : numberEnv("MODEL_TEMPERATURE", defaults.temperature, 0, 2),
     structuredOutput,
-    id: process.env.MODEL_ID || defaults.model,
-    configured: Boolean(process.env.MODEL_API_KEY?.trim()),
+    id,
+    configured: Boolean(apiKey(provider)),
     promptVersion: PROMPT_VERSION,
     schemaVersion: SCHEMA_VERSION,
-    maxOutputTokens: numberEnv("MODEL_MAX_OUTPUT_TOKENS", defaults.maxOutputTokens, 500, 6000),
-    timeoutMs: numberEnv("MODEL_TIMEOUT_MS", defaults.timeoutMs, 1000, 180000),
+    maxOutputTokens: numberEnv(`${prefix}_MAX_OUTPUT_TOKENS`, defaults.maxOutputTokens, 500, 6000),
+    timeoutMs: numberEnv(`${prefix}_TIMEOUT_MS`, defaults.timeoutMs, 1000, 180000),
+    // Native-currency uncached rates; cached input is counted without assuming an unverified discount.
     inputPrice: numberEnv(
-      "MODEL_INPUT_PRICE_PER_MILLION",
-      defaults.estimatedInputCnyPerMillion,
-      0.01,
+      `${prefix}_INPUT_PRICE_PER_MILLION`,
+      openai ? 1 : defaults.estimatedInputCnyPerMillion,
+      openai ? 1 : 0.01,
       1000,
     ),
     outputPrice: numberEnv(
-      "MODEL_OUTPUT_PRICE_PER_MILLION",
-      defaults.estimatedOutputCnyPerMillion,
-      0.01,
+      `${prefix}_OUTPUT_PRICE_PER_MILLION`,
+      openai ? 5 : defaults.estimatedOutputCnyPerMillion,
+      openai ? 5 : 0.01,
       1000,
     ),
   };
@@ -80,7 +139,7 @@ const stageSchemas = {
   revise: RevisionSchema,
   judge: VerdictSchema,
 };
-function maxInputTokens(input: StageInput, config: ReturnType<typeof getModelConfig>) {
+function maxInputTokens(input: StageInput, config: ModelConfig) {
   return (
     Math.max(
       ...(Object.keys(stageSchemas) as Kind[]).map((kind) =>
@@ -93,12 +152,16 @@ function maxInputTokens(input: StageInput, config: ReturnType<typeof getModelCon
   );
 }
 /** UTF-8 byte upper bound over every possible next-stage request plus conservative framing/output. */
-export function estimateCallTokens(input: StageInput): number {
-  const config = getModelConfig();
+export function estimateCallTokens(
+  input: StageInput,
+  config: ModelConfig = getModelConfig(),
+): number {
   return maxInputTokens(input, config) + config.maxOutputTokens;
 }
-export function estimateCallCost(input: StageInput): number {
-  const config = getModelConfig();
+export function estimateCallCost(
+  input: StageInput,
+  config: ModelConfig = getModelConfig(),
+): number {
   return (
     Math.ceil(
       (maxInputTokens(input, config) * config.inputPrice +
@@ -189,9 +252,17 @@ export function buildRequestBody(
   return {
     model: config.id,
     messages: buildMessages(kind, input, schema, config.structuredOutput),
-    temperature: config.temperature,
-    max_tokens: config.maxOutputTokens,
-    thinking: { type: "disabled" },
+    ...(config.provider === "openai"
+      ? {
+          max_completion_tokens: config.maxOutputTokens,
+          reasoning_effort: config.reasoningEffort,
+          ...(strict ? { parallel_tool_calls: false } : {}),
+        }
+      : {
+          temperature: config.temperature,
+          max_tokens: config.maxOutputTokens,
+          thinking: { type: "disabled" },
+        }),
     ...outputOptions,
     stream: false,
   };
@@ -200,15 +271,26 @@ async function generate<T>(
   kind: Kind,
   input: StageInput,
   schema: z.ZodType<T>,
+  c: ModelConfig = getModelConfig(),
+  attemptId: string = randomUUID(),
 ): Promise<ModelResult<T>> {
-  const c = getModelConfig();
   if (!c.configured)
     throw new ModelCallError(
-      "未配置模型密钥。请在服务器的 .env.local 填写 MODEL_API_KEY，重启后再试。",
+      `未配置 ${c.provider === "openai" ? "OPENAI_API_KEY" : "DEEPSEEK_API_KEY（兼容 MODEL_API_KEY）"} 模型密钥，请检查服务器配置。`,
     );
-  const base = new URL(c.baseUrl);
-  if (base.protocol !== "https:" || base.username || base.password)
-    throw new ModelCallError("模型接口必须使用不含凭据的 HTTPS 地址。");
+  if (!apiKey(c.provider)) throw new ModelCallError("未配置对应服务商的模型密钥。");
+  const base = new URL(officialEndpoint(c.provider, c.baseUrl));
+  if (
+    c.provider === "openai" &&
+    (c.id !== "gpt-6.1-terra" ||
+      c.currency !== "USD" ||
+      c.reasoningEffort !== "low" ||
+      c.inputPrice < 1 ||
+      c.outputPrice < 5)
+  )
+    throw new ModelCallError("GPT 模型、推理强度或原币价格配置无效。");
+  if (c.provider === "deepseek" && c.currency !== "CNY")
+    throw new ModelCallError("DeepSeek 费用币种配置无效。");
   const strict = c.structuredOutput === "strict-tool";
   if (
     strict &&
@@ -220,6 +302,58 @@ async function generate<T>(
     );
   const functionName = `submit_${kind}`;
   const requestBody = buildRequestBody(kind, input, schema, c);
+  // Every caller, including offline evaluators and smoke scripts, shares this reservation.
+  try {
+    reserveBilling({
+      attemptId,
+      provider: c.provider,
+      currency: c.currency,
+      estimatedAmount: Math.ceil(estimateCallCost(input, c) * 1e6),
+      maxTokens: estimateCallTokens(input, c),
+    });
+  } catch (error) {
+    const code = error instanceof BillingError ? error.code : "";
+    const messages: Record<string, string> = {
+      BILLING_LIMIT_REACHED: "共享模型额度已达到金额、请求次数或 Token 上限，本次请求未发送。",
+      BILLING_INVALID_CONFIG:
+        "共享计费配置缺失或无效，请检查服务器的共享账本路径和额度配置；本次请求未发送。",
+      BILLING_SETTINGS_MISMATCH:
+        "共享账本的固定额度与当前服务器配置不一致，请统一配置后再试；本次请求未发送。",
+      BILLING_DUPLICATE_ATTEMPT:
+        "本步骤已有模型请求记录，为避免重复收费，拒绝再次发送；原请求结果与预留额度需要核对。",
+    };
+    throw new ModelCallError(
+      messages[code] || "共享计费账本暂时无法预留额度，本次请求未发送，请检查服务器计费状态。",
+      code === "BILLING_DUPLICATE_ATTEMPT",
+    );
+  }
+  const unknown = (message: string, usage?: ModelUsage) => {
+    try {
+      holdBilling(attemptId);
+    } catch {
+      /* A failed hold must never make a request retryable. */
+    }
+    return new ModelCallError(message, true, usage);
+  };
+  const settle = (
+    amount: number,
+    inputTokens = 0,
+    outputTokens = 0,
+    cachedInputTokens = 0,
+    responseId?: string,
+  ) => {
+    try {
+      settleBilling(attemptId, {
+        amount,
+        inputTokens,
+        outputTokens,
+        cachedInputTokens,
+        responseId,
+      });
+    } catch {
+      throw unknown("本次模型费用未能确认入账，保留预留额度并停止。");
+    }
+  };
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), c.timeoutMs);
@@ -229,7 +363,7 @@ async function generate<T>(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.MODEL_API_KEY}`,
+        Authorization: `Bearer ${apiKey(c.provider)}`,
       },
       body: JSON.stringify(requestBody),
       signal: controller.signal,
@@ -237,23 +371,24 @@ async function generate<T>(
     });
   } catch {
     clearTimeout(timer);
-    throw new ModelCallError(
-      "模型连接中断或超时，服务端是否完成未知。本步骤不会自动重试，预留额度暂不释放。",
-      true,
-    );
+    throw unknown("模型连接中断或超时，服务端是否完成未知。本步骤不会自动重试，预留额度暂不释放。");
   }
   if (!response.ok) {
     clearTimeout(timer);
     // Never forward arbitrary provider bodies: they may contain request/private data.
     const message =
       response.status === 401
-        ? "DeepSeek 密钥未通过验证，请检查本地配置。"
+        ? `${c.provider === "openai" ? "OpenAI" : "DeepSeek"} 密钥未通过验证，请检查服务器配置。`
         : response.status === 402
           ? "模型账户余额不足，请在服务商后台检查。"
           : response.status === 429
             ? "模型服务限流，请稍后另开一局。"
             : `模型服务返回 HTTP ${response.status}，本步骤已停止。`;
-    throw new ModelCallError(message, response.status >= 500 || response.status === 408);
+    if (response.status >= 400 && response.status < 500 && response.status !== 408) {
+      settle(0);
+      throw new ModelCallError(message);
+    }
+    throw unknown(message);
   }
   let raw: {
     id?: string;
@@ -262,6 +397,7 @@ async function generate<T>(
       prompt_tokens?: number;
       completion_tokens?: number;
       prompt_cache_hit_tokens?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
     };
     choices?: {
       finish_reason?: string;
@@ -274,31 +410,47 @@ async function generate<T>(
   try {
     raw = await response.json();
   } catch {
-    throw new ModelCallError("模型响应未完整接收，执行结果待确认。", true);
+    throw unknown("模型响应未完整接收，执行结果待确认。");
   } finally {
     clearTimeout(timer);
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
-    throw new ModelCallError("模型返回的响应封装无效，无法确认用量，保留预留额度。", true);
+    throw unknown("模型返回的响应封装无效，无法确认用量，保留预留额度。");
   const u = raw.usage;
   if (
     !u ||
-    !Number.isFinite(u.prompt_tokens) ||
-    !Number.isFinite(u.completion_tokens) ||
+    !Number.isSafeInteger(u.prompt_tokens) ||
+    !Number.isSafeInteger(u.completion_tokens) ||
     u.prompt_tokens! < 0 ||
     u.completion_tokens! < 0
   )
-    throw new ModelCallError("模型未返回可核对的用量，保留本次预留额度并停止。", true);
+    throw unknown("模型未返回可核对的用量，保留本次预留额度并停止。");
+  const cachedInputTokens =
+    (c.provider === "openai"
+      ? u.prompt_tokens_details?.cached_tokens
+      : u.prompt_cache_hit_tokens) ?? 0;
+  if (
+    !Number.isSafeInteger(cachedInputTokens) ||
+    cachedInputTokens < 0 ||
+    cachedInputTokens > u.prompt_tokens!
+  )
+    throw unknown("模型缓存用量无效，保留本次预留额度并停止。");
+  // completion_tokens already includes reasoning tokens; never add them a second time.
+  const amount = Math.ceil(u.prompt_tokens! * c.inputPrice + u.completion_tokens! * c.outputPrice);
   const usage: ModelUsage = {
     inputTokens: u.prompt_tokens!,
     outputTokens: u.completion_tokens!,
-    cachedInputTokens:
-      typeof u.prompt_cache_hit_tokens === "number" ? u.prompt_cache_hit_tokens : 0,
-    estimatedCny: (u.prompt_tokens! * c.inputPrice + u.completion_tokens! * c.outputPrice) / 1e6,
+    cachedInputTokens,
+    estimatedCny: c.currency === "CNY" ? amount / 1e6 : 0,
+    ...(c.currency === "USD" ? { estimatedUsd: amount / 1e6 } : {}),
+    currency: c.currency,
+    provider: c.provider,
+    billingAttemptId: attemptId,
     model: typeof raw.model === "string" ? raw.model : c.id,
     responseId: typeof raw.id === "string" ? raw.id : "not-returned",
     durationMs: Date.now() - started,
   };
+  settle(amount, usage.inputTokens, usage.outputTokens, cachedInputTokens, usage.responseId);
   const choice = raw.choices?.[0];
   if (choice?.finish_reason !== (strict ? "tool_calls" : "stop"))
     throw new ModelCallError(
@@ -351,19 +503,39 @@ async function generate<T>(
   }
   return { value: parsed.data, usage };
 }
-export const generateStrategy = (input: StageInput) => generate("propose", input, StrategySchema);
-export const generateAttack = (input: StageInput) => generate("attack", input, AttackSchema);
-export const generateRevision = (input: StageInput) => generate("revise", input, RevisionSchema);
-export const generateVerdict = (input: StageInput) => generate("judge", input, VerdictSchema);
-// Offline evaluation only. Public ChallengeSchema strips these experimental options.
+export const generateStrategy = (
+  input: StageInput,
+  config: ModelConfig = getModelConfig(),
+  attemptId?: string,
+) => generate("propose", input, StrategySchema, config, attemptId);
+export const generateAttack = (
+  input: StageInput,
+  config: ModelConfig = getModelConfig(),
+  attemptId?: string,
+) => generate("attack", input, AttackSchema, config, attemptId);
+export const generateRevision = (
+  input: StageInput,
+  config: ModelConfig = getModelConfig(),
+  attemptId?: string,
+) => generate("revise", input, RevisionSchema, config, attemptId);
+export const generateVerdict = (
+  input: StageInput,
+  config: ModelConfig = getModelConfig(),
+  attemptId?: string,
+) => generate("judge", input, VerdictSchema, config, attemptId);
+// The legacy evaluator aggregates CNY only. Refuse USD until its aggregation is upgraded.
 export function generateEvaluation(
   kind: Kind,
   input: StageInput,
   mode: NonNullable<StageInput["evaluationMode"]>,
+  config: ModelConfig = getModelConfig(),
+  attemptId?: string,
 ) {
+  if (config.provider !== "deepseek" || config.currency !== "CNY")
+    throw new ModelCallError("旧评测器仅支持 DeepSeek/CNY，尚未支持 GPT/USD 原币费用。");
   const data = { ...input, evaluationMode: mode };
-  if (kind === "propose") return generateStrategy(data);
-  if (kind === "attack") return generateAttack(data);
-  if (kind === "revise") return generateRevision(data);
-  return generateVerdict(data);
+  if (kind === "propose") return generateStrategy(data, config, attemptId);
+  if (kind === "attack") return generateAttack(data, config, attemptId);
+  if (kind === "revise") return generateRevision(data, config, attemptId);
+  return generateVerdict(data, config, attemptId);
 }

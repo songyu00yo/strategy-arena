@@ -1,17 +1,18 @@
 /** Live model integration. Uses synthetic user material, NEVER mock model responses. */
+import { getBillingSummary } from "../src/lib/server/billing";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { ChallengeSchema } from "../src/lib/contracts";
+import { ChallengeSchema, ModelModeSchema } from "../src/lib/contracts";
 import { videoChallenge } from "../src/lib/sample";
-import { getModelConfig } from "../src/lib/server/model";
 import { createArena, advanceArena, newVersion, stopArena } from "../src/lib/server/runtime";
 
 async function main() {
-  const modelConfiguration = getModelConfig();
+  const modelMode = ModelModeSchema.parse(process.env.ARENA_SMOKE_MODEL_MODE || "deepseek");
+  getBillingSummary();
   const fixture = ChallengeSchema.parse(videoChallenge);
   const owner = `live-smoke-${randomUUID()}`;
-  let snapshot = createArena(fixture, owner);
+  let snapshot = createArena(fixture, owner, modelMode);
   const started = Date.now();
   const maxSteps = process.argv.includes("--first-call") ? 1 : 32;
   async function run() {
@@ -30,6 +31,8 @@ async function main() {
           evidence: current.evidence.length,
           revisions: current.revisions.length,
           costCny: current.costCny,
+          costUsd: current.costUsd ?? 0,
+          modelSelection: current.modelSelection,
           error: current.error,
         }),
       );
@@ -57,7 +60,7 @@ async function main() {
   );
   const record = {
     kind: "live-api-on-synthetic-input",
-    modelConfiguration,
+    modelConfiguration: snapshot.versions[0].runConfiguration,
     timestamp: new Date().toISOString(),
     commit: sha,
     dirty,

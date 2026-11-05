@@ -20,7 +20,7 @@ try {
     !values["confirmed-cny"].trim()
   )
     throw new ArenaError(
-      "请提供 --step、--resolution、--confirmed-cny、--proof 及 --acknowledge-provider-confirmation。",
+      "请提供 --step、--resolution、--confirmed-cny、--proof 及 --acknowledge-provider-confirmation。本命令仅用于旧版人民币步骤；不支持美元或共享费用账本。",
       400,
     );
   const result = reconcileUncertain({

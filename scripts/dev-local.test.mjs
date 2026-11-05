@@ -6,12 +6,18 @@ import { e2eAddress } from "./test-address.mjs";
 test("local launcher overrides inherited live credentials, worker and database", () => {
   const { env } = developmentConfig("claude", "/tmp/arena frontend", {
     MODEL_API_KEY: "inherited-private-value",
+    DEEPSEEK_API_KEY: "inherited-ds-fixture",
+    OPENAI_API_KEY: "inherited-openai-fixture",
+    ARENA_BILLING_DATABASE_PATH: "/production/billing.sqlite",
     ARENA_SESSION_SECRET: "production-secret",
     ARENA_DATABASE_PATH: "/production/arena.sqlite",
     ARENA_WORKER_ENABLED: "true",
     PATH: "/bin",
   });
   assert.equal(env.MODEL_API_KEY, "");
+  assert.equal(env.DEEPSEEK_API_KEY, "");
+  assert.equal(env.OPENAI_API_KEY, "");
+  assert.equal(env.ARENA_BILLING_DATABASE_PATH, "");
   assert.equal(env.ARENA_SESSION_SECRET, "");
   assert.equal(env.ARENA_DATABASE_PATH, "/tmp/arena frontend/work/dev/claude.sqlite");
   assert.equal(env.ARENA_WORKER_ENABLED, "false");

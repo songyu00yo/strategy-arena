@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type {
   ArenaSnapshot,
+  ModelMode,
+  ModelOption,
+  ModelProvider,
   ArenaVersion,
   Challenge,
   InterventionSchema,
@@ -13,6 +16,9 @@ import type {
   Verdict,
 } from "@/lib/contracts";
 import type { z } from "zod";
+import { SCHEMA_VERSION } from "@/lib/contracts";
+import { PROMPT_VERSION } from "../../../prompts/protocol";
+import { routeModel } from "@/lib/model-routing";
 import {
   getModelConfig,
   estimateCallCost,
@@ -47,28 +53,70 @@ import {
   type StepRow,
 } from "./db";
 
+type SelectedConfig = ReturnType<typeof getModelConfig>;
 export function modelInfo(): ArenaSnapshot["model"] {
-  const c = getModelConfig();
+  const providers = (["deepseek", "openai"] as const).map((provider): ModelOption => {
+    try {
+      const c = getModelConfig(provider);
+      return { provider, id: c.id, configured: c.configured, currency: c.currency };
+    } catch {
+      return {
+        provider,
+        id: provider === "openai" ? "GPT" : "DeepSeek",
+        configured: false,
+        currency: provider === "openai" ? "USD" : "CNY",
+        error: "模型配置无效，请运行者检查服务端配置。",
+      };
+    }
+  });
   return {
-    id: c.id,
-    configured: c.configured,
-    promptVersion: c.promptVersion,
-    schemaVersion: c.schemaVersion,
+    id: (providers.find((provider) => provider.configured) ?? providers[0]).id,
+    configured: providers.some((provider) => provider.configured),
+    promptVersion: PROMPT_VERSION,
+    schemaVersion: SCHEMA_VERSION,
+    providers,
   };
 }
-function runConfiguration() {
-  const configuration = { ...getModelConfig() } as Record<string, unknown>;
+function runConfiguration(config: SelectedConfig) {
+  const configuration = { ...config } as Record<string, unknown>;
   delete configuration.configured; // Key rotation does not change the strategy protocol.
   return {
     configuration,
     hash: createHash("sha256").update(JSON.stringify(configuration)).digest("hex"),
   };
 }
-function pinConfiguration(version: ArenaVersion) {
-  const current = runConfiguration();
+function pinConfiguration(version: ArenaVersion, mode: ModelMode) {
+  const route = routeModel(version.challenge, mode);
+  const config = getModelConfig(route.provider);
+  const current = runConfiguration(config);
   version.runConfiguration = current.configuration;
   version.configurationHash = current.hash;
+  version.modelSelection = {
+    requestedMode: mode,
+    provider: route.provider,
+    modelId: config.id,
+    currency: config.currency,
+    policyVersion: route.policyVersion,
+    reason: route.reason,
+  };
+  version.costUsd = 0;
+  version.reservedUsd = 0;
   saveVersion(version);
+  const arena = db().prepare("SELECT arena_id FROM versions WHERE id=?").get(version.id) as {
+    arena_id: string;
+  };
+  event(
+    arena.arena_id,
+    version.id,
+    "model_selected",
+    `本版本选择 ${config.id}：${route.reason}`,
+    undefined,
+    undefined,
+    {
+      ...version.modelSelection,
+      configurationHash: current.hash,
+    },
+  );
 }
 export function getArena(arenaId: string, owner: string) {
   atomic(() => {
@@ -77,14 +125,14 @@ export function getArena(arenaId: string, owner: string) {
   });
   return snapshot(arenaId, owner, modelInfo());
 }
-export function createArena(challenge: Challenge, owner: string) {
+export function createArena(challenge: Challenge, owner: string, mode: ModelMode = "auto") {
   const arenaId = atomic(() => {
     consumeRun(owner);
     const arenaId = id();
     db()
       .prepare("INSERT INTO arenas(id,owner,active_version_id,created_at) VALUES(?,?,?,?)")
       .run(arenaId, owner, "", now());
-    pinConfiguration(addVersion(arenaId, challenge, "首次讨论", null));
+    pinConfiguration(addVersion(arenaId, challenge, "首次讨论", null), mode);
     return arenaId;
   });
   return getArena(arenaId, owner);
@@ -101,6 +149,7 @@ export function newVersion(
   challenge: Challenge,
   reason: string,
   intervention?: string,
+  mode?: ModelMode,
 ) {
   atomic(() => {
     const arena = assertOwner(arenaId, owner);
@@ -123,7 +172,7 @@ export function newVersion(
       );
     }
     const version = addVersion(arenaId, challenge, reason, previous.id);
-    pinConfiguration(version);
+    pinConfiguration(version, mode ?? previous.modelSelection?.requestedMode ?? "deepseek");
     for (const text of [...userChallenges(previous.id), ...(intervention ? [intervention] : [])])
       db()
         .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
@@ -286,39 +335,51 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
     ...(repair ? { repairFeedback: repair.feedback, rejectedOutput: repair.rejectedOutput } : {}),
   };
 }
+// This conservative conversion is a budget guard only; recorded amounts retain their native currency.
+const CNY_PER_USD_BUDGET = 6;
+function spentUsd(version: ArenaVersion) {
+  return (
+    (version.costCny + version.reservedCny) / CNY_PER_USD_BUDGET +
+    (version.costUsd ?? 0) +
+    (version.reservedUsd ?? 0)
+  );
+}
+function localBudget(usdName: string, cnyName: string, fallback: number) {
+  const usd = positiveEnv(usdName, fallback);
+  return process.env[cnyName] === undefined
+    ? usd
+    : Math.min(usd, positiveEnv(cnyName, fallback * CNY_PER_USD_BUDGET) / CNY_PER_USD_BUDGET);
+}
 export function reserveCall(version: ArenaVersion, amount: number) {
   if (!Number.isFinite(amount) || amount <= 0)
     throw new ArenaError("模型费用配置无效。", 503, "INVALID_COST_CONFIG");
+  const currency = version.modelSelection?.currency ?? "CNY";
+  const amountUsd = currency === "USD" ? amount : amount / CNY_PER_USD_BUDGET;
   const arena = db().prepare("SELECT arena_id FROM versions WHERE id=?").get(version.id) as {
     arena_id: string;
   };
   const related = db()
     .prepare("SELECT body FROM versions WHERE arena_id=?")
     .all(arena.arena_id) as { body: string }[];
-  const arenaSpent = related.reduce((sum, row) => {
-    const v = JSON.parse(row.body) as ArenaVersion;
-    return sum + v.costCny + v.reservedCny;
-  }, 0);
-  if (arenaSpent + amount > positiveEnv("ARENA_RUN_BUDGET_CNY", 1.5))
+  const arenaSpent = related.reduce((sum, row) => sum + spentUsd(JSON.parse(row.body)), 0);
+  if (arenaSpent + amountUsd > localBudget("ARENA_RUN_BUDGET_USD", "ARENA_RUN_BUDGET_CNY", 0.25))
     throw new ArenaError(
       "这场讨论及其历史版本的费用上限不足以启动下一步，请联系管理员或缩短材料。",
       429,
       "RUN_BUDGET",
     );
   const all = db().prepare("SELECT body FROM versions").all() as { body: string }[];
-  const spent = all.reduce((sum, row) => {
-    const v = JSON.parse(row.body) as ArenaVersion;
-    return sum + v.costCny + v.reservedCny;
-  }, 0);
-  if (spent + amount > positiveEnv("ARENA_GLOBAL_BUDGET_CNY", 70))
+  const spent = all.reduce((sum, row) => sum + spentUsd(JSON.parse(row.body)), 0);
+  if (spent + amountUsd > localBudget("ARENA_GLOBAL_BUDGET_USD", "ARENA_GLOBAL_BUDGET_CNY", 120))
     throw new ArenaError("服务总费用额度已用完，请联系管理员。", 429, "GLOBAL_BUDGET");
-  version.reservedCny += amount;
+  if (currency === "USD") version.reservedUsd = (version.reservedUsd ?? 0) + amount;
+  else version.reservedCny += amount;
 }
 function claim(
   arenaId: string,
   owner: string,
   versionId: string,
-): { step: StepRow; input: StageInput } | null {
+): { step: StepRow; input: StageInput; config: SelectedConfig } | null {
   return atomic(() => {
     const arena = assertOwner(arenaId, owner);
     requireVersion(arenaId, versionId);
@@ -328,7 +389,14 @@ function claim(
       return null;
     if (db().prepare("SELECT id FROM steps WHERE version_id=? AND status='running'").get(versionId))
       return null;
-    if (version.configurationHash && version.configurationHash !== runConfiguration().hash) {
+    const provider: ModelProvider = version.modelSelection?.provider ?? "deepseek";
+    const config = getModelConfig(provider);
+    if (
+      !version.modelSelection ||
+      !version.runConfiguration?.provider ||
+      !version.configurationHash ||
+      version.configurationHash !== runConfiguration(config).hash
+    ) {
       version.status = "failed";
       version.error =
         "服务的模型或提示词配置已更新；为避免同一版本混用配置，已停止后续步骤。请创建新版本重赛。";
@@ -370,9 +438,9 @@ function claim(
     if (!step) return null;
     const input = inputFor(version, step);
     if (step.stage !== "verify") {
-      if (!getModelConfig().configured)
+      if (!config.configured)
         throw new ArenaError(
-          "尚未配置模型密钥。请在本地环境配置 MODEL_API_KEY 后重新启动。",
+          `${config.id} 尚未配置模型密钥。请配置所选服务商的密钥后重新启动；不会切换到其他模型。`,
           503,
           "MODEL_NOT_CONFIGURED",
         );
@@ -383,10 +451,10 @@ function claim(
         .get() as { count: number };
       if (concurrent.count >= positiveEnv("ARENA_MAX_CONCURRENT_CALLS", 3))
         throw new ArenaError("当前讨论较多，请稍后再继续。", 429, "CONCURRENCY_LIMIT");
-      step.reservation = estimateCallCost(input);
+      step.reservation = estimateCallCost(input, config);
       reserveCall(version, step.reservation);
     }
-    const lease = Date.now() + getModelConfig().timeoutMs + 30_000;
+    const lease = Date.now() + config.timeoutMs + 30_000;
     db()
       .prepare(
         "UPDATE steps SET status='running',started_at=?,lease_until=?,reservation=? WHERE id=? AND status='pending'",
@@ -398,25 +466,29 @@ function claim(
     version.error = null;
     saveVersion(version);
     event(arenaId, versionId, "step_started", `${step.role} 开始执行。`, step.stage, step.role, {
-      configuration: getModelConfig(),
-      reservedCny: step.reservation,
-      model: getModelConfig().id,
-      promptVersion: getModelConfig().promptVersion,
-      schemaVersion: getModelConfig().schemaVersion,
+      configuration: runConfiguration(config).configuration,
+      ...(config.currency === "USD"
+        ? { reservedUsd: step.reservation }
+        : { reservedCny: step.reservation }),
+      currency: config.currency,
+      modelSelection: version.modelSelection,
+      model: config.id,
+      promptVersion: config.promptVersion,
+      schemaVersion: config.schemaVersion,
     });
-    return { step, input };
+    return { step, input, config };
   });
 }
 export async function advanceArena(arenaId: string, owner: string, versionId: string) {
   const claimed = claim(arenaId, owner, versionId);
   if (!claimed) return getArena(arenaId, owner);
-  const { step, input } = claimed;
+  const { step, input, config } = claimed;
   let result: ModelResult<Strategy | Attack | Revision | Verdict> | undefined;
   try {
-    if (step.stage === "propose") result = await generateStrategy(input);
-    else if (step.stage === "attack") result = await generateAttack(input);
-    else if (step.stage === "revise") result = await generateRevision(input);
-    else if (step.stage === "judge") result = await generateVerdict(input);
+    if (step.stage === "propose") result = await generateStrategy(input, config, step.id);
+    else if (step.stage === "attack") result = await generateAttack(input, config, step.id);
+    else if (step.stage === "revise") result = await generateRevision(input, config, step.id);
+    else if (step.stage === "judge") result = await generateVerdict(input, config, step.id);
     const evidence =
       step.stage === "verify"
         ? [
@@ -604,7 +676,10 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
         step.role,
         {
           usage: usage ?? null,
-          heldReservationCny: uncertain ? step.reservation : 0,
+          ...(config.currency === "USD"
+            ? { heldReservationUsd: uncertain ? step.reservation : 0 }
+            : { heldReservationCny: uncertain ? step.reservation : 0 }),
+          currency: config.currency,
           ...(validationMessage
             ? {
                 rejectedResult: result?.value ?? modelError?.repair?.rejectedOutput,
@@ -645,6 +720,11 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
   return getArena(arenaId, owner);
 }
 function settle(version: ArenaVersion, step: StepRow, usage?: ModelUsage) {
-  version.reservedCny = Math.max(0, version.reservedCny - step.reservation);
-  if (usage) version.costCny += usage.estimatedCny;
+  if (version.modelSelection?.currency === "USD") {
+    version.reservedUsd = Math.max(0, (version.reservedUsd ?? 0) - step.reservation);
+    if (usage) version.costUsd = (version.costUsd ?? 0) + (usage.estimatedUsd ?? 0);
+  } else {
+    version.reservedCny = Math.max(0, version.reservedCny - step.reservation);
+    if (usage) version.costCny += usage.estimatedCny;
+  }
 }

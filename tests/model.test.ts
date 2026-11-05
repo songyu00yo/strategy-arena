@@ -2,10 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChallengeSchema, StrategySchema, type StageInput } from "../src/lib/contracts";
 import {
   buildMessages,
+  buildRequestBody,
+  getModelConfig,
+  generateEvaluation,
+  estimateCallTokens,
   estimateCallCost,
   generateStrategy,
   ModelCallError,
 } from "../src/lib/server/model";
+// Explicit billing test double: these tests never touch a live budget or provider.
+const billing = vi.hoisted(() => ({
+  reserveBilling: vi.fn(),
+  settleBilling: vi.fn(),
+  holdBilling: vi.fn(),
+}));
+vi.mock("../src/lib/server/billing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/lib/server/billing")>()),
+  ...billing,
+}));
+import { BillingError } from "../src/lib/server/billing";
 const input: StageInput = {
   role: "A",
   challenge: ChallengeSchema.parse({
@@ -31,6 +46,20 @@ const strategy = {
   estimatedHours: 8,
 };
 beforeEach(() => {
+  vi.resetAllMocks();
+  for (const name of [
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL_ID",
+    "OPENAI_STRUCTURED_OUTPUT",
+    "OPENAI_REASONING_EFFORT",
+    "OPENAI_INPUT_PRICE_PER_MILLION",
+    "OPENAI_OUTPUT_PRICE_PER_MILLION",
+    "OPENAI_MAX_OUTPUT_TOKENS",
+    "OPENAI_TIMEOUT_MS",
+  ])
+    vi.stubEnv(name, undefined);
   vi.stubEnv("MODEL_API_KEY", "fixture-key-not-a-secret");
   vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "json");
   vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com");
@@ -100,6 +129,14 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
       usage: { inputTokens: 100 },
     });
     expect(fn).toHaveBeenCalledTimes(1);
+    expect(billing.settleBilling).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        amount: 1200,
+        inputTokens: 100,
+        outputTokens: 100,
+      }),
+    );
   });
   it("treats connection loss as unknown and hides arbitrary upstream body", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("sensitive upstream message")));
@@ -124,4 +161,248 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
     await expect(generateStrategy(input)).rejects.toThrow("未配置");
     expect(fn).not.toHaveBeenCalled();
   });
+});
+
+describe("provider isolation and native billing with explicit test doubles", () => {
+  const gptResponse = (content = JSON.stringify(strategy)) =>
+    Response.json({
+      id: "gpt-fixture",
+      model: "gpt-6.1-terra",
+      choices: [
+        {
+          finish_reason: "tool_calls",
+          message: {
+            tool_calls: [
+              {
+                type: "function",
+                function: { name: "submit_propose", arguments: content },
+              },
+            ],
+          },
+        },
+      ],
+      usage: {
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        prompt_tokens_details: { cached_tokens: 200 },
+        completion_tokens_details: { reasoning_tokens: 300 },
+      },
+    });
+  it("separates credentials, model parameters and currency across providers", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "fake-openai-key");
+    vi.stubEnv("DEEPSEEK_API_KEY", "fake-deepseek-key");
+    vi.stubEnv("MODEL_ID", "legacy-deepseek-only");
+    vi.stubEnv("MODEL_TEMPERATURE", "1.5");
+    vi.stubEnv("MODEL_INPUT_PRICE_PER_MILLION", "42");
+    const gpt = getModelConfig("openai");
+    const ds = getModelConfig("deepseek");
+    expect(gpt).toMatchObject({
+      id: "gpt-6.1-terra",
+      currency: "USD",
+      reasoningEffort: "low",
+      inputPrice: 1,
+      outputPrice: 5,
+    });
+    expect(ds).toMatchObject({ id: "legacy-deepseek-only", currency: "CNY", inputPrice: 42 });
+    expect(JSON.stringify([gpt, ds])).not.toContain("fake-");
+    const body = buildRequestBody("propose", input, StrategySchema, gpt);
+    expect(body).toMatchObject({
+      max_completion_tokens: 2200,
+      reasoning_effort: "low",
+      parallel_tool_calls: false,
+    });
+    for (const field of ["temperature", "max_tokens", "thinking"])
+      expect(body).not.toHaveProperty(field);
+    const dsBody = buildRequestBody("propose", input, StrategySchema, ds);
+    expect(dsBody).toMatchObject({
+      max_tokens: 2200,
+      temperature: 1.5,
+      thinking: { type: "disabled" },
+    });
+    expect(dsBody).not.toHaveProperty("reasoning_effort");
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce(gptResponse())
+      .mockResolvedValueOnce(
+        Response.json({
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify(strategy) } }],
+          usage: { prompt_tokens: 10, completion_tokens: 20 },
+        }),
+      );
+    vi.stubGlobal("fetch", fn);
+    const result = await generateStrategy(input, gpt, "gpt-attempt-fixture");
+    await generateStrategy(input, ds, "ds-attempt-fixture");
+    expect(fn.mock.calls[0][0]).toBe("https://api.openai.com/v1/chat/completions");
+    expect(fn.mock.calls[0][1].headers.Authorization).toBe("Bearer fake-openai-key");
+    expect(fn.mock.calls[1][1].headers.Authorization).toBe("Bearer fake-deepseek-key");
+    expect(result.usage).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 500,
+      cachedInputTokens: 200,
+      estimatedCny: 0,
+      estimatedUsd: 0.0035,
+      currency: "USD",
+      provider: "openai",
+      billingAttemptId: "gpt-attempt-fixture",
+    });
+    expect(billing.reserveBilling).toHaveBeenCalledWith({
+      attemptId: "gpt-attempt-fixture",
+      provider: "openai",
+      currency: "USD",
+      estimatedAmount: Math.ceil(estimateCallCost(input, gpt) * 1e6),
+      maxTokens: estimateCallTokens(input, gpt),
+    });
+    expect(billing.settleBilling).toHaveBeenCalledWith("gpt-attempt-fixture", {
+      amount: 3500,
+      inputTokens: 1000,
+      outputTokens: 500,
+      cachedInputTokens: 200,
+      responseId: "gpt-fixture",
+    });
+    expect(billing.reserveBilling.mock.invocationCallOrder[0]).toBeLessThan(
+      fn.mock.invocationCallOrder[0],
+    );
+  });
+  it("uses pinned config after environment changes without provider fallback", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "fake-openai-key");
+    const config = getModelConfig("openai");
+    vi.stubEnv("OPENAI_MODEL_ID", "unsupported-model");
+    vi.stubEnv("OPENAI_BASE_URL", "https://untrusted.example/v1");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(gptResponse()));
+    const result = await generateStrategy(input, config);
+    expect(result.usage.provider).toBe("openai");
+    expect(result.usage.billingAttemptId).toMatch(/^[a-f0-9-]{36}$/);
+  });
+  it("refuses missing provider credentials and unpriced models without fetch or reservation", async () => {
+    const fn = vi.fn();
+    vi.stubGlobal("fetch", fn);
+    await expect(generateStrategy(input, getModelConfig("openai"))).rejects.toThrow("未配置");
+    vi.stubEnv("MODEL_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "fake-openai-key");
+    await expect(generateStrategy(input, getModelConfig("deepseek"))).rejects.toThrow("未配置");
+    vi.stubEnv("OPENAI_MODEL_ID", "unpriced-model");
+    expect(() => getModelConfig("openai")).toThrow("价格");
+    expect(fn).not.toHaveBeenCalled();
+    expect(billing.reserveBilling).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["deepseek", "MODEL_BASE_URL", "https://untrusted.example/beta"],
+    ["openai", "OPENAI_BASE_URL", "https://api.deepseek.com/v1"],
+    ["openai", "OPENAI_BASE_URL", "https://api.openai.com:8443/v1"],
+  ] as const)(
+    "rejects nonofficial %s destinations before sending secrets",
+    (provider, env, value) => {
+      vi.stubEnv(env, value);
+      expect(() => getModelConfig(provider)).toThrow("官方");
+    },
+  );
+  it("refuses GPT in the legacy CNY evaluator before network use", () => {
+    vi.stubEnv("OPENAI_API_KEY", "fake-openai-key");
+    const fn = vi.fn();
+    vi.stubGlobal("fetch", fn);
+    expect(() => generateEvaluation("propose", input, "arena", getModelConfig("openai"))).toThrow(
+      "CNY",
+    );
+    expect(fn).not.toHaveBeenCalled();
+  });
+  it("refuses fetch when the required central budget is unavailable or exhausted", async () => {
+    billing.reserveBilling.mockImplementation(() => {
+      throw new Error("budget test-double refuses reservation");
+    });
+    const fn = vi.fn();
+    vi.stubGlobal("fetch", fn);
+    await expect(generateStrategy(input)).rejects.toMatchObject({
+      name: "ModelCallError",
+      uncertain: false,
+      message: "共享计费账本暂时无法预留额度，本次请求未发送，请检查服务器计费状态。",
+    });
+    expect(fn).not.toHaveBeenCalled();
+  });
+  it.each([408, 500, 503])("holds unknown HTTP %s requests", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("private upstream", { status })));
+    await expect(generateStrategy(input, getModelConfig(), "unknown-http")).rejects.toMatchObject({
+      uncertain: true,
+    });
+    expect(billing.holdBilling).toHaveBeenCalledWith("unknown-http");
+    expect(billing.settleBilling).not.toHaveBeenCalled();
+  });
+  it.each([401, 402, 429])("settles definitive HTTP %s with zero spend", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("private upstream", { status })));
+    await expect(generateStrategy(input, getModelConfig(), "failed-http")).rejects.toMatchObject({
+      uncertain: false,
+    });
+    expect(billing.settleBilling).toHaveBeenCalledWith("failed-http", {
+      amount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      responseId: undefined,
+    });
+  });
+  it.each([
+    {},
+    { prompt_tokens: 100, completion_tokens: -1 },
+    { prompt_tokens: 1.5, completion_tokens: 1 },
+  ])("holds reservations when provider usage is missing or invalid", async (usage) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ usage, choices: [] })));
+    await expect(generateStrategy(input, getModelConfig(), "missing-usage")).rejects.toMatchObject({
+      uncertain: true,
+    });
+    expect(billing.holdBilling).toHaveBeenCalledWith("missing-usage");
+    expect(billing.settleBilling).not.toHaveBeenCalled();
+  });
+  it("settles known GPT spend before rejecting malformed structured output", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "fake-openai-key");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(gptResponse("invalid JSON")));
+    await expect(
+      generateStrategy(input, getModelConfig("openai"), "invalid-gpt"),
+    ).rejects.toMatchObject({ uncertain: false, usage: { estimatedUsd: 0.0035, estimatedCny: 0 } });
+    expect(billing.settleBilling).toHaveBeenCalledWith(
+      "invalid-gpt",
+      expect.objectContaining({ amount: 3500 }),
+    );
+    expect(billing.holdBilling).not.toHaveBeenCalled();
+  });
+  it("retains unknown state if central settlement fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+          choices: [],
+        }),
+      ),
+    );
+    billing.settleBilling.mockImplementation(() => {
+      throw new Error("storage failure fixture");
+    });
+    await expect(
+      generateStrategy(input, getModelConfig(), "failed-settlement"),
+    ).rejects.toMatchObject({ uncertain: true });
+    expect(billing.holdBilling).toHaveBeenCalledWith("failed-settlement");
+  });
+});
+
+it.each([
+  ["BILLING_LIMIT_REACHED", "金额、请求次数或 Token 上限", false],
+  ["BILLING_INVALID_CONFIG", "共享计费配置缺失或无效", false],
+  ["BILLING_SETTINGS_MISMATCH", "共享账本的固定额度", false],
+  ["BILLING_DUPLICATE_ATTEMPT", "拒绝再次发送", true],
+] as const)("explains %s safely without fallback or dispatch", async (code, message, uncertain) => {
+  vi.stubEnv("OPENAI_API_KEY", "fake-openai-key");
+  billing.reserveBilling.mockImplementation(() => {
+    throw new BillingError("private database path and upstream data", code);
+  });
+  const fetchDouble = vi.fn();
+  vi.stubGlobal("fetch", fetchDouble);
+  const call = generateStrategy(input, getModelConfig("openai"), "blocked-reservation");
+  await expect(call).rejects.toMatchObject({ name: "ModelCallError", uncertain });
+  await expect(call).rejects.toThrow(message);
+  await expect(call).rejects.not.toThrow("private database");
+  expect(fetchDouble).not.toHaveBeenCalled();
+  expect(billing.reserveBilling).toHaveBeenCalledTimes(1);
+  expect(billing.reserveBilling).toHaveBeenCalledWith(
+    expect.objectContaining({ provider: "openai" }),
+  );
+  expect(billing.settleBilling).not.toHaveBeenCalled();
 });

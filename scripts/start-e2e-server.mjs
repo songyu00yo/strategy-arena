@@ -19,6 +19,9 @@ const server = spawn(process.execPath, ["server.js"], {
   env: {
     ...process.env,
     MODEL_API_KEY: "",
+    DEEPSEEK_API_KEY: "",
+    OPENAI_API_KEY: "",
+    ARENA_BILLING_DATABASE_PATH: "",
     ARENA_WORKER_ENABLED: "false",
     HOSTNAME: "127.0.0.1",
     PORT: String(port),

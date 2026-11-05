@@ -11,9 +11,13 @@ import {
   type Strategy,
 } from "@/lib/contracts";
 import { attackMeta, comparisonMeta } from "@/components/status";
-import { Intro, RecordWall } from "./fx";
+import { Decode, Roll } from "./effects";
+import { Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteStage } from "./RouteStage";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
+
+/** How long each kind of step holds the screen during a film. */
+const SHOT_MS = { propose: 1900, attack: 3200, verify: 2600, revise: 2400, judge: 5400 };
 
 const OUTCOME = {
   recommendation: "当前条件下的建议",
@@ -55,7 +59,9 @@ export function ArenaConsole({
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [intro, setIntro] = useState(false);
-  const stepMs = 2400 / speed;
+  const [revealed, setRevealed] = useState(false);
+  const [motion, setMotion] = useState(false);
+  const [filmDone, setFilmDone] = useState(false);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
@@ -71,6 +77,19 @@ export function ArenaConsole({
     });
     return () => cancelAnimationFrame(frame);
   }, []);
+  // The film starts as the shutter opens, so the result is never shown before its first step.
+  const reveal = useCallback(() => {
+    setRevealed((done) => {
+      if (!done && last >= 1) {
+        setMotion(true);
+        setFilmDone(false);
+        setCursor(0);
+        setPlaying(true);
+      }
+      return true;
+    });
+  }, [last]);
+  const endFilm = useCallback(() => setFilmDone(true), []);
   const endIntro = useCallback(() => {
     setIntro(false);
     try {
@@ -80,30 +99,29 @@ export function ArenaConsole({
     }
   }, []);
 
+  const stage = current?.stage;
   useEffect(() => {
-    if (!playing) return;
-    const timer = setInterval(() => {
-      setCursor((value) => {
-        const next = (value ?? -1) + 1;
-        if (next >= last) {
-          setPlaying(false);
-          return null;
-        }
-        return next;
-      });
-    }, stepMs);
-    return () => clearInterval(timer);
-  }, [playing, last, stepMs]);
+    if (!playing || !stage) return;
+    const timer = setTimeout(() => {
+      if (index >= last) return setPlaying(false);
+      setCursor(index + 1 >= last ? null : index + 1);
+    }, SHOT_MS[stage] / speed);
+    return () => clearTimeout(timer);
+  }, [playing, index, last, stage, speed]);
 
   const goTo = useCallback(
     (i: number) => {
       setPlaying(false);
+      setMotion(i === index + 1);
+      setFilmDone(false);
       setCursor(i >= last ? null : Math.max(i, 0));
     },
-    [last],
+    [last, index],
   );
   const replay = () => {
     if (playing) return setPlaying(false);
+    setMotion(true);
+    setFilmDone(false);
     if (index >= last) setCursor(0);
     setPlaying(true);
   };
@@ -127,7 +145,11 @@ export function ArenaConsole({
       } else if (e.key === " " && target?.tagName !== "BUTTON") {
         e.preventDefault();
         setPlaying((p) => {
-          if (!p && cursor === null) setCursor(0);
+          if (!p) {
+            setMotion(true);
+            setFilmDone(false);
+            if (cursor === null) setCursor(0);
+          }
           return !p;
         });
       }
@@ -148,17 +170,18 @@ export function ArenaConsole({
   const tokens = used.reduce((t, u) => t + u.inputTokens + u.outputTokens, 0);
   const peak = Math.max(1, ...used.map((u) => u.inputTokens + u.outputTokens));
   const verdict = seen.has("judge") ? version.verdict : null;
-  const metrics: [string, number | string, string][] = [
+  const directed = motion || version.status === "running";
+  const metrics: [string, number, string][] = [
     ["质疑", attacks.length, ""],
     ["成立", count("supported"), "bad"],
     ["已反驳", count("refuted"), "ok"],
     ["未决", attacks.length - count("supported") - count("refuted"), "warn"],
     ["模型调用", used.length, ""],
-    ["Token", tokens.toLocaleString(), ""],
+    ["Token", tokens, ""],
   ];
 
   return (
-    <div className="c-root">
+    <div className={`c-root ${playing && current?.stage !== "judge" ? "theater" : ""}`}>
       <RecordWall version={version} events={logged} />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
@@ -200,7 +223,9 @@ export function ArenaConsole({
             {metrics.map(([label, value, tone]) => (
               <div key={label} className={tone}>
                 <dt>{label}</dt>
-                <dd>{value}</dd>
+                <dd>
+                  <Roll value={value} />
+                </dd>
               </div>
             ))}
           </dl>
@@ -210,13 +235,15 @@ export function ArenaConsole({
             version={version}
             beats={beats}
             index={index}
-            stepMs={stepMs}
-            entering={intro}
+            speed={speed}
+            directed={directed}
+            camera={cursor !== null || playing}
+            entering={intro && !revealed}
             readOnly={historical || busy}
             onClaim={onClaim}
           />
           <div className="c-rail">
-            <section className="c-now" aria-label="正在发生">
+            <section className="c-now" key={current?.id} aria-label="正在发生">
               <div className="fl">
                 {current ? (
                   <>
@@ -235,7 +262,13 @@ export function ArenaConsole({
                   {index + 1}/{beats.length}
                 </span>
               </div>
-              <div className="big">{current ? current.title : "等待第一步"}</div>
+              <div className="big">
+                <Decode
+                  key={current?.id}
+                  text={current ? current.title : "等待第一步"}
+                  active={directed}
+                />
+              </div>
               <p>{current ? current.plain : "同一模型分成五个角色，替你比较三条路线。"}</p>
               <div className="c-ctrl">
                 <button
@@ -356,7 +389,18 @@ export function ArenaConsole({
           </section>
         </div>
       </div>
-      {intro && <Intro version={version} events={events} model={model} onDone={endIntro} />}
+      {verdict && directed && !filmDone && current?.id === "judge" && (
+        <VerdictFilm verdict={verdict} onDone={endFilm} />
+      )}
+      {intro && (
+        <Intro
+          version={version}
+          events={events}
+          model={model}
+          onReveal={reveal}
+          onDone={endIntro}
+        />
+      )}
     </div>
   );
 }

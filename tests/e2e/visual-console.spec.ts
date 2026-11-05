@@ -219,8 +219,14 @@ test.describe("behaviour", () => {
     await page.waitForTimeout(400);
     await capture(page, testInfo, "console-evidence", false);
     await page.keyboard.press("Escape");
-    await page.locator(".c-claim", { hasText: "A2" }).click();
-    await expect(page.getByRole("dialog", { name: "向这条判断发起挑战" })).toBeVisible();
+    // Every board must take clicks, including the parts tilted away from the viewer.
+    for (const claim of ["A2", "B2", "C2"]) {
+      await page.locator(".c-claim", { hasText: claim }).click();
+      const dialog = page.getByRole("dialog", { name: "向这条判断发起挑战" });
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("button", { name: "关闭弹窗" }).click();
+      await expect(dialog).toHaveCount(0);
+    }
   });
 
   test("long records stay inside their panels", async ({ page }, testInfo) => {
@@ -283,6 +289,51 @@ test.describe("behaviour", () => {
     await expect(page.getByRole("button", { name: "按新条件重新推演" })).toBeVisible();
     await page.waitForTimeout(400);
     await capture(page, testInfo, "console-edit", false);
+  });
+
+  test("the opening runs the game from its first step, then hands over", async ({ page }) => {
+    test.setTimeout(120_000);
+    await mountFixture(page, snapshot());
+    await openArena(page);
+    // Taking over with a key must stop on the first step, not on the result.
+    await page.locator(".c-intro").waitFor();
+    await page.keyboard.press("x");
+    await expect(page.locator(".c-root.theater")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "暂停放映" }).click();
+    await expect(page.locator(".c-root.theater")).toHaveCount(0);
+    await page.keyboard.press("End");
+    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
+    await expect(page.locator(".c-film")).toHaveCount(0);
+  });
+
+  test("stepping onto the verdict plays it full screen and folds into the panel", async ({
+    page,
+  }, testInfo) => {
+    await skipIntro(page);
+    await mountFixture(page, snapshot());
+    await openArena(page);
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowRight");
+    await expect(page.locator(".c-film")).toBeVisible();
+    await page.waitForTimeout(1600);
+    await capture(page, testInfo, "console-film", false);
+    await expect(page.locator(".c-film")).toHaveCount(0, { timeout: 8000 });
+    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
+  });
+
+  test.describe("reduced motion", () => {
+    test.use({ reducedMotion: "reduce" });
+    test("skips the film and the camera", async ({ page }) => {
+      await mountFixture(page, snapshot());
+      await openArena(page);
+      await expect(page.locator(".c-intro")).toHaveCount(0);
+      await page.keyboard.press("End");
+      await page.keyboard.press("ArrowLeft");
+      await page.keyboard.press("ArrowRight");
+      await expect(page.locator(".c-film")).toHaveCount(0);
+      expect(await page.locator(".c-world").evaluate((el) => el.style.transform)).toBe("none");
+    });
   });
 
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {

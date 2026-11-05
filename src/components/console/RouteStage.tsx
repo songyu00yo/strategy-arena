@@ -1,7 +1,9 @@
 "use client";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
+import { attackMeta } from "@/components/status";
 import { FloatingWindows } from "./fx";
+import { reducedMotion, Sparks, STATE_COLOR } from "./effects";
 import type { Beat } from "./beats";
 
 const CLAIM = { user: "用户给定", estimate: "估算", unknown: "待核", supported: "有据" };
@@ -11,17 +13,23 @@ const WORD: Record<Attack["status"], string> = {
   unresolved: "未决",
   pending: "待核验",
 };
-const reduced = () =>
-  typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-type Thread = { id: string; d: string };
+type Flight = {
+  attack: Attack;
+  kind: "attack" | "verify";
+  began: number;
+  duration: number;
+  landed: boolean;
+};
 
-/** Three proposal boards in a triptych. Each challenge is a thread from one board to the exact claim it doubts. */
+/** Three boards in real 3D space, filmed by a camera that follows each recorded step. */
 export function RouteStage({
   version,
   beats,
   index,
-  stepMs,
+  speed,
+  directed,
+  camera,
   entering,
   readOnly,
   onClaim,
@@ -29,7 +37,9 @@ export function RouteStage({
   version: ArenaVersion;
   beats: Beat[];
   index: number;
-  stepMs: number;
+  speed: number;
+  directed: boolean;
+  camera: boolean;
   entering: boolean;
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
@@ -40,25 +50,142 @@ export function RouteStage({
   const attacks = shown.filter((b) => b.stage === "attack").map((b) => b.attack!);
   const activeAttack = current?.attack;
   const stateOf = (a: Attack) => (seen.has(`v:${a.id}`) ? a.status : "pending");
-
-  const stage = useRef<HTMLDivElement>(null);
-  const packet = useRef<HTMLDivElement>(null);
-  const paths = useRef(new Map<string, SVGPathElement>());
-  const [threads, setThreads] = useState<Thread[]>([]);
-  const signature = attacks.map((a) => a.id).join();
   const hot = activeAttack ? `${activeAttack.targetStrategyId}:${activeAttack.targetClaimId}` : "";
 
-  // Threads are measured from the real claims, so they stay attached at any screen size.
-  useLayoutEffect(() => {
+  const stage = useRef<HTMLDivElement>(null);
+  const rig = useRef<HTMLDivElement>(null);
+  const world = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const packet = useRef<HTMLDivElement>(null);
+  const paths = useRef(new Map<string, SVGPathElement>());
+  const flight = useRef<Flight | null>(null);
+  const live = useRef(attacks);
+  const filming = useRef(camera);
+  useEffect(() => {
+    live.current = attacks;
+    filming.current = camera;
+    if (!camera && rig.current) rig.current.style.transform = "none";
+  });
+
+  // Each step that moves to another role launches one flight along its thread.
+  const beatId = current?.id;
+  useEffect(() => {
+    if (!activeAttack || !current || (current.stage !== "attack" && current.stage !== "verify")) {
+      flight.current = null;
+      return;
+    }
+    const animate = directed && !reducedMotion();
+    flight.current = {
+      attack: activeAttack,
+      kind: current.stage,
+      began: performance.now(),
+      duration: animate ? 900 / speed : 0,
+      landed: !animate,
+    };
+    // Only a new step launches a flight; speed changes apply to the next one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beatId]);
+
+  // Threads are re-measured every frame from the real claims, so they stay attached through any camera move.
+  useEffect(() => {
     const host = stage.current;
-    if (!host) return;
-    const measure = () => {
+    const dot = packet.current;
+    const surface = canvas.current;
+    if (!host || !dot || !surface) return;
+    const sparks = new Sparks(surface);
+
+    const stamp = (x: number, y: number, attack: Attack) => {
+      const el = document.createElement("div");
+      el.className = `c-stamp is-${attack.status}`;
+      el.textContent = attackMeta[attack.status].label;
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+      host.appendChild(el);
+      const fade = el.animate(
+        [
+          {
+            transform: "translate(-50%,-50%) scale(3.4) rotate(-14deg)",
+            opacity: 0,
+            filter: "blur(6px)",
+            offset: 0,
+          },
+          {
+            transform: "translate(-50%,-50%) scale(1) rotate(-5deg)",
+            opacity: 1,
+            filter: "blur(0)",
+            offset: 0.12,
+          },
+          { transform: "translate(-50%,-50%) scale(1) rotate(-5deg)", opacity: 1, offset: 0.78 },
+          { transform: "translate(-50%,-50%) scale(1.06) rotate(-5deg)", opacity: 0, offset: 1 },
+        ],
+        { duration: 1700, easing: "cubic-bezier(.2,.9,.2,1)", fill: "forwards" },
+      );
+      fade.onfinish = () => el.remove();
+      if (attack.status === "supported")
+        rig.current?.animate(
+          [
+            { translate: "0 0" },
+            { translate: "-11px 7px" },
+            { translate: "9px -6px" },
+            { translate: "-6px 4px" },
+            { translate: "3px -2px" },
+            { translate: "0 0" },
+          ],
+          { duration: 420, easing: "ease-out" },
+        );
+    };
+
+    // The doubted sentence lifts off its board and flies to the floating window.
+    const tear = (attack: Attack) => {
+      const claim = host.querySelector(
+        `[data-claim="${attack.targetStrategyId}:${attack.targetClaimId}"]`,
+      );
+      const row = host.querySelector(".c-float-card");
+      if (!claim || !row) return;
       const origin = host.getBoundingClientRect();
-      const next = attacks.flatMap((a, i) => {
+      const from = claim.getBoundingClientRect();
+      const to = row.getBoundingClientRect();
+      const el = document.createElement("div");
+      el.className = "c-tear";
+      el.textContent = attack.claimQuote;
+      el.style.cssText = `left:${from.left - origin.left}px;top:${from.top - origin.top}px;width:${from.width}px`;
+      host.appendChild(el);
+      const fly = el.animate(
+        [
+          { transform: "none", opacity: 1 },
+          { transform: "translateY(-16px) scale(1.07) rotate(-1.5deg)", opacity: 1, offset: 0.25 },
+          {
+            transform: `translate(${to.left - from.left}px,${to.top + 26 - from.top}px) scale(.96)`,
+            opacity: 0.2,
+          },
+        ],
+        { duration: 680, easing: "cubic-bezier(.65,0,.2,1)", fill: "forwards" },
+      );
+      fly.onfinish = () => el.remove();
+    };
+
+    let frame = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const origin = host.getBoundingClientRect();
+      sparks.fit(origin.width, origin.height);
+      const flying = flight.current;
+      const k = flying
+        ? flying.duration
+          ? Math.min(1, (now - flying.began) / flying.duration)
+          : 1
+        : 0;
+      const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+
+      live.current.forEach((a, i) => {
+        const path = paths.current.get(a.id);
         const from = host.querySelector(`[data-board="${a.from}"]`)?.getBoundingClientRect();
-        const board = host.querySelector(`[data-board="${a.targetStrategyId}"]`);
-        const box = board?.getBoundingClientRect();
-        if (!from || !box) return [];
+        const box = host
+          .querySelector(`[data-board="${a.targetStrategyId}"]`)
+          ?.getBoundingClientRect();
+        if (!path || !from || !box) return;
         const claim = host
           .querySelector(`[data-claim="${a.targetStrategyId}:${a.targetClaimId}"]`)
           ?.getBoundingClientRect();
@@ -71,22 +198,85 @@ export function RouteStage({
         const tx = (rightward ? box.left : box.right) - origin.left;
         const ty = y - origin.top;
         const bend = Math.max(36, Math.abs(tx - sx) * 0.42) * (rightward ? 1 : -1);
-        return [{ id: a.id, d: `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}` }];
+        path.setAttribute("d", `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
+        path.style.strokeDashoffset =
+          flying?.kind === "attack" && flying.attack.id === a.id ? String(1 - eased) : "0";
       });
-      setThreads(next);
+
+      dot.style.opacity = "0";
+      const path = flying && paths.current.get(flying.attack.id);
+      if (flying && path?.getAttribute("d")) {
+        const color =
+          flying.kind === "verify" ? STATE_COLOR[flying.attack.status] : STATE_COLOR.attack;
+        const point = path.getPointAtLength(path.getTotalLength() * eased);
+        dot.style.left = `${point.x}px`;
+        dot.style.top = `${point.y}px`;
+        dot.style.opacity = "1";
+        if (k < 1 && flying.duration) sparks.comet(point.x, point.y, color);
+        if (k >= 1 && !flying.landed) {
+          flying.landed = true;
+          const strong = flying.kind === "verify" && flying.attack.status === "supported";
+          sparks.impact(point.x, point.y, color, strong ? 1.5 : 1);
+          if (flying.kind === "attack") tear(flying.attack);
+          else stamp(point.x + (point.x > origin.width / 2 ? -60 : 60), point.y, flying.attack);
+        }
+      }
+      sparks.tick(dt);
+      frame = requestAnimationFrame(tick);
     };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(host);
-    host.querySelectorAll("[data-board]").forEach((node) => observer.observe(node));
-    const settled = setTimeout(measure, 800);
-    return () => {
-      observer.disconnect();
-      clearTimeout(settled);
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  // The camera: push in on whoever acts, frame both sides of a dispute, pull back for the verdict.
+  useLayoutEffect(() => {
+    const el = world.current;
+    if (!el) return;
+    if (!camera || !current || reducedMotion()) {
+      el.style.transform = "none";
+      return;
+    }
+    const W = el.clientWidth;
+    const H = el.clientHeight;
+    const centre = (id?: string) => {
+      const board = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
+      return board
+        ? {
+            x: board.offsetLeft + board.offsetWidth / 2,
+            y: board.offsetTop + board.offsetHeight / 2,
+          }
+        : { x: W / 2, y: H / 2 };
     };
-    // The attack list is summarised by its signature; the board layout changes with the float.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, hot, entering]);
+    let scale = 1.38;
+    let at = centre(current.agent);
+    let turn = 0;
+    if (current.stage === "attack" && current.to) {
+      const a = centre(current.agent);
+      const b = centre(current.to);
+      at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) + 30 };
+      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1.02 : 1.32;
+      turn = a.x < b.x ? -3 : 3;
+    } else if (current.stage === "verify" && current.to) {
+      const board = el.querySelector<HTMLElement>(`[data-board="${current.to}"]`);
+      const claim = el.querySelector<HTMLElement>(`[data-claim="${hot}"]`);
+      const body = claim?.closest<HTMLElement>(".c-board-body");
+      if (board && claim && body)
+        at = {
+          x: board.offsetLeft + board.offsetWidth / 2,
+          y: board.offsetTop + body.offsetTop + claim.offsetTop - body.scrollTop + 60,
+        };
+      scale = 1.72;
+    } else if (current.stage === "judge") {
+      at = { x: W / 2, y: H / 2 };
+      scale = 0.84;
+    }
+    const focusY = current.stage === "judge" ? H / 2 : H * 0.34;
+    const roomX = Math.max(0, ((scale - 1) * W) / 2 + 30);
+    const roomY = Math.max(0, ((scale - 1) * H) / 2 + 30);
+    const x = Math.max(-roomX, Math.min(roomX, W / 2 - at.x * scale - ((1 - scale) * W) / 2));
+    const y = Math.max(-roomY, Math.min(roomY, focusY - at.y * scale - ((1 - scale) * H) / 2));
+    el.style.transform = `translate3d(${x}px,${y}px,0) scale(${scale}) rotateY(${turn}deg)`;
+  }, [camera, current, hot]);
 
   // Bring the doubted claim into view inside its board, without moving the page.
   useEffect(() => {
@@ -96,46 +286,47 @@ export function RouteStage({
     if (claim && body) body.scrollTop = Math.max(0, claim.offsetTop - 28);
   }, [hot]);
 
-  // A label travels the live thread once per step.
+  // Boards fly out of the depth as the shutter opens.
   useEffect(() => {
-    const dot = packet.current;
-    if (!dot) return;
-    dot.style.opacity = "0";
-    const path = activeAttack && paths.current.get(activeAttack.id);
-    if (!path) return;
-    const length = path.getTotalLength();
-    const place = (at: number) => {
-      const point = path.getPointAtLength(at);
-      dot.style.left = `${point.x}px`;
-      dot.style.top = `${point.y}px`;
-      dot.style.opacity = "1";
-    };
-    if (reduced()) return place(length);
-    const began = performance.now();
-    const duration = Math.min(1100, stepMs * 0.55);
-    let frame = 0;
-    const tick = (now: number) => {
-      const k = Math.min(1, (now - began) / duration);
-      place(length * (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2));
-      if (k < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [current?.id, activeAttack, stepMs, threads]);
-
-  // Boards rise out of the record wall once the opening ends.
-  useEffect(() => {
-    if (entering || reduced()) return;
+    if (entering || reducedMotion()) return;
     stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
       node.animate(
         [
-          { translate: "0 46px", scale: "0.9", opacity: 0, filter: "blur(8px)" },
-          { translate: "0 0", scale: "1", opacity: 1, filter: "blur(0)" },
+          { translate: "0 140px -700px", opacity: 0, filter: "blur(16px)" },
+          { translate: "0 0 0", opacity: 1, filter: "blur(0)" },
         ],
-        { duration: 620, delay: i * 90, easing: "cubic-bezier(.2,.8,.2,1)", fill: "backwards" },
+        {
+          duration: 1000,
+          delay: 120 + i * 130,
+          easing: "cubic-bezier(.16,1,.3,1)",
+          fill: "backwards",
+        },
       );
     });
   }, [entering]);
+
+  // The room leans a little toward the pointer, and the wall moves the other way.
+  useEffect(() => {
+    if (reducedMotion()) return;
+    const onMove = (e: MouseEvent) => {
+      const nx = e.clientX / innerWidth - 0.5;
+      const ny = e.clientY / innerHeight - 0.5;
+      // At rest the boards hold still so their claims can be clicked; only the wall moves.
+      if (rig.current)
+        rig.current.style.transform = filming.current
+          ? `rotateY(${nx * 2.6}deg) rotateX(${-ny * 2}deg)`
+          : "none";
+      const wall = document.querySelector<HTMLElement>(".c-stage");
+      if (wall) wall.style.translate = `${-nx * 46}px ${-ny * 30}px`;
+    };
+    addEventListener("mousemove", onMove);
+    return () => removeEventListener("mousemove", onMove);
+  }, []);
+
+  const involved = (id: string) => {
+    if (!camera || !current || current.stage === "judge") return true;
+    return current.agent === id || current.to === id;
+  };
 
   const board = (id: "A" | "B" | "C") => {
     const strategy = version.strategies.find((s) => s.id === id);
@@ -154,7 +345,7 @@ export function RouteStage({
         key={id}
         data-board={id}
         aria-label={`路线 ${id}`}
-        className={`c-board c-board-${id} ${speaking ? "speaking" : ""} ${target ? "target" : ""} ${pick ? "pick" : ""}`}
+        className={`c-board c-board-${id} ${speaking ? "speaking" : ""} ${target ? "target" : ""} ${pick ? "pick" : ""} ${involved(id) ? "" : "dim"}`}
       >
         <header>
           <b>{id}</b>
@@ -199,8 +390,10 @@ export function RouteStage({
                       </i>
                     ))}
                   </em>
-                  <span className={lost || !after ? "struck" : ""}>
-                    {before?.text ?? claim.text}
+                  <span>
+                    <span className={lost || !after ? "struck" : ""}>
+                      {before?.text ?? claim.text}
+                    </span>
                   </span>
                   {before && after && before.text !== after.text && (
                     <span className="changed">{after.text}</span>
@@ -226,26 +419,27 @@ export function RouteStage({
 
   return (
     <div className={`c-stage3 ${activeAttack ? "has-float" : ""}`} ref={stage}>
-      {board("A")}
-      {board("B")}
-      {board("C")}
+      <div className="c-rig" ref={rig}>
+        <div className="c-world" ref={world}>
+          {board("A")}
+          {board("B")}
+          {board("C")}
+        </div>
+      </div>
       <svg className="c-threads" aria-hidden="true">
-        {threads.map((thread) => {
-          const a = attacks.find((x) => x.id === thread.id);
-          if (!a) return null;
-          return (
-            <path
-              key={thread.id}
-              ref={(node) => {
-                if (node) paths.current.set(thread.id, node);
-                else paths.current.delete(thread.id);
-              }}
-              className={`c-thread is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""}`}
-              d={thread.d}
-            />
-          );
-        })}
+        {attacks.map((a) => (
+          <path
+            key={a.id}
+            pathLength={1}
+            ref={(node) => {
+              if (node) paths.current.set(a.id, node);
+              else paths.current.delete(a.id);
+            }}
+            className={`c-thread is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""}`}
+          />
+        ))}
       </svg>
+      <canvas className="c-fx" ref={canvas} aria-hidden="true" />
       <div
         className={`c-packet ${current?.stage === "verify" && activeAttack ? `is-${activeAttack.status}` : ""}`}
         ref={packet}
@@ -253,7 +447,7 @@ export function RouteStage({
       >
         {current?.packet}
       </div>
-      <FloatingWindows version={version} beats={beats} index={index} />
+      <FloatingWindows version={version} beats={beats} index={index} directed={directed} />
     </div>
   );
 }

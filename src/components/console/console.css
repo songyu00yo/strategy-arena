@@ -94,10 +94,11 @@
   color: var(--c-t3);
 }
 .c-root .struck {
-  text-decoration: line-through;
-  text-decoration-color: var(--c-bad);
-  text-decoration-thickness: 1.5px;
+  background: linear-gradient(var(--c-bad), var(--c-bad)) left 55% / 100% 2px no-repeat;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
   color: var(--c-t3);
+  animation: c-strike 0.5s cubic-bezier(0.7, 0, 0.2, 1) 0.15s backwards;
 }
 .c-root .changed {
   color: var(--c-ok);
@@ -169,7 +170,41 @@
   flex-direction: column;
   justify-content: center;
   padding: 0 11vw;
-  background: var(--c-bg);
+  background: #050608;
+  color: #fff;
+}
+.c-film {
+  position: fixed;
+  z-index: 55;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 9vw;
+  background: #050608;
+  color: #fff;
+  pointer-events: none;
+}
+.c-film small {
+  font-size: clamp(20px, 2vw, 32px);
+  font-weight: 800;
+  color: #6fe0a4;
+}
+.c-film .head {
+  max-width: 17em;
+  margin-top: 8px;
+  font-size: clamp(46px, 6vw, 104px);
+  line-height: 1.08;
+  font-weight: 900;
+  letter-spacing: -0.045em;
+}
+.c-film ul {
+  min-height: 4em;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: clamp(14px, 1.2vw, 19px);
+  color: #b8bcc2;
 }
 .c-intro .q {
   max-width: 26em;
@@ -184,7 +219,7 @@
   padding: 0;
   list-style: none;
   font-size: 15px;
-  color: var(--c-t2);
+  color: #9da2a9;
 }
 .c-intro li {
   animation: c-rise 0.22s ease-out;
@@ -467,16 +502,89 @@
 .c-stage3 {
   position: relative;
   min-height: 0;
+  overflow: hidden;
+  perspective: 1400px;
+  perspective-origin: 50% 42%;
+}
+.c-rig,
+.c-world {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  /* Tilted boards dip behind these planes; only the boards may take a click. */
+  pointer-events: none;
+}
+.c-board {
+  pointer-events: auto;
+}
+.c-rig {
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.c-world {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.04fr) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: clamp(30px, 3.6vw, 62px);
-  perspective: 1500px;
+  padding: 6px;
+  transition: transform 1.05s cubic-bezier(0.65, 0, 0.15, 1);
+  will-change: transform;
+}
+.c-fx {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.c-stamp {
+  position: absolute;
+  z-index: 7;
+  padding: 1px 12px;
+  border: 3px solid currentColor;
+  background: rgb(255 255 255 / 0.9);
+  font-size: clamp(20px, 2vw, 34px);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.c-tear {
+  position: absolute;
+  z-index: 6;
+  padding: 2px 6px;
+  background: var(--c-t0);
+  color: #fff;
+  box-shadow: 0 18px 50px rgb(11 13 16 / 0.45);
+  pointer-events: none;
+}
+.c-board::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 38%,
+    rgb(255 255 255 / 0.95) 50%,
+    transparent 62%
+  );
+  pointer-events: none;
+}
+.c-board.speaking::after,
+.c-board.pick::after {
+  animation: c-sheen 1.1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.c-board.dim {
+  opacity: 0.42;
+  filter: blur(1.6px);
 }
 .c-board-B {
   max-height: 53%;
 }
 .c-board {
+  position: relative;
+  overflow: hidden;
   min-height: 0;
   align-self: start;
   display: flex;
@@ -488,7 +596,9 @@
   box-shadow: 0 10px 34px rgb(11 13 16 / 0.12);
   transition:
     border-color 0.2s,
-    box-shadow 0.2s;
+    box-shadow 0.2s,
+    opacity 0.6s,
+    filter 0.6s;
 }
 .c-board-A {
   transform: rotateY(4deg);
@@ -607,6 +717,7 @@
   pointer-events: none;
 }
 .c-thread {
+  stroke-dasharray: 1;
   fill: none;
   stroke: rgb(11 13 16 / 0.5);
   stroke-width: 1.3;
@@ -616,14 +727,12 @@
 }
 .c-root .c-thread.is-refuted {
   stroke: rgb(19 112 66 / 0.8);
-  stroke-dasharray: 2 3;
 }
 .c-root .c-thread.is-unresolved {
   stroke: rgb(143 95 0 / 0.8);
 }
 .c-root .c-thread.on {
-  stroke-width: 2.6;
-  stroke-dasharray: none;
+  stroke-width: 2.8;
   stroke: var(--c-t0);
 }
 .c-packet {
@@ -1252,6 +1361,54 @@
     opacity: 0;
   }
 }
+/* Theatre: while a film runs, the panels step aside and the stage takes the room. */
+.c-bottom {
+  transition:
+    height 0.8s cubic-bezier(0.65, 0, 0.15, 1),
+    opacity 0.5s;
+}
+.c-wall {
+  transition: opacity 0.8s;
+}
+.c-trace {
+  transition: opacity 0.5s;
+}
+.c-root.theater .c-bottom {
+  height: 0;
+  margin-top: -5px;
+  overflow: hidden;
+  opacity: 0;
+}
+.c-root.theater .c-wall {
+  opacity: 0.45;
+}
+.c-root.theater .c-float {
+  width: 54%;
+}
+.c-root.theater .c-float-card {
+  font-size: 14px;
+}
+.c-root.theater .c-now .big {
+  font-size: 22px;
+}
+.c-board.dim {
+  opacity: 0.5;
+}
+@keyframes c-sheen {
+  0% {
+    opacity: 1;
+    transform: translateX(-100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(100%);
+  }
+}
+@keyframes c-strike {
+  from {
+    background-size: 0 2px;
+  }
+}
 @keyframes c-rise {
   from {
     opacity: 0;
@@ -1259,6 +1416,9 @@
   }
 }
 @media (max-width: 1100px) {
+  .c-stage3 {
+    overflow: visible;
+  }
   .console-shell .h-form .access-panel {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1310,6 +1470,13 @@
     margin-bottom: 6px;
     transform: none;
   }
+  .c-rig,
+  .c-world {
+    position: static;
+    display: block;
+    transform: none !important;
+  }
+  .c-fx,
   .c-threads,
   .c-packet,
   .c-wall {

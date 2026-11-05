@@ -85,7 +85,7 @@ export function RouteChart({
   return (
     <section className="c-compare" aria-label="三路对比">
       <h2>
-        三路对比 <span>工时和费用是估算，竖线是你的上限，点路线看它怎么改的</span>
+        三路对比 <span>工时和费用是估算，竖线是你的上限，点路线看详情</span>
       </h2>
       <div className="c-chart">
         <div className="head" aria-hidden="true">
@@ -101,7 +101,7 @@ export function RouteChart({
             <button
               key={id}
               type="button"
-              aria-label={`查看路线 ${id} 的修订过程`}
+              aria-label={`查看路线 ${id} 的详情`}
               disabled={!view}
               className={`row ${verdict?.preferred === id ? "pick" : ""}`}
               style={{ "--route": ROUTE_COLOR[id].replaceAll(",", " ") } as CSSProperties}

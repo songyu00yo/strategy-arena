@@ -587,7 +587,7 @@ export function ChainDeck({
           </em>
           <strong>{peeked.title}</strong>
           <p>{peeked.plain}</p>
-          <small>点击回到这一步</small>
+          <small>点击查看详情</small>
         </div>
       )}
       {shown.map((beat, i) => {
@@ -606,7 +606,7 @@ export function ChainDeck({
               : {
                   role: "button",
                   tabIndex: 0,
-                  "aria-label": `回看第 ${i + 1} 步`,
+                  "aria-label": `查看第 ${i + 1} 步`,
                   title: beat.title,
                   onClick: () => {
                     setPeek(null);

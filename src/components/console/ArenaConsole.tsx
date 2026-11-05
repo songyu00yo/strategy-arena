@@ -15,6 +15,7 @@ import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
 import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
 import { RouteStage } from "./RouteStage";
+import { StepCard } from "./StepCard";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
 
 /** Joins sentences without doubling their end marks. */
@@ -80,6 +81,7 @@ export function ArenaConsole({
   const [filmDone, setFilmDone] = useState(false);
   const [stepwise, setStepwise] = useState(false);
   const [wholeResult, setWholeResult] = useState(false);
+  const [openStep, setOpenStep] = useState<number | null>(null);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
@@ -120,7 +122,8 @@ export function ArenaConsole({
   // Each step's clock starts when the step does, so a new result arriving never restarts it.
   const shotClock = useRef({ index: -1, at: 0 });
   useEffect(() => {
-    if (!playing || !stage) return;
+    // Reading a step holds playback, so nothing moves on behind the card.
+    if (!playing || !stage || openStep !== null) return;
     // Step by step: the viewer moves on when ready. Only the last step still finishes by itself.
     if (stepwise && index < last) return;
     // Only a game already complete at first sight skips ahead; one being watched walks to its end.
@@ -151,7 +154,7 @@ export function ArenaConsole({
       behind ? 0 : Math.max(0, hold - (now - shotClock.current.at)),
     );
     return () => clearTimeout(timer);
-  }, [playing, index, last, stage, speed, live, intro, revealed, lead, stepwise]);
+  }, [playing, index, last, stage, speed, live, intro, revealed, lead, stepwise, openStep]);
 
   const goTo = useCallback(
     (i: number) => {
@@ -358,7 +361,7 @@ export function ArenaConsole({
             lead={lead}
             located={selectedAttack}
             reviewing={reviewing}
-            onStep={goTo}
+            onStep={setOpenStep}
             onEvidence={onEvidence}
             entering={intro && !revealed}
             readOnly={historical || busy}
@@ -472,7 +475,7 @@ export function ArenaConsole({
           </div>
         </main>
         <div className="c-bottom">
-          <RouteChart version={version} beats={beats} index={index} onStep={goTo} />
+          <RouteChart version={version} beats={beats} index={index} onStep={setOpenStep} />
           <section className="c-list" aria-label="全部质疑">
             <h2>
               全部质疑 <span>点击看证据</span>
@@ -507,6 +510,25 @@ export function ArenaConsole({
       )}
       {verdict && directed && !filmDone && current?.id === "judge" && (
         <VerdictFilm verdict={verdict} onDone={endFilm} />
+      )}
+      {openStep !== null && beats[openStep] && (
+        <StepCard
+          version={version}
+          beats={beats}
+          index={openStep}
+          last={index}
+          reviewing={reviewing}
+          onOpen={setOpenStep}
+          onClose={() => setOpenStep(null)}
+          onStage={(i) => {
+            setOpenStep(null);
+            goTo(i);
+          }}
+          onEvidence={(attack) => {
+            setOpenStep(null);
+            onEvidence(attack);
+          }}
+        />
       )}
       {intro && (
         <Intro

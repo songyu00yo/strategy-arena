@@ -13,6 +13,9 @@ jobs:
     timeout-minutes: 25
     env:
       MODEL_API_KEY: ""
+      DEEPSEEK_API_KEY: ""
+      OPENAI_API_KEY: ""
+      ARENA_BILLING_DATABASE_PATH: ""
       MODEL_ID: deepseek-flash
       MODEL_BASE_URL: https://api.deepseek.com/beta
       MODEL_STRUCTURED_OUTPUT: strict-tool

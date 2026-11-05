@@ -22,6 +22,28 @@ export const ChallengeSchema = z.object({
   timeHours: z.number().min(0.01).max(100000).nullable().default(null),
 });
 export type Challenge = z.infer<typeof ChallengeSchema>;
+export const ModelModeSchema = z.enum(["auto", "deepseek", "gpt"]);
+export type ModelMode = z.infer<typeof ModelModeSchema>;
+export type ModelProvider = "deepseek" | "openai";
+export type Currency = "CNY" | "USD";
+export interface ModelSelection {
+  requestedMode: ModelMode;
+  provider: ModelProvider;
+  modelId: string;
+  currency: Currency;
+  policyVersion: string;
+  reason: string;
+}
+export interface ModelOption {
+  provider: ModelProvider;
+  id: string;
+  configured: boolean;
+  currency: Currency;
+  error?: string;
+}
+export const CreateArenaRequestSchema = ChallengeSchema.extend({
+  modelMode: ModelModeSchema.default("auto"),
+});
 export const ClaimSchema = z.object({
   id: short,
   text: short,
@@ -170,6 +192,9 @@ export interface ArenaVersion {
   verdict: Verdict | null;
   costCny: number;
   reservedCny: number;
+  costUsd?: number;
+  reservedUsd?: number;
+  modelSelection?: ModelSelection;
   createdAt: string;
   changeReason: string;
   parentVersionId: string | null;
@@ -184,13 +209,23 @@ export interface ArenaSnapshot {
   versions: ArenaVersion[];
   steps: ArenaStep[];
   events: ArenaEvent[];
-  model: { id: string; configured: boolean; promptVersion: string; schemaVersion: string };
+  model: {
+    id: string;
+    configured: boolean;
+    promptVersion: string;
+    schemaVersion: string;
+    providers?: ModelOption[];
+  };
 }
 export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
   estimatedCny: number;
+  estimatedUsd?: number;
+  currency?: Currency;
+  provider?: ModelProvider;
+  billingAttemptId?: string;
   model: string;
   responseId: string;
   durationMs: number;
@@ -222,4 +257,5 @@ export const InterventionSchema = z.object({
 export const VersionRequestSchema = z.object({
   challenge: ChallengeSchema,
   changeReason: z.string().min(1).max(1000),
+  modelMode: ModelModeSchema.optional(),
 });

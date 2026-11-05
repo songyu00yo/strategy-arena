@@ -26,7 +26,8 @@ try {
   }
   cpSync("migrations", join(staging, "migrations"), {
     recursive: true,
-    filter: (path) => path.endsWith("migrations") || path.endsWith(".sql"),
+    filter: (path) =>
+      path.endsWith("migrations") || path.endsWith("billing") || path.endsWith(".sql"),
   });
   mkdirSync(join(staging, ".next/static"), { recursive: true });
   cpSync(".next/static", join(staging, ".next/static"), {

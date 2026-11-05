@@ -42,8 +42,9 @@ const statusLabels = {
   uncertain: "结果待确认",
   superseded: "历史版本",
 };
-function money(value: number) {
-  return value < 0.01 && value > 0 ? "< ¥0.01" : `¥${value.toFixed(2)}`;
+function money(value: number, currency: "CNY" | "USD" = "CNY") {
+  const symbol = currency === "USD" ? "$" : "¥";
+  return value < 0.01 && value > 0 ? `< ${symbol}0.01` : `${symbol}${value.toFixed(2)}`;
 }
 function Verdict({
   version,
@@ -319,9 +320,10 @@ export default function Page() {
                 ) : (
                   <ChallengeForm
                     pending={arena.busy}
+                    modelProviders={arena.health?.model.providers}
                     disabled={configured === false || !arena.health || accessRequired}
-                    onSubmit={async (challenge) => {
-                      if (await arena.create(challenge)) setVersionId(null);
+                    onSubmit={async (challenge, _reason, modelMode) => {
+                      if (await arena.create(challenge, modelMode)) setVersionId(null);
                     }}
                   />
                 )}
@@ -519,9 +521,26 @@ export default function Page() {
                 </div>
                 <div className="arena-cost">
                   <span>本轮费用估算</span>
-                  <strong>{money(selected.costCny)}</strong>
-                  {selected.reservedCny > 0 && (
-                    <small>另有 {money(selected.reservedCny)} 调用中预留</small>
+                  <strong>
+                    {selected.modelSelection?.currency === "USD"
+                      ? money(selected.costUsd ?? 0, "USD")
+                      : money(selected.costCny)}
+                  </strong>
+                  {(selected.reservedCny > 0 || (selected.reservedUsd ?? 0) > 0) && (
+                    <small>
+                      另有{" "}
+                      {selected.modelSelection?.currency === "USD"
+                        ? money(selected.reservedUsd ?? 0, "USD")
+                        : money(selected.reservedCny)}{" "}
+                      调用中预留
+                    </small>
+                  )}
+                  {selected.modelSelection && (
+                    <small>
+                      {selected.modelSelection.modelId}
+                      <br />
+                      {selected.modelSelection.reason}
+                    </small>
                   )}
                   <small>按已记录用量估算，非最终账单</small>
                 </div>
@@ -745,12 +764,12 @@ export default function Page() {
           <div className="model-information">
             <span className={`model-state ${configured ? "configured" : ""}`}>
               <span className="connection-dot" />
-              {configured ? "真实模型已连接" : "模型尚未连接"}
+              {configured ? "已有模型密钥配置，连通性待实际请求确认" : "模型尚未配置"}
             </span>
             <dl>
               <div>
                 <dt>模型</dt>
-                <dd>{arena.health?.model.id || "尚未获取"}</dd>
+                <dd>{selected?.modelSelection?.modelId || arena.health?.model.id || "尚未获取"}</dd>
               </div>
               <div>
                 <dt>应用版本</dt>
@@ -809,12 +828,14 @@ export default function Page() {
           </p>
           <ChallengeForm
             initial={selected.challenge}
+            initialModelMode={arena.active?.modelSelection?.requestedMode ?? "deepseek"}
+            modelProviders={arena.health?.model.providers}
             pending={arena.busy}
             editing
             submitLabel="按新条件重新推演"
             onCancel={() => setEditing(false)}
-            onSubmit={async (challenge, reason) => {
-              if (await arena.rematch(challenge, reason)) {
+            onSubmit={async (challenge, reason, modelMode) => {
+              if (await arena.rematch(challenge, reason, modelMode)) {
                 setVersionId(null);
                 setEditing(false);
               }

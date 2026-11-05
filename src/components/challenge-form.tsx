@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { ArrowDown, ArrowRight, Plus, X, FlaskConical } from "lucide-react";
-import { ChallengeSchema, type Challenge } from "@/lib/contracts";
+import { ChallengeSchema, type Challenge, type ModelMode, type ModelOption } from "@/lib/contracts";
+import { ModelSelector } from "./model-selector";
+import { routeModel } from "@/lib/model-routing";
 import { videoChallenge } from "@/lib/sample";
 
 export const emptyChallenge: Challenge = {
@@ -31,16 +33,24 @@ export function ChallengeForm({
   editing = false,
   onSubmit,
   onCancel,
+  initialModelMode = "auto",
+  modelProviders,
 }: {
   initial?: Challenge;
   submitLabel?: string;
   pending: boolean;
   disabled?: boolean;
   editing?: boolean;
-  onSubmit: (challenge: Challenge, reason: string) => void;
+  onSubmit: (challenge: Challenge, reason: string, modelMode: ModelMode) => void;
+  initialModelMode?: ModelMode;
+  modelProviders?: ModelOption[];
   onCancel?: () => void;
 }) {
   const [value, setValue] = useState<Challenge>(initial ?? emptyChallenge);
+  const [modelMode, setModelMode] = useState<ModelMode>(initialModelMode);
+  const chosen = routeModel(value, modelMode);
+  const modelUnavailable =
+    modelProviders?.find((p) => p.provider === chosen.provider)?.configured === false;
   const [details, setDetails] = useState(editing);
   const [error, setError] = useState("");
   const [reason, setReason] = useState("");
@@ -48,6 +58,7 @@ export function ChallengeForm({
     setValue((v) => ({ ...v, [key]: next }));
   function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (pending || disabled || modelUnavailable) return;
     const result = ChallengeSchema.safeParse({
       ...value,
       options: value.options.map((o) => o.trim()).filter(Boolean),
@@ -61,7 +72,7 @@ export function ChallengeForm({
       return;
     }
     setError("");
-    onSubmit(result.data, reason.trim());
+    onSubmit(result.data, reason.trim(), modelMode);
   }
   return (
     <form className={`challenge-form ${editing ? "editing-form" : ""}`} onSubmit={submit}>
@@ -258,6 +269,13 @@ export function ChallengeForm({
           />
         </label>
       )}
+      <ModelSelector
+        mode={modelMode}
+        onChange={setModelMode}
+        challenge={value}
+        providers={modelProviders}
+        disabled={pending}
+      />
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -275,7 +293,11 @@ export function ChallengeForm({
               取消
             </button>
           )}
-          <button className="primary-button" type="submit" disabled={pending || disabled}>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={pending || disabled || modelUnavailable}
+          >
             {pending ? "正在建立擂台…" : submitLabel}
             <ArrowRight size={18} />
           </button>

@@ -23,6 +23,12 @@ import {
   restoreStrictNulls,
   toStrictToolSchema,
 } from "../src/lib/server/strict-schema";
+// Explicit ledger double: adapter/schema tests never use a production budget or network.
+vi.mock("../src/lib/server/billing", () => ({
+  reserveBilling: vi.fn(),
+  settleBilling: vi.fn(),
+  holdBilling: vi.fn(),
+}));
 const input: StageInput = {
   role: "A",
   challenge: ChallengeSchema.parse({ goal: "两周内完成课程并制作一个可以演示的项目" }),

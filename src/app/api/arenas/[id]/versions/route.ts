@@ -12,6 +12,8 @@ export async function POST(request: Request, context: ArenaRouteContext) {
         requireOwner(request),
         input.challenge,
         input.changeReason,
+        undefined,
+        input.modelMode,
       ),
     );
   } catch (error) {

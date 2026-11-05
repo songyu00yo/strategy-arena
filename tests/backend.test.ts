@@ -28,7 +28,9 @@ vi.mock("../src/lib/server/model", () => {
   }
   return {
     ModelCallError,
-    getModelConfig: () => ({
+    getModelConfig: (provider = "deepseek") => ({
+      provider,
+      currency: provider === "openai" ? "USD" : "CNY",
       id: model.id,
       configured: model.configured,
       promptVersion: "test",

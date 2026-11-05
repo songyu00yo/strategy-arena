@@ -1,5 +1,4 @@
-import { advanceArena } from "./runtime";
-import { getModelConfig } from "./model";
+import { advanceArena, modelInfo } from "./runtime";
 import { ArenaError, atomic, db } from "./db";
 import { expireLeases } from "./runtime";
 
@@ -14,7 +13,7 @@ const globalWorker = globalThis as WorkerGlobal;
 
 /** Long-lived Node process only. SQLite claims remain authoritative across workers and UI triggers. */
 export function startArenaWorker(): (() => void) | undefined {
-  if (process.env.ARENA_WORKER_ENABLED !== "true" || !getModelConfig().configured) return undefined;
+  if (process.env.ARENA_WORKER_ENABLED !== "true" || !modelInfo().configured) return undefined;
   if (globalWorker.__strategyArenaWorker && !globalWorker.__strategyArenaWorker.stopped)
     return () => stopArenaWorker();
   const state: WorkerState = {
@@ -41,7 +40,7 @@ async function tick(state: WorkerState) {
   if (state.stopped) return;
   for (const [key, until] of state.cooldowns) if (until <= Date.now()) state.cooldowns.delete(key);
   try {
-    if (!getModelConfig().configured) return;
+    if (!modelInfo().configured) return;
     const candidates = atomic(() => {
       expireLeases();
       return db()

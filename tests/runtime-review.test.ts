@@ -1,5 +1,8 @@
 /** Adversarial orchestration regressions. Only the model boundary is mocked. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ChallengeSchema,
   type ArenaVersion,
@@ -24,7 +27,9 @@ vi.mock("../src/lib/server/model", () => {
   }
   return {
     ModelCallError,
-    getModelConfig: () => ({
+    getModelConfig: (provider = "deepseek") => ({
+      provider,
+      currency: provider === "openai" ? "USD" : "CNY",
       id: "review-fixture",
       configured: true,
       promptVersion: "review",
@@ -129,7 +134,10 @@ function proposedVerdict(preferred: "A" | "B"): Verdict {
     attackFindings: [],
   };
 }
+let billingDirectory: string;
 beforeEach(() => {
+  billingDirectory = mkdtempSync(join(tmpdir(), "arena-runtime-review-billing-"));
+  vi.stubEnv("ARENA_BILLING_DATABASE_PATH", join(billingDirectory, "billing.sqlite"));
   closeDb();
   fixture.generate.mockReset();
   for (const [name, value] of Object.entries({
@@ -144,6 +152,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   closeDb();
+  rmSync(billingDirectory, { recursive: true, force: true });
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });

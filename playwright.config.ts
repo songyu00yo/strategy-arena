@@ -35,6 +35,9 @@ export default defineConfig({
     timeout: 60_000,
     env: {
       MODEL_API_KEY: "",
+      DEEPSEEK_API_KEY: "",
+      OPENAI_API_KEY: "",
+      ARENA_BILLING_DATABASE_PATH: "",
       ARENA_ACCESS_CODE: "e2e-only-access-code",
       ARENA_PUBLIC_DEMO: "false",
       ARENA_PUBLIC_ORIGIN: origin,

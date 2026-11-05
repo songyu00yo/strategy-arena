@@ -31,6 +31,16 @@ type Spark = {
   rise: number;
 };
 type Ring = { x: number; y: number; life: number; max: number; reach: number; color: string };
+type Stream = {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  bow: number;
+  color: string;
+  age: number;
+  dur: number;
+};
 type Mote = { x: number; y: number; z: number; phase: number };
 
 /** A light layer: comet trails, charges, impacts, embers and drifting dust. It only decorates recorded steps. */
@@ -38,6 +48,7 @@ export class Sparks {
   private sparks: Spark[] = [];
   private rings: Ring[] = [];
   private motes: Mote[] = [];
+  private streams: Stream[] = [];
   private sprites = new Map<string, HTMLCanvasElement>();
   private context: CanvasRenderingContext2D | null;
   private width = 0;
@@ -96,6 +107,12 @@ export class Sparks {
   ) {
     if (this.sparks.length > 1400) return;
     this.sparks.push({ x, y, vx, vy, life: 0, max, size, color, drag, rise });
+  }
+
+  /** Energy travelling from one part of the screen to another, ending in a small ring. */
+  stream(x0: number, y0: number, x1: number, y1: number, color: string, ms: number) {
+    const bow = (Math.random() < 0.5 ? -1 : 1) * Math.min(150, Math.hypot(x1 - x0, y1 - y0) * 0.25);
+    this.streams.push({ x0, y0, x1, y1, bow, color, age: 0, dur: ms / 1000 });
   }
 
   comet(x: number, y: number, color: string) {
@@ -197,6 +214,20 @@ export class Sparks {
         c.drawImage(sprite, x - size / 2, m.y * this.height - size / 2, size, size);
       }
     }
+    this.streams = this.streams.filter((f) => {
+      f.age += dt;
+      const k = Math.min(1, f.age / f.dur);
+      const e = 1 - Math.pow(1 - k, 2.4);
+      const nx = -(f.y1 - f.y0);
+      const ny = f.x1 - f.x0;
+      const len = Math.hypot(nx, ny) || 1;
+      const arc = Math.sin(e * Math.PI) * f.bow;
+      const x = f.x0 + (f.x1 - f.x0) * e + (nx / len) * arc;
+      const y = f.y0 + (f.y1 - f.y0) * e + (ny / len) * arc;
+      this.comet(x, y, f.color);
+      if (k >= 1) this.rings.push({ x, y, life: 0, max: 0.55, reach: 46, color: f.color });
+      return k < 1;
+    });
     this.rings = this.rings.filter((r) => (r.life += dt) < r.max);
     for (const r of this.rings) {
       if (r.life < 0) continue;
@@ -304,7 +335,7 @@ export function Decode({
 }
 
 /** A number that rolls to its new value and jumps as it lands. */
-export function Roll({ value }: { value: number }) {
+export function Roll({ value, delay = 0 }: { value: number; delay?: number }) {
   const ref = useRef<HTMLSpanElement>(null);
   const shown = useRef(value);
   useEffect(() => {
@@ -321,12 +352,12 @@ export function Roll({ value }: { value: number }) {
         { transform: "scale(1.9) translateY(-3px)", textShadow: "0 0 18px currentColor" },
         { transform: "none", textShadow: "0 0 0 transparent" },
       ],
-      { duration: 700, easing: "cubic-bezier(.2,1.4,.3,1)" },
+      { duration: 700, delay, easing: "cubic-bezier(.2,1.4,.3,1)" },
     );
-    const began = performance.now();
+    const began = performance.now() + delay;
     let frame = 0;
     const tick = (now: number) => {
-      const k = Math.min(1, (now - began) / 700);
+      const k = Math.max(0, Math.min(1, (now - began) / 700));
       const eased = 1 - Math.pow(1 - k, 3);
       el.textContent = Math.round(from + (value - from) * eased).toLocaleString();
       if (k < 1) frame = requestAnimationFrame(tick);
@@ -336,6 +367,8 @@ export function Roll({ value }: { value: number }) {
       cancelAnimationFrame(frame);
       el.textContent = value.toLocaleString();
     };
+    // The delay only applies to the change that carried it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
   return (
     <span ref={ref} className="c-roll">

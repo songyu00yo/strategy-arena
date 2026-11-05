@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import type { ArenaEvent, ArenaVersion, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
-import { outputOf, type Beat } from "./beats";
+import { nameOf, outputOf, type Beat } from "./beats";
 import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
 import { STAGE_LABELS, type Stage } from "@/lib/contracts";
 
@@ -99,15 +99,37 @@ const CHAPTER: Record<Stage, string> = {
   judge: "裁决",
 };
 
-/** A chapter word sweeps across the whole frame whenever the game enters a new stage. */
-export function Chapter({ stage, number }: { stage: Stage; number: number }) {
+/** The stage word lands huge, then flies up and becomes its label on the timeline. */
+export function Chapter({ stage }: { stage: Stage }) {
+  const word = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = word.current;
+    if (!el || reduced()) return;
+    const timer = setTimeout(() => {
+      const to = document.querySelector(".c-time .seg.here span")?.getBoundingClientRect();
+      const from = el.getBoundingClientRect();
+      if (!to) return;
+      const scale = Math.max(0.04, to.height / from.height);
+      el.animate(
+        [
+          { transform: "none", opacity: 1 },
+          {
+            transform: `translate(${to.left + to.width / 2 - (from.left + from.width / 2)}px,${
+              to.top + to.height / 2 - (from.top + from.height / 2)
+            }px) scale(${scale})`,
+            opacity: 0.25,
+          },
+        ],
+        { duration: 560, easing: "cubic-bezier(.7,0,.15,1)", fill: "forwards" },
+      );
+    }, 520);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <div className="c-chapter" aria-hidden="true">
-      <i />
-      <b>{CHAPTER[stage]}</b>
-      <small>
-        0{number} · {STAGE_LABELS[stage]}
-      </small>
+      <b ref={word}>
+        <Chars text={CHAPTER[stage]} active />
+      </b>
     </div>
   );
 }
@@ -128,7 +150,7 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
         { clipPath: `circle(0px at ${x}px ${y}px)` },
         { clipPath: `circle(150vmax at ${x}px ${y}px)` },
       ],
-      { duration: 850, easing: "cubic-bezier(.7,0,.2,1)", fill: "both" },
+      { duration: 850, delay: 650, easing: "cubic-bezier(.7,0,.2,1)", fill: "both" },
     );
     let closing: Animation | undefined;
     const close = () => {
@@ -147,7 +169,7 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
       );
       closing.onfinish = onDone;
     };
-    const timer = setTimeout(close, 3900);
+    const timer = setTimeout(close, 3800);
     addEventListener("keydown", close);
     return () => {
       clearTimeout(timer);
@@ -165,12 +187,12 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
         />
       </small>
       <div className="head">
-        <Chars text={verdict.headline} active delay={600} />
+        <Chars text={verdict.headline} active delay={1150} />
       </div>
       <ul>
         {verdict.conditions.slice(0, 2).map((line, i) => (
           <li key={line}>
-            <Decode text={line} active delay={1100 + i * 220} />
+            <Decode text={line} active delay={1750 + i * 220} />
           </li>
         ))}
       </ul>
@@ -347,117 +369,141 @@ export function RecordWall({ version, events }: { version: ArenaVersion; events:
   );
 }
 
-/** The current dispute lifts off the wall and runs line by line; earlier ones stack behind it. */
-export function FloatingWindows({
+const STAGE_WORD: Record<Stage, string> = STAGE_LABELS;
+
+/** The chain of thought: every step so far stays in view as a card, the newest in front. */
+export function ChainDeck({
   version,
   beats,
   index,
   directed,
+  lead,
 }: {
   version: ArenaVersion;
   beats: Beat[];
   index: number;
   directed: boolean;
+  lead: number;
 }) {
-  const current = beats[index];
   const shown = beats.slice(0, index + 1);
-  const box = useRef<HTMLDivElement>(null);
-  const attack = current?.attack;
+  const front = useRef<HTMLDivElement>(null);
+  const current = beats[index];
   useEffect(() => {
-    if (!box.current || !attack || !directed || reduced()) return;
-    box.current.animate(
+    if (!front.current || !directed || reduced()) return;
+    front.current.animate(
       [
         {
-          transform: "translateY(90px) rotateX(24deg) scale(0.74)",
+          translate: "240px 30px",
+          rotate: "y -34deg",
+          scale: "1.1",
           opacity: 0,
           filter: "blur(10px)",
         },
-        { transform: "none", opacity: 1, filter: "none" },
+        { translate: "0 0", rotate: "y 0deg", scale: "1", opacity: 1, filter: "blur(0)" },
       ],
-      { duration: 620, delay: 620, easing: "cubic-bezier(.2,.9,.2,1)", fill: "backwards" },
+      { duration: 760, delay: lead + 60, easing: "cubic-bezier(.16,1.25,.3,1)", fill: "backwards" },
     );
-    // Rising only belongs to a new dispute, not to each later step of the same one.
+    // Only a new step brings a card in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attack?.id]);
-  const stateOf = (a: Attack) => (shown.some((b) => b.id === `v:${a.id}`) ? a.status : "pending");
-  const past = shown
-    .filter((b) => b.stage === "attack" && b.attack!.id !== attack?.id)
-    .map((b) => b.attack!)
-    .slice(-5);
-  const strips = past.map((a, i) => (
-    <div
-      key={a.id}
-      className="c-float-back"
-      style={{
-        scale: String(1 - (past.length - i) * 0.018),
-        opacity: 1 - (past.length - i) * 0.1,
-      }}
-    >
-      <b className={`is-${stateOf(a)}`}>
-        {a.from}→{a.targetStrategyId} {attackMeta[stateOf(a)].label}
-      </b>{" "}
-      {a.reason}
-    </div>
-  ));
-  if (!attack)
-    return strips.length ? (
-      <div className="c-float" aria-hidden="true">
-        {strips}
-      </div>
-    ) : null;
-  const checked = shown.some((b) => b.id === `v:${attack.id}`);
-  const response = shown
-    .find((b) => b.id === `r:${attack.targetStrategyId}`)
-    ?.revision?.responses.find((r) => r.attackId === attack.id);
-  const evidence = version.evidence.filter((e) => e.attackId === attack.id);
-  const running = current.stage === "attack" ? 1 : current.stage === "verify" ? 2 : 3;
-  const rows: [string, string][] = [
-    [`${attack.targetStrategyId} 原话`, attack.claimQuote],
-    [`${attack.from} 质疑`, attack.reason],
-    [
-      "核验",
-      checked
-        ? [
-            attackMeta[attack.status].label,
-            ...evidence.map(
-              (e) =>
-                `${e.expression ? `${e.expression} = ${e.result ?? "无法计算"} ` : ""}${e.content || evidenceMeta[e.status].label}`,
-            ),
-          ].join(" · ")
-        : "等待",
-    ],
-    [
-      `${attack.targetStrategyId} 回应`,
-      response
-        ? `${decisionMeta[response.decision].label}。${response.reason} ${response.change}`
-        : "等待",
-    ],
-  ];
+  }, [current?.id]);
+  if (!shown.length) return null;
+  const attack = current?.attack;
+  const seenIds = new Set(shown.map((b) => b.id));
+  const checked = !!attack && seenIds.has(`v:${attack.id}`);
+  const response =
+    attack &&
+    shown
+      .find((b) => b.id === `r:${attack.targetStrategyId}`)
+      ?.revision?.responses.find((r) => r.attackId === attack.id);
+  const evidence = attack ? version.evidence.filter((e) => e.attackId === attack.id) : [];
+  const running = current?.stage === "attack" ? 1 : current?.stage === "verify" ? 2 : 3;
+  const rows: [string, string][] = attack
+    ? [
+        [`${attack.targetStrategyId} 原话`, attack.claimQuote],
+        [`${attack.from} 质疑`, attack.reason],
+        [
+          "核验",
+          checked
+            ? [
+                attackMeta[attack.status].label,
+                ...evidence.map(
+                  (e) =>
+                    `${e.expression ? `${e.expression} = ${e.result ?? "无法计算"} ` : ""}${e.content || evidenceMeta[e.status].label}`,
+                ),
+              ].join(" · ")
+            : "等待",
+        ],
+        [
+          `${attack.targetStrategyId} 回应`,
+          response
+            ? `${decisionMeta[response.decision].label}。${response.reason} ${response.change}`
+            : "等待",
+        ],
+      ]
+    : [];
   return (
-    <div className="c-float" aria-hidden="true">
-      {strips}
-      <div className="c-float-card" ref={box}>
-        <div className="tb">
-          <b>
-            {attack.from} → {attack.targetStrategyId}.{attack.targetClaimId}
-          </b>
-          <span>{checked ? attackMeta[attack.status].label : "核验中"}</span>
-        </div>
-        <div className="body">
-          {rows.map(([label, text], i) => (
-            <div key={label} className={`ln ${i === running ? "run" : i < running ? "ran" : ""}`}>
-              <em>{label}</em>
+    <div
+      className="c-deck"
+      aria-hidden="true"
+      style={{ "--n": Math.max(shown.length - 1, 1) } as CSSProperties}
+    >
+      {shown.map((beat, i) => {
+        const depth = shown.length - 1 - i;
+        const isFront = depth === 0;
+        const dispute = isFront && !!attack;
+        return (
+          <div
+            key={beat.id}
+            ref={isFront ? front : undefined}
+            className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""}`}
+            style={
+              {
+                "--d": depth,
+                "--route": (ROUTE_COLOR[beat.agent] ?? "11,13,16").replaceAll(",", " "),
+                zIndex: 100 - depth,
+              } as CSSProperties
+            }
+          >
+            <div className="tb">
+              <b>
+                {String(i + 1).padStart(2, "0")} {nameOf(beat.agent)}
+                {beat.to ? ` → ${nameOf(beat.to)}` : ""}
+              </b>
               <span>
-                <Decode
-                  text={text}
-                  active={directed && i === running}
-                  delay={i === 0 ? 1000 : 150}
-                />
+                {dispute
+                  ? checked
+                    ? attackMeta[attack.status].label
+                    : "核验中"
+                  : STAGE_WORD[beat.stage]}
               </span>
             </div>
-          ))}
-        </div>
-      </div>
+            {dispute ? (
+              <div className="body">
+                {rows.map(([label, text], r) => (
+                  <div
+                    key={label}
+                    className={`ln ${r === running ? "run" : r < running ? "ran" : ""}`}
+                  >
+                    <em>{label}</em>
+                    <span>
+                      <Decode
+                        text={text}
+                        active={directed && r === running}
+                        delay={lead + (r === 0 ? 700 : 300)}
+                      />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="body plain">
+                <strong>{beat.title}</strong>
+                <p>{beat.plain}</p>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

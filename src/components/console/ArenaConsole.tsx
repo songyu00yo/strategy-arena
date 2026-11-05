@@ -16,8 +16,14 @@ import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteStage } from "./RouteStage";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
 
+const METRIC_STATE: Record<string, string> = {
+  成立: "supported",
+  已反驳: "refuted",
+  未决: "unresolved",
+};
+
 /** How long each kind of step holds the screen during a film. */
-const SHOT_MS = { propose: 3400, attack: 3700, verify: 3300, revise: 2900, judge: 6400 };
+const SHOT_MS = { propose: 2300, attack: 2700, verify: 2500, revise: 2000, judge: 5600 };
 
 const OUTCOME = {
   recommendation: "当前条件下的建议",
@@ -96,6 +102,9 @@ export function ArenaConsole({
   }, []);
 
   const stage = current?.stage;
+  // The first step of a stage waits for its word to land, so the two never collide.
+  const firstOfStage = !!stage && stage !== "judge" && beats[index - 1]?.stage !== stage;
+  const lead = playing && firstOfStage ? 760 / speed : 0;
   useEffect(() => {
     if (!playing || !stage) return;
     // A game that finished with much left to show goes straight to its result; nobody waits on a replay.
@@ -116,10 +125,10 @@ export function ArenaConsole({
         setPlaying(false);
         setCursor(null);
       },
-      behind ? 0 : SHOT_MS[stage] / speed,
+      behind ? 0 : SHOT_MS[stage] / speed + lead,
     );
     return () => clearTimeout(timer);
-  }, [playing, index, last, stage, speed, live, intro, revealed]);
+  }, [playing, index, last, stage, speed, live, intro, revealed, lead]);
 
   const goTo = useCallback(
     (i: number) => {
@@ -185,6 +194,14 @@ export function ArenaConsole({
   const peak = Math.max(1, ...used.map((u) => u.inputTokens + u.outputTokens));
   const verdict = seen.has("judge") ? version.verdict : null;
   const directed = motion;
+  // Counts roll when the energy reaches them, not before.
+  const rollDelay = !directed
+    ? 0
+    : stage === "attack"
+      ? lead + 1380 / speed
+      : stage === "verify"
+        ? lead + 1720 / speed
+        : 0;
   const metrics: [string, number, string][] = [
     ["质疑", attacks.length, ""],
     ["成立", count("supported"), "bad"],
@@ -195,9 +212,7 @@ export function ArenaConsole({
   ];
 
   return (
-    <div
-      className={`c-root ${playing ? "theater" : ""} ${playing && current?.stage !== "judge" ? "aside" : ""}`}
-    >
+    <div className={`c-root ${playing ? "theater" : ""} `}>
       <RecordWall version={version} events={logged} />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
@@ -237,10 +252,10 @@ export function ArenaConsole({
           </div>
           <dl className="c-metrics">
             {metrics.map(([label, value, tone]) => (
-              <div key={label} className={tone}>
+              <div key={label} className={tone} data-state={METRIC_STATE[label]}>
                 <dt>{label}</dt>
                 <dd>
-                  <Roll value={value} />
+                  <Roll value={value} delay={rollDelay} />
                 </dd>
               </div>
             ))}
@@ -254,6 +269,7 @@ export function ArenaConsole({
             speed={speed}
             directed={directed}
             camera={cursor !== null || playing}
+            lead={lead}
             entering={intro && !revealed}
             readOnly={historical || busy}
             onClaim={onClaim}
@@ -406,11 +422,7 @@ export function ArenaConsole({
         </div>
       </div>
       {playing && current && current.stage !== "judge" && (
-        <Chapter
-          key={current.stage}
-          stage={current.stage}
-          number={STAGES.indexOf(current.stage) + 1}
-        />
+        <Chapter key={current.stage} stage={current.stage} />
       )}
       {verdict && directed && !filmDone && current?.id === "judge" && (
         <VerdictFilm verdict={verdict} onDone={endFilm} />

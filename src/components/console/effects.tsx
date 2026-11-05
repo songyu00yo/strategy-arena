@@ -116,22 +116,22 @@ export class Sparks {
   }
 
   comet(x: number, y: number, color: string) {
-    for (let i = 0; i < 9; i++)
+    for (let i = 0; i < 4; i++)
       this.add(
         x + (Math.random() - 0.5) * 7,
         y + (Math.random() - 0.5) * 7,
         (Math.random() - 0.5) * 46,
         (Math.random() - 0.5) * 46,
         0.45 + Math.random() * 0.7,
-        5 + Math.random() * 15,
+        3 + Math.random() * 8,
         color,
       );
-    this.add(x, y, 0, 0, 0.32, 58, color);
+    this.add(x, y, 0, 0, 0.26, 26, color);
   }
 
   /** Light gathers to a point before something launches. */
   charge(x: number, y: number, color: string) {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 2; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 70 + Math.random() * 110;
       this.add(
@@ -148,19 +148,19 @@ export class Sparks {
   }
 
   impact(x: number, y: number, color: string, power = 1) {
-    for (let i = 0; i < 4; i++)
-      this.rings.push({ x, y, life: -i * 0.08, max: 0.85, reach: (90 + i * 70) * power, color });
-    this.add(x, y, 0, 0, 0.32, 240 * power, color);
-    for (let i = 0; i < 130 * power; i++) {
+    for (let i = 0; i < 2; i++)
+      this.rings.push({ x, y, life: -i * 0.08, max: 0.85, reach: (60 + i * 42) * power, color });
+    this.add(x, y, 0, 0, 0.26, 90 * power, color);
+    for (let i = 0; i < 46 * power; i++) {
       const a = Math.random() * Math.PI * 2;
-      const speed = (60 + Math.random() * 560) * power;
+      const speed = (40 + Math.random() * 240) * power;
       this.add(
         x,
         y,
         Math.cos(a) * speed,
         Math.sin(a) * speed,
         0.45 + Math.random() * 0.95,
-        3 + Math.random() * 12,
+        2 + Math.random() * 6,
         color,
         0.93,
         40,
@@ -170,7 +170,7 @@ export class Sparks {
 
   /** A band of light rising from a line, as when old text burns away. */
   burn(x: number, y: number, width: number, color: string) {
-    for (let i = 0; i < 80; i++)
+    for (let i = 0; i < 30; i++)
       this.add(
         x + Math.random() * width,
         y + Math.random() * 14,
@@ -209,7 +209,7 @@ export class Sparks {
         if (m.y < -0.02) m.y = 1.02;
         const x = (m.x + Math.sin(this.time * 0.22 + m.phase) * 0.018) * this.width;
         const twinkle = 0.45 + 0.55 * Math.sin(this.time * 1.5 + m.phase * 3);
-        c.globalAlpha = this.dust * twinkle * m.z * (this.dark ? 0.5 : 0.16);
+        c.globalAlpha = this.dust * twinkle * m.z * (this.dark ? 0.5 : 0.09);
         const size = 2.5 + m.z * 9;
         c.drawImage(sprite, x - size / 2, m.y * this.height - size / 2, size, size);
       }
@@ -225,7 +225,7 @@ export class Sparks {
       const x = f.x0 + (f.x1 - f.x0) * e + (nx / len) * arc;
       const y = f.y0 + (f.y1 - f.y0) * e + (ny / len) * arc;
       this.comet(x, y, f.color);
-      if (k >= 1) this.rings.push({ x, y, life: 0, max: 0.55, reach: 46, color: f.color });
+      if (k >= 1) this.rings.push({ x, y, life: 0, max: 0.55, reach: 22, color: f.color });
       return k < 1;
     });
     this.rings = this.rings.filter((r) => (r.life += dt) < r.max);
@@ -235,8 +235,8 @@ export class Sparks {
       c.globalAlpha = 1;
       c.beginPath();
       c.arc(r.x, r.y, r.reach * (1 - Math.pow(1 - k, 3)), 0, Math.PI * 2);
-      c.strokeStyle = `rgba(${r.color},${(1 - k) * 0.9})`;
-      c.lineWidth = 5 * (1 - k) + 0.5;
+      c.strokeStyle = `rgba(${r.color},${(1 - k) * 0.55})`;
+      c.lineWidth = 2.4 * (1 - k) + 0.4;
       c.stroke();
     }
     this.sparks = this.sparks.filter((s) => (s.life += dt) < s.max);
@@ -349,7 +349,7 @@ export function Roll({ value, delay = 0 }: { value: number; delay?: number }) {
     }
     el.animate(
       [
-        { transform: "scale(1.9) translateY(-3px)", textShadow: "0 0 18px currentColor" },
+        { transform: "scale(1.3)", textShadow: "0 0 8px currentColor" },
         { transform: "none", textShadow: "0 0 0 transparent" },
       ],
       { duration: 700, delay, easing: "cubic-bezier(.2,1.4,.3,1)" },
@@ -392,8 +392,7 @@ export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       sparks.fit(canvas.clientWidth, canvas.clientHeight);
-      if (embers?.length)
-        for (let i = 0; i < 3; i++) sparks.ember(embers[Math.floor(Math.random() * embers.length)]);
+      if (embers?.length) sparks.ember(embers[Math.floor(Math.random() * embers.length)]);
       sparks.tick(dt);
       frame = requestAnimationFrame(tick);
     };

@@ -131,7 +131,7 @@ for (const screen of screens) {
       await capture(page, testInfo, `console-${screen.name}-verdict`, false);
       await page.keyboard.press("Home");
       await page.getByRole("button", { name: "从头放映" }).click();
-      await page.waitForTimeout(2300 * 3 + 760 + 1000);
+      await page.waitForTimeout(1600 * 3 + 560 + 800);
       await capture(page, testInfo, `console-${screen.name}-challenge`, false);
       expect(await noScroll(page)).toBeLessThanOrEqual(0);
       await expect(page.locator(".c-board")).toHaveCount(3);
@@ -369,6 +369,20 @@ test.describe("behaviour", () => {
       });
       expect(cropped).toBe(false);
     }
+  });
+
+  test("the verdict always hands back, even while the record keeps refreshing", async ({
+    page,
+  }) => {
+    await skipIntro(page);
+    await mountFixture(page, snapshotOf([version(1, { status: "running" })]));
+    await openArena(page);
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowRight");
+    await expect(page.locator(".c-film")).toBeVisible();
+    await expect(page.locator(".c-film")).toHaveCount(0, { timeout: 7000 });
+    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
   });
 
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {

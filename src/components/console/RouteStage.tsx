@@ -109,12 +109,12 @@ export function RouteStage({
       const dx = at.x - x;
       const dy = at.y - y;
       const d = Math.max(90, Math.hypot(dx, dy));
-      const force = (power * 1000) / (d + 200);
+      const force = (power * 420) / (d + 200);
       push(id, (dx / d) * force, (dy / d) * force, -force * 0.8, (dx / d) * force * 0.14);
     }
-    cam.current.s.v += 0.32 * power;
-    cam.current.y.v += 90 * power;
-    cam.current.x.v += (Math.random() - 0.5) * 170 * power;
+    cam.current.s.v += 0.1 * power;
+    cam.current.y.v += 28 * power;
+    cam.current.x.v += (Math.random() - 0.5) * 56 * power;
   };
 
   const beatId = current?.id;
@@ -132,8 +132,8 @@ export function RouteStage({
       attack: activeAttack,
       kind: current.stage,
       began: performance.now(),
-      wait: animate ? lead + (current.stage === "attack" ? 480 : 820) / speed : 0,
-      duration: animate ? 900 / speed : 0,
+      wait: animate ? lead + (current.stage === "attack" ? 260 : 560) / speed : 0,
+      duration: animate ? 720 / speed : 0,
       landed: !animate,
     };
     if (animate && current.stage === "verify" && host) {
@@ -154,7 +154,7 @@ export function RouteStage({
             { transform: `translateY(${reach}px)`, opacity: 1, offset: 0.7 },
             { transform: "translateY(0)", opacity: 0 },
           ],
-          { duration: 900 / speed, easing: "cubic-bezier(.5,0,.5,1)" },
+          { duration: 620 / speed, easing: "cubic-bezier(.5,0,.5,1)" },
         ).onfinish = () => beam.remove();
       }, lead);
       return () => clearTimeout(timer);
@@ -202,20 +202,20 @@ export function RouteStage({
         giant.animate(
           [
             {
-              transform: "translate(-50%,-50%) scale(1.8) rotate(-10deg)",
+              transform: "translate(-50%,-50%) scale(1.3)",
               opacity: 0,
-              filter: "blur(36px)",
+              filter: "blur(14px)",
               offset: 0,
             },
             {
-              transform: "translate(-50%,-50%) scale(1) rotate(0deg)",
-              opacity: 1,
+              transform: "translate(-50%,-50%) scale(1)",
+              opacity: 0.5,
               filter: "blur(0)",
               offset: 0.4,
             },
             {
-              transform: "translate(-50%,-50%) scale(.96)",
-              opacity: 1,
+              transform: "translate(-50%,-50%) scale(.98)",
+              opacity: 0.5,
               filter: "blur(0)",
               offset: 0.52,
             },
@@ -226,15 +226,15 @@ export function RouteStage({
               offset: 1,
             },
           ],
-          { duration: 1050 / speed, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
+          { duration: 820 / speed, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
         ).onfinish = () => giant.remove();
       });
-      later(1120, () => {
+      later(880, () => {
         const box = node.getBoundingClientRect();
-        fx.current?.impact(box.left + 22, box.top + 18, color, 1.1);
-        push(current.agent, 0, 120, 340, 0);
+        fx.current?.impact(box.left + 22, box.top + 18, color, 0.6);
+        push(current.agent, 0, 40, 120, 0);
       });
-      later(1450, () => {
+      later(1050, () => {
         const box = node.getBoundingClientRect();
         const card = host.querySelector(".c-deck-now")?.getBoundingClientRect();
         if (card) {
@@ -253,8 +253,8 @@ export function RouteStage({
     if (current.stage === "attack" && node && current.to) {
       // The challenger draws back on its spring, then throws itself forward as the light leaves.
       const away = node.dataset.board === "C" ? 1 : -1;
-      push(current.agent, away * 90, 30, -620, away * 26);
-      later(420, () => push(current.agent, -away * 420, -60, 1500, -away * 46));
+      push(current.agent, away * 34, 12, -230, away * 9);
+      later(220, () => push(current.agent, -away * 150, -22, 540, -away * 16));
     }
     if (current.stage === "revise" && node) {
       later(0, () => {
@@ -265,11 +265,11 @@ export function RouteStage({
         node.animate(
           [
             { rotate: "y 0deg", filter: "blur(0)", scale: "1" },
-            { rotate: "y 180deg", filter: "blur(4px)", scale: "0.86", offset: 0.5 },
-            { rotate: "y 372deg", filter: "blur(0)", scale: "1.03", offset: 0.86 },
-            { rotate: "y 360deg", filter: "blur(0)", scale: "1" },
+            { rotate: "y 16deg", filter: "blur(1px)", scale: "0.97", offset: 0.5 },
+            { rotate: "y -3deg", filter: "blur(0)", scale: "1.005", offset: 0.82 },
+            { rotate: "y 0deg", filter: "blur(0)", scale: "1" },
           ],
-          { duration: 1150 / speed, easing: "cubic-bezier(.65,0,.2,1)" },
+          { duration: 720 / speed, easing: "cubic-bezier(.4,0,.2,1)" },
         );
       });
     }
@@ -282,9 +282,9 @@ export function RouteStage({
           const box = host.querySelector(`[data-board="${id}"]`)?.getBoundingClientRect();
           if (!box) continue;
           if (id === pick) {
-            push(id, 0, -90, 1000, 0);
+            push(id, 0, -36, 380, 0);
           } else {
-            push(id, 0, 110, -1300, (id === "A" ? -1 : 1) * 34);
+            push(id, 0, 44, -480, (id === "A" ? -1 : 1) * 12);
             if (target) {
               const a = centre(box);
               const b = centre(target);
@@ -320,13 +320,13 @@ export function RouteStage({
       mark.animate(
         [
           {
-            transform: "translate(-50%,-50%) scale(4) rotate(-16deg)",
+            transform: "translate(-50%,-50%) scale(1.9) rotate(-9deg)",
             opacity: 0,
-            filter: "blur(8px)",
+            filter: "blur(3px)",
             offset: 0,
           },
           {
-            transform: "translate(-50%,-50%) scale(.93) rotate(-4deg)",
+            transform: "translate(-50%,-50%) scale(.97) rotate(-4deg)",
             opacity: 1,
             filter: "blur(0)",
             offset: 0.1,
@@ -335,7 +335,7 @@ export function RouteStage({
           { transform: "translate(-50%,-50%) scale(1) rotate(-5deg)", opacity: 1, offset: 0.66 },
           { transform: "translate(-50%,-50%) scale(.3) rotate(-5deg)", opacity: 0, offset: 1 },
         ],
-        { duration: 1750, easing: "cubic-bezier(.2,.9,.2,1)", fill: "forwards" },
+        { duration: 1400, easing: "cubic-bezier(.2,.9,.2,1)", fill: "forwards" },
       ).onfinish = () => mark.remove();
       const flash = document.createElement("div");
       flash.className = "c-flash";
@@ -343,7 +343,7 @@ export function RouteStage({
       flash.style.setProperty("--x", `${x}px`);
       flash.style.setProperty("--y", `${y}px`);
       host.appendChild(flash);
-      flash.animate([{ opacity: 0.9 }, { opacity: 0 }], {
+      flash.animate([{ opacity: 0.32 }, { opacity: 0 }], {
         duration: 800,
         easing: "ease-out",
       }).onfinish = () => flash.remove();
@@ -373,7 +373,7 @@ export function RouteStage({
             opacity: 0.15,
           },
         ],
-        { duration: 720, easing: "cubic-bezier(.65,0,.2,1)", fill: "forwards" },
+        { duration: 560, easing: "cubic-bezier(.65,0,.2,1)", fill: "forwards" },
       ).onfinish = () => piece.remove();
     };
 
@@ -392,10 +392,10 @@ export function RouteStage({
       const on = filming.current && !reduce;
       const aim = on ? shot.current : { x: 0, y: 0, s: 1, r: 0 };
       const drift = on ? 1 : 0;
-      spring(c.x, aim.x + drift * Math.sin(t * 0.37) * 9, 30, 9.5, dt);
-      spring(c.y, aim.y + drift * Math.cos(t * 0.29) * 6, 30, 9.5, dt);
-      spring(c.s, aim.s + drift * Math.sin(t * 0.5) * 0.012, 30, 9.5, dt);
-      spring(c.r, aim.r + drift * Math.sin(t * 0.23) * 1, 30, 9.5, dt);
+      spring(c.x, aim.x + drift * Math.sin(t * 0.37) * 4, 30, 9.5, dt);
+      spring(c.y, aim.y + drift * Math.cos(t * 0.29) * 3, 30, 9.5, dt);
+      spring(c.s, aim.s + drift * Math.sin(t * 0.5) * 0.005, 30, 9.5, dt);
+      spring(c.r, aim.r + drift * Math.sin(t * 0.23) * 0.4, 30, 9.5, dt);
       const still =
         !on &&
         Math.abs(c.x.p) + Math.abs(c.y.p) + Math.abs(c.r.p) < 0.05 &&
@@ -469,13 +469,13 @@ export function RouteStage({
         dot.style.left = `${point.x}px`;
         dot.style.top = `${point.y}px`;
         dot.style.opacity = elapsed < 0 ? "0" : "1";
-        if (elapsed < 0 && flying.kind === "attack" && elapsed > -480) sparks.charge(px, py, color);
+        if (elapsed < 0 && flying.kind === "attack" && elapsed > -260) sparks.charge(px, py, color);
         if (elapsed >= 0 && k < 1 && flying.duration) sparks.comet(px, py, color);
         if (k >= 1 && !flying.landed) {
           flying.landed = true;
           const strong = flying.kind === "verify" && flying.attack.status === "supported";
-          sparks.impact(px, py, color, strong ? 2.4 : 1.4);
-          shockwave(px, py, strong ? 2.1 : 1);
+          sparks.impact(px, py, color, strong ? 1.25 : 0.75);
+          shockwave(px, py, strong ? 1.2 : 0.7);
           if (flying.kind === "attack") {
             tear(flying.attack);
           } else {
@@ -525,22 +525,22 @@ export function RouteStage({
           }
         : { x: W / 2, y: H / 2 };
     };
-    let scale = 1.14;
+    let scale = 1.07;
     let at = middle(current.agent);
-    let turn = at.x < W / 2 ? 3.5 : at.x > W / 2 + 20 ? -3.5 : 0;
+    let turn = at.x < W / 2 ? 1.6 : at.x > W / 2 + 20 ? -1.6 : 0;
     if (current.stage === "attack" && current.to) {
       const a = middle(current.agent);
       const b = middle(current.to);
       at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) };
-      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1.02 : 1.12;
-      turn = a.x < b.x ? -4 : 4;
+      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1.01 : 1.06;
+      turn = a.x < b.x ? -1.8 : 1.8;
     } else if (current.stage === "verify" && current.to) {
       at = middle(current.to);
-      scale = 1.24;
-      turn = at.x < W / 2 ? 2.5 : at.x > W / 2 + 20 ? -2.5 : 0;
+      scale = 1.12;
+      turn = at.x < W / 2 ? 1.2 : at.x > W / 2 + 20 ? -1.2 : 0;
     } else if (current.stage === "judge") {
       at = { x: W / 2, y: H / 2 };
-      scale = 0.9;
+      scale = 0.97;
       turn = 0;
     }
     // Every board in shot stays fully inside the frame, with room left for drift and tilt.
@@ -581,9 +581,9 @@ export function RouteStage({
   useEffect(() => {
     if (entering || reducedMotion()) return;
     const kick = setTimeout(() => {
-      push("A", -160, 120, 2600, 60);
-      push("B", 0, 140, 2900, 0);
-      push("C", 160, 120, 2600, -60);
+      push("A", -50, 44, 900, 18);
+      push("B", 0, 50, 1000, 0);
+      push("C", 50, 44, 900, -18);
     }, 80);
     stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
       node.animate(
@@ -610,7 +610,7 @@ export function RouteStage({
       const ny = e.clientY / innerHeight - 0.5;
       if (rig.current)
         rig.current.style.transform = filming.current
-          ? `rotateY(${nx * 3}deg) rotateX(${-ny * 2.2}deg)`
+          ? `rotateY(${nx * 1.2}deg) rotateX(${-ny * 0.9}deg)`
           : "none";
       const wall = document.querySelector<HTMLElement>(".c-stage");
       if (wall) wall.style.translate = `${-nx * 46}px ${-ny * 30}px`;

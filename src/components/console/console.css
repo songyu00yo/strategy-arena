@@ -3019,6 +3019,10 @@
 .console-shell .details-toggle svg {
   transition: rotate 0.35s cubic-bezier(0.2, 1.2, 0.3, 1);
 }
+/* A real verdict usually runs longer: give it the room to be read without scrolling. */
+.c-bottom:has(.c-verdict.ready) {
+  height: clamp(150px, 23vh, 240px);
+}
 @media (max-width: 1100px) {
   .c-live {
     position: static;

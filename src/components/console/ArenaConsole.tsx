@@ -16,6 +16,9 @@ import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteStage } from "./RouteStage";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
 
+/** Joins sentences without doubling their end marks. */
+const listOf = (items: string[]) => items.map((item) => item.replace(/[。；;.]+$/, "")).join("；");
+
 const METRIC_STATE: Record<string, string> = {
   成立: "supported",
   已反驳: "refuted",
@@ -385,13 +388,13 @@ export function ArenaConsole({
                 <p>{verdict.rationale}</p>
                 <div className="grid">
                   <div>
-                    <b>下一步</b> {verdict.nextActions.join("；")}
+                    <b>下一步</b> {listOf(verdict.nextActions)}
                   </div>
                   <div>
-                    <b>前提</b> {verdict.conditions.join("；") || "未给出"}
+                    <b>前提</b> {listOf(verdict.conditions) || "未给出"}
                   </div>
                   <div>
-                    <b>仍需确认</b> {verdict.uncertainties.join("；") || "未列出"}
+                    <b>仍需确认</b> {listOf(verdict.uncertainties) || "未列出"}
                   </div>
                   <div>
                     <b>退出</b> {verdict.exitCondition}

@@ -440,7 +440,7 @@ export function leaveAs(
   const box = el.getBoundingClientRect();
   if (!host || !box.width) return;
   const ghost = document.createElement("div");
-  ghost.className = el.className;
+  ghost.className = `${el.className} c-ghost`;
   ghost.innerHTML = el.innerHTML;
   ghost.setAttribute("aria-hidden", "true");
   ghost.inert = true;

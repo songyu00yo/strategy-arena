@@ -497,7 +497,7 @@ export function RouteStage({
           flying?.kind === "attack" && flying.attack.id === a.id ? String(1 - eased) : "0";
       });
 
-      if (!flying) dot.style.opacity = "0";
+      if (!flying || (flying.landed && flying.duration > 0)) dot.style.opacity = "0";
       const path = flying && paths.current.get(flying.attack.id);
       if (flying && measuring && path?.getAttribute("d")) {
         const color =
@@ -508,11 +508,8 @@ export function RouteStage({
         const px = point.x + origin.left;
         const py = point.y + origin.top;
         dot.style.transform = `translate(${point.x}px,${point.y}px) translate(-50%,-50%)`;
-        // Once a check lands, the stamp says it; the label steps aside.
-        dot.style.opacity =
-          elapsed < 0 || (flying.kind === "verify" && flying.duration > 0 && flying.landed)
-            ? "0"
-            : "1";
+        // Once it lands the label steps aside, so it never sits on the sentence it points at.
+        dot.style.opacity = elapsed < 0 || (flying.duration > 0 && flying.landed) ? "0" : "1";
         if (elapsed < 0 && flying.kind === "attack" && elapsed > -260) sparks.charge(px, py, color);
         if (elapsed >= 0 && k < 1 && flying.duration) sparks.comet(px, py, color);
         if (k >= 1 && !flying.landed) {

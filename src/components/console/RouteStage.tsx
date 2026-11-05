@@ -75,6 +75,7 @@ export function RouteStage({
   const fx = useRef<Sparks | null>(null);
   const paths = useRef(new Map<string, SVGPathElement>());
   const flows = useRef(new Map<string, SVGPathElement>());
+  const dots = useRef(new Map<string, SVGCircleElement>());
   const flight = useRef<Flight | null>(null);
   const live = useRef(attacks);
   const filming = useRef(camera);
@@ -429,6 +430,7 @@ export function RouteStage({
         : 0;
       const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 
+      const middle = host.querySelector('[data-board="B"]')?.getBoundingClientRect();
       live.current.forEach((a, i) => {
         const path = paths.current.get(a.id);
         const flow = flows.current.get(a.id);
@@ -449,7 +451,23 @@ export function RouteStage({
         const tx = (rightward ? box.left : box.right) - origin.left;
         const ty = y - origin.top;
         const bend = Math.max(36, Math.abs(tx - sx) * 0.42) * (rightward ? 1 : -1);
-        const d = `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`;
+        // A and C talk around B: their thread runs below it instead of across its text.
+        const across = a.from !== "B" && a.targetStrategyId !== "B" && middle;
+        let d = `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`;
+        if (across) {
+          const lane = middle.bottom - origin.top + 10 + (i % 6) * 5;
+          const near = (rightward ? middle.left - 6 : middle.right + 6) - origin.left;
+          const far = (rightward ? middle.right + 6 : middle.left - 6) - origin.left;
+          d = `M${sx},${sy} C${(sx + near) / 2},${sy} ${(sx + near) / 2},${lane} ${near},${lane} L${far},${lane} C${(far + tx) / 2},${lane} ${(far + tx) / 2},${ty} ${tx},${ty}`;
+        }
+        const drawing = flying?.kind === "attack" && flying.attack.id === a.id && eased < 1;
+        const from_ = dots.current.get(`${a.id}:from`);
+        const to_ = dots.current.get(`${a.id}:to`);
+        from_?.setAttribute("cx", String(sx));
+        from_?.setAttribute("cy", String(sy));
+        to_?.setAttribute("cx", String(tx));
+        to_?.setAttribute("cy", String(ty));
+        to_?.setAttribute("opacity", drawing ? "0" : "1");
         path.setAttribute("d", d);
         flow?.setAttribute("d", d);
         path.style.strokeDashoffset =
@@ -468,7 +486,11 @@ export function RouteStage({
         const py = point.y + origin.top;
         dot.style.left = `${point.x}px`;
         dot.style.top = `${point.y}px`;
-        dot.style.opacity = elapsed < 0 ? "0" : "1";
+        // Once a check lands, the stamp says it; the label steps aside.
+        dot.style.opacity =
+          elapsed < 0 || (flying.kind === "verify" && flying.duration > 0 && flying.landed)
+            ? "0"
+            : "1";
         if (elapsed < 0 && flying.kind === "attack" && elapsed > -260) sparks.charge(px, py, color);
         if (elapsed >= 0 && k < 1 && flying.duration) sparks.comet(px, py, color);
         if (k >= 1 && !flying.landed) {
@@ -479,7 +501,12 @@ export function RouteStage({
           if (flying.kind === "attack") {
             tear(flying.attack);
           } else {
-            stamp(point.x + (point.x > origin.width / 2 ? -70 : 70), point.y, flying.attack);
+            // Beside the sentence rather than on it, so the words stay readable.
+            stamp(
+              point.x + (point.x > origin.width / 2 ? -86 : 86),
+              Math.max(22, point.y - 40),
+              flying.attack,
+            );
             host
               .querySelectorAll(
                 `[data-claim="${flying.attack.targetStrategyId}:${flying.attack.targetClaimId}"] .struck`,
@@ -525,26 +552,26 @@ export function RouteStage({
           }
         : { x: W / 2, y: H / 2 };
     };
-    let scale = 1.07;
+    let scale = 1.03;
     let at = middle(current.agent);
     let turn = at.x < W / 2 ? 1.6 : at.x > W / 2 + 20 ? -1.6 : 0;
     if (current.stage === "attack" && current.to) {
       const a = middle(current.agent);
       const b = middle(current.to);
       at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) };
-      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1.01 : 1.06;
+      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1 : 1.025;
       turn = a.x < b.x ? -1.8 : 1.8;
     } else if (current.stage === "verify" && current.to) {
       at = middle(current.to);
-      scale = 1.12;
+      scale = 1.04;
       turn = at.x < W / 2 ? 1.2 : at.x > W / 2 + 20 ? -1.2 : 0;
     } else if (current.stage === "judge") {
       at = { x: W / 2, y: H / 2 };
-      scale = 0.97;
+      scale = 0.985;
       turn = 0;
     }
     // Every board in shot stays fully inside the frame, with room left for drift and tilt.
-    const margin = 26;
+    const margin = 48; // Room for the focused board moving forward in depth.
     const inShot = [current.agent, current.to]
       .map((id) => el.querySelector<HTMLElement>(`[data-board="${id}"]`))
       .filter((node): node is HTMLElement => !!node);
@@ -558,12 +585,15 @@ export function RouteStage({
     const wantX = W / 2 - screen(at.x, W);
     const minX = margin - screen(left, W);
     const maxX = W - margin - screen(right, W);
+    // The camera leans toward the action but keeps all three routes on screen.
+    const lean = Math.max(0, ((scale - 1) * W) / 2);
+    const leaned = Math.max(-lean, Math.min(lean, wantX));
     const x =
       current.stage === "judge"
         ? 0
         : minX > maxX
           ? (minX + maxX) / 2
-          : Math.max(minX, Math.min(maxX, wantX));
+          : Math.max(minX, Math.min(maxX, leaned));
     const wantY = (current.stage === "judge" ? H / 2 : H * 0.26) - screen(at.y, H);
     const y = current.stage === "judge" ? 0 : Math.max(margin - screen(top, H), wantY);
     shot.current = { x, y, s: scale, r: turn };
@@ -749,8 +779,19 @@ export function RouteStage({
                 if (node) flows.current.set(a.id, node);
                 else flows.current.delete(a.id);
               }}
-              className={`c-thread-flow is-${stateOf(a)}`}
+              className={`c-thread-flow is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""}`}
             />
+            {(["from", "to"] as const).map((end) => (
+              <circle
+                key={end}
+                r={end === "to" ? 3.2 : 2.2}
+                className={`c-thread-dot is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""}`}
+                ref={(node) => {
+                  if (node) dots.current.set(`${a.id}:${end}`, node);
+                  else dots.current.delete(`${a.id}:${end}`);
+                }}
+              />
+            ))}
           </g>
         ))}
       </svg>

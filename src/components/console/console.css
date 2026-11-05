@@ -2045,6 +2045,314 @@
     transform: translateY(8px);
   }
 }
+/* --- Layering. Far to near: wall, resting boards, threads, the board in focus, the chain. --- */
+.c-cw {
+  width: 360px;
+  height: 230px;
+  background: rgb(255 255 255 / 0.62);
+  transition:
+    filter 0.7s,
+    opacity 0.7s,
+    border-color 0.4s,
+    background 0.4s;
+}
+.c-cw.now {
+  border-color: var(--c-t0);
+  background: rgb(255 255 255 / 0.9);
+  box-shadow: 0 12px 40px rgb(11 13 16 / 0.18);
+}
+.c-cw.now .tb b,
+.c-cw.now .body {
+  color: var(--c-t0);
+}
+.c-cw .body > div {
+  margin-bottom: 2px;
+}
+.c-stage {
+  transform: rotateX(6deg) rotateY(-8deg);
+}
+.c-board {
+  --depth: 0px;
+  --glass: 0.8;
+  background: rgb(255 255 255 / var(--glass));
+  backdrop-filter: blur(7px);
+  transition:
+    transform 0.6s cubic-bezier(0.2, 0.9, 0.3, 1),
+    background 0.5s,
+    border-color 0.3s,
+    box-shadow 0.4s,
+    opacity 0.5s,
+    filter 0.5s;
+}
+.c-board-A {
+  transform: translateZ(var(--depth)) rotateY(4deg);
+}
+.c-board-B {
+  transform: translateZ(var(--depth));
+}
+.c-board-C {
+  transform: translateZ(var(--depth)) rotateY(-4deg);
+}
+.c-root.theater .c-board {
+  background: rgb(255 255 255 / var(--glass));
+  backdrop-filter: blur(7px);
+}
+.c-root .c-board.speaking,
+.c-root .c-board.target {
+  --depth: 46px;
+  --glass: 0.97;
+}
+.c-root .c-board.dim,
+.c-root.theater .c-board.dim {
+  --depth: -48px;
+  --glass: 0.58;
+  opacity: 1;
+  filter: none;
+}
+.c-board.dim > header,
+.c-board.dim .c-board-body {
+  opacity: 0.72;
+  transition: opacity 0.5s;
+}
+/* Threads: resting ones are hairlines, the live one carries the eye. */
+.c-thread {
+  stroke-width: 1;
+  stroke: rgb(var(--route) / 0.42);
+  transition:
+    stroke 0.4s,
+    stroke-width 0.3s;
+}
+.c-root .c-thread.is-supported {
+  stroke: rgb(196 43 24 / 0.6);
+}
+.c-root .c-thread.is-refuted {
+  stroke: rgb(19 112 66 / 0.55);
+}
+.c-root .c-thread.is-unresolved {
+  stroke: rgb(143 95 0 / 0.55);
+}
+.c-root .c-thread,
+.c-root.theater .c-thread {
+  filter: none;
+}
+.c-root .c-thread.on,
+.c-root.theater .c-thread.on {
+  stroke-width: 2.4;
+  filter: drop-shadow(0 0 3px rgb(var(--route) / 0.65));
+}
+.c-root .c-thread.on:not(.is-supported, .is-refuted, .is-unresolved) {
+  stroke: rgb(var(--route));
+}
+.c-root.theater .c-thread-flow {
+  opacity: 0;
+  animation: none;
+}
+.c-root .c-thread-flow.on,
+.c-root.theater .c-thread-flow.on {
+  opacity: 0.9;
+  animation: c-thread-run 1.5s linear infinite;
+}
+.c-thread-dot {
+  fill: rgb(var(--route));
+  stroke: #fff;
+  stroke-width: 1;
+  transition: opacity 0.2s;
+}
+.c-thread-dot.is-supported {
+  fill: var(--c-bad);
+}
+.c-thread-dot.is-refuted {
+  fill: var(--c-ok);
+}
+.c-thread-dot.is-unresolved {
+  fill: var(--c-warn);
+}
+.c-thread-dot:not(.on) {
+  fill-opacity: 0.7;
+}
+/* The chain: one height, one rhythm, grouped by stage. */
+.c-deck {
+  height: 40%;
+}
+.c-board {
+  max-height: 57%;
+}
+.c-deck-card {
+  --s: min(54px, calc(46cqw / var(--n)));
+  height: min(136px, calc(100% - 8px));
+  min-height: 0;
+  background: rgb(255 255 255 / 0.84);
+  backdrop-filter: blur(4px);
+  transform: translateX(calc(var(--d) * -1 * var(--s) - var(--g) * 9px - 14px * min(var(--d), 1)))
+    translateZ(calc(var(--d) * -30px)) rotateY(calc(min(var(--d), 1) * 20deg));
+  opacity: calc(1 - var(--d) * 0.022);
+}
+.c-deck-card.is-supported {
+  border-top-color: var(--c-bad);
+}
+.c-deck-card.is-refuted {
+  border-top-color: var(--c-ok);
+}
+.c-deck-card.is-unresolved {
+  border-top-color: var(--c-warn);
+}
+.c-deck-card:not(.c-deck-now) .tb {
+  flex-direction: column;
+  gap: 0;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.c-deck-card:not(.c-deck-now) .plain strong {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--c-t2);
+}
+.c-deck-card:not(.c-deck-now) .plain p {
+  display: none;
+}
+.c-deck-card.c-deck-now {
+  height: auto;
+  min-height: min(136px, calc(100% - 8px));
+  max-height: calc(100% - 8px);
+  background: rgb(255 255 255 / 0.97);
+  backdrop-filter: none;
+}
+.c-float-card .body {
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.c-float-card .ln {
+  position: relative;
+}
+/* Lower panels sit above the wall as frosted glass, so its text never fights theirs. */
+.c-root .c-verdict,
+.c-root .c-list {
+  background: rgb(255 255 255 / 0.9);
+  backdrop-filter: blur(8px);
+}
+.c-root .c-verdict:not(.ready) {
+  background: rgb(255 255 255 / 0.72);
+  backdrop-filter: blur(8px);
+}
+.c-trace {
+  background: rgb(255 255 255 / 0.82);
+}
+.c-stage {
+  top: 43%;
+}
+.c-deck-card .plain ul {
+  margin: 3px 0 0;
+  padding: 3px 0 0;
+  border-top: 1px solid var(--c-line);
+  list-style: none;
+  font-size: 12px;
+  color: var(--c-t1);
+}
+.c-deck-card .plain li {
+  overflow: hidden;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Focus comes from depth rather than zoom, so all three routes stay whole on screen. */
+.c-world {
+  padding: 8px 24px 6px;
+}
+.c-root .c-board.speaking,
+.c-root .c-board.target {
+  --depth: 58px;
+}
+/* Large displays scale the working surface up, so text stays a comfortable size. */
+@media (min-width: 2200px) {
+  .console-shell {
+    font-size: 15.5px;
+  }
+  .c-slate {
+    min-height: 36px;
+  }
+  .c-slate h1 {
+    font-size: 24px;
+  }
+  .c-slate .text-button,
+  .c-slate .run-status,
+  .console-shell .model-pill,
+  .console-shell .arena-conditions,
+  .console-shell .arena-cost,
+  .console-shell .arena-cost > span,
+  .console-shell .arena-cost small,
+  .console-shell .arena-cost strong {
+    font-size: 15px;
+  }
+  .c-time .seg {
+    font-size: 15px;
+  }
+  .c-time .ticks {
+    height: 18px;
+  }
+  .c-metrics dt {
+    font-size: 13.5px;
+  }
+  .c-metrics dd {
+    font-size: 24px;
+  }
+  .c-board > header {
+    font-size: 14.5px;
+  }
+  .c-board > header b {
+    font-size: 30px;
+  }
+  .c-board-body h3 {
+    font-size: 20px;
+  }
+  .c-board-body .est,
+  .c-board-body .steps,
+  .c-board-body .first,
+  .c-claim em {
+    font-size: 14.5px;
+  }
+  .c-deck-card {
+    --s: min(72px, calc(46cqw / var(--n)));
+    width: min(47cqw, 800px);
+    height: min(190px, calc(100% - 8px));
+  }
+  .c-deck-card.c-deck-now {
+    min-height: min(190px, calc(100% - 8px));
+  }
+  .c-deck-card .tb,
+  .c-deck-card:not(.c-deck-now) .tb {
+    font-size: 14px;
+  }
+  .c-deck-card .plain strong {
+    font-size: 17px;
+  }
+  .c-deck-card:not(.c-deck-now) .plain strong,
+  .c-deck-card .plain p,
+  .c-deck-card .plain ul {
+    font-size: 14.5px;
+  }
+  .c-now .big {
+    font-size: 25px;
+  }
+  .c-now .fl span,
+  .c-log,
+  .c-trace small,
+  .c-root .c-trace h2,
+  .c-root .c-list h2,
+  .c-ctrl button,
+  .c-verdict small {
+    font-size: 14.5px;
+  }
+  .c-root .c-verdict h2 {
+    font-size: 32px;
+  }
+  .c-packet {
+    font-size: 15px;
+  }
+  .c-cw .tb {
+    font-size: 12.5px;
+  }
+}
 @media (max-width: 1100px) {
   .c-deck {
     position: static;
@@ -2054,7 +2362,15 @@
   .c-deck-card {
     position: static;
     width: auto;
-    transform: none;
+    transform: none !important;
+    height: auto;
+  }
+  .c-board,
+  .c-board-A,
+  .c-board-B,
+  .c-board-C {
+    transform: none !important;
+    max-height: none;
   }
   .c-deck-card:not(.c-deck-now) {
     display: none;

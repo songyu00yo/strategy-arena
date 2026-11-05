@@ -65,7 +65,7 @@ export function Intro({
   }, [onDone, onReveal]);
   return (
     <div className="c-intro" ref={box} aria-hidden="true">
-      <Dust dark />
+      <Dust />
       <p className="q">
         <Chars text={version.challenge.goal} active />
       </p>
@@ -85,7 +85,7 @@ const EMBERS = (route: string | null) => {
   const key = route ?? "none";
   let set = emberSets.get(key);
   if (!set) {
-    set = [ROUTE_COLOR[route ?? ""] ?? "255,255,255", "255,255,255", "255,215,140"];
+    set = [ROUTE_COLOR[route ?? ""] ?? "255,255,255", "120,130,150", "255,175,60"];
     emberSets.set(key, set);
   }
   return set;
@@ -156,7 +156,7 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
   }, [verdict, onDone]);
   return (
     <div className="c-film" ref={box} aria-hidden="true">
-      <Dust dark embers={EMBERS(verdict.preferred)} />
+      <Dust embers={EMBERS(verdict.preferred)} />
       <small>
         <Chars
           text={verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}

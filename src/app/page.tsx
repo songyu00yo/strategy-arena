@@ -28,7 +28,7 @@ import {
 import { ChallengeForm } from "@/components/challenge-form";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
-import { Chars } from "@/components/console/effects";
+import { Chars, Dust } from "@/components/console/effects";
 import { HomeFlow } from "@/components/console/HomeFlow";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
@@ -227,6 +227,7 @@ export default function Page() {
         )}
         {!arena.snapshot ? (
           <div className="h-grid">
+            <Dust />
             <section className="h-lead" aria-label="开始一次方案推演">
               <h1>
                 <Chars text="先让三个方案互相挑错，再决定。" active />

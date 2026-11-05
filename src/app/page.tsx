@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ArrowDown,
   ArrowRight,
   ArrowUpRight,
   Check,
   ChevronDown,
+  CircleAlert,
   CircleHelp,
   Crosshair,
   FileSearch,
@@ -26,9 +26,12 @@ import {
   type Attack,
   type Strategy,
   type ArenaVersion,
+  type Challenge,
 } from "@/lib/contracts";
 import { ChallengeForm } from "@/components/challenge-form";
 import { StrategyCard, PendingCard } from "@/components/strategy-card";
+import { DisputeBoard } from "@/components/dispute-board";
+import { comparisonMeta, findingMeta, StatusTag } from "@/components/status";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import { useArena } from "@/components/use-arena";
@@ -46,6 +49,75 @@ function money(value: number, currency: "CNY" | "USD" = "CNY") {
   const symbol = currency === "USD" ? "$" : "¥";
   return value < 0.01 && value > 0 ? `< ${symbol}0.01` : `${symbol}${value.toFixed(2)}`;
 }
+/** What differs from the parent version's input. Long text only reports that it changed. */
+function conditionChanges(parent: Challenge, current: Challenge) {
+  const yuan = (v: number | null) => (v === null ? "未填写" : `¥${v.toLocaleString()}`);
+  const hours = (v: number | null) => (v === null ? "未填写" : `${v} 小时`);
+  const fields: [string, string, string][] = [
+    ["目标", parent.goal, current.goal],
+    ["硬性限制", parent.constraints, current.constraints],
+    ["偏好", parent.preferences, current.preferences],
+    ["备选方案", parent.options.join("、"), current.options.join("、")],
+    ["材料", parent.materials, current.materials],
+    ["领域", parent.domain, current.domain],
+    ["预算上限", yuan(parent.budget), yuan(current.budget)],
+    ["可用时间", hours(parent.timeHours), hours(current.timeHours)],
+  ];
+  return fields
+    .filter(([, before, after]) => before !== after)
+    .map(([label, before, after]) => ({
+      label,
+      detail:
+        before.length > 24 || after.length > 24
+          ? "内容已修改"
+          : `${before || "未填写"} → ${after || "未填写"}`,
+    }));
+}
+/** Failed, uncertain and paused differ in what the user can safely do next, so they differ here. */
+function RunNotice({
+  version,
+  historical,
+  busy,
+  onRefresh,
+}: {
+  version: ArenaVersion;
+  historical: boolean;
+  busy: boolean;
+  onRefresh: () => void;
+}) {
+  const copy = {
+    failed: {
+      title: "本轮未完成",
+      next: "已产生的结果保留在下方。可以修改条件后开新版本。",
+    },
+    uncertain: {
+      title: "结果待确认：无法判断请求是否完成或已计费",
+      next: "相应预留不会释放，系统也不会自动重试，需要由运行者核账。已产生的结果保留在下方。",
+    },
+    paused: {
+      title: "本轮已停止",
+      next: "不再发起新步骤。已发出的请求仍可能返回并计费，迟到的结果归入这一版本。",
+    },
+  }[version.status as "failed" | "uncertain" | "paused"];
+  if (!copy && !version.error) return null;
+  const alert = version.status !== "paused";
+  return (
+    <div className={`version-error run-${version.status}`} role={alert ? "alert" : "status"}>
+      <CircleAlert size={18} aria-hidden="true" />
+      <div>
+        <strong>{copy?.title ?? "本轮暂时停在这里"}</strong>
+        {version.error && <p>{version.error}</p>}
+        <span>{copy?.next ?? "已产生的结果保留在下方。请求状态不确定时，请先刷新确认。"}</span>
+      </div>
+      {!historical && (
+        <button type="button" className="text-button" onClick={onRefresh} disabled={busy}>
+          <RefreshCw size={13} aria-hidden="true" />
+          刷新状态
+        </button>
+      )}
+    </div>
+  );
+}
 function Verdict({
   version,
   onEvidence,
@@ -56,11 +128,12 @@ function Verdict({
   const v = version.verdict;
   if (!v) return null;
   return (
-    <section className="verdict" aria-labelledby="verdict-heading">
+    <section id="verdict" tabIndex={-1} className="verdict" aria-labelledby="verdict-heading">
       <div className="verdict-side">
-        <span className="eyebrow">THE VERDICT</span>
-        <Flag size={30} strokeWidth={1.4} />
-        <span>条件裁决</span>
+        <span className="verdict-kicker">
+          <Flag size={15} aria-hidden="true" />
+          条件裁决
+        </span>
         {v.preferred && <span className="verdict-letter">{v.preferred}</span>}
       </div>
       <div className="verdict-main">
@@ -125,9 +198,7 @@ function Verdict({
             {v.comparisons.map((c) => (
               <div key={c.strategyId}>
                 <span className="comparison-route">{c.strategyId}</span>
-                <span className={`comparison-status ${c.status}`}>
-                  {{ eligible: "符合条件", violates: "触及限制", unknown: "待确认" }[c.status]}
-                </span>
+                <StatusTag meta={comparisonMeta[c.status]} className="comparison-status" />
                 <p>{c.reason}</p>
               </div>
             ))}
@@ -148,9 +219,7 @@ function Verdict({
                   disabled={!attack}
                   onClick={() => attack && onEvidence(attack)}
                 >
-                  <span>
-                    {{ supported: "成立", refuted: "已反驳", unresolved: "未决" }[f.status]}
-                  </span>
+                  <StatusTag meta={findingMeta[f.status]} />
                   <p>{f.reason}</p>
                   <ArrowUpRight size={15} />
                 </button>
@@ -168,7 +237,8 @@ export default function Page() {
   const [versionId, setVersionId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
-  const [attack, setAttack] = useState<Attack | null>(null);
+  const [attackId, setAttackId] = useState<string | null>(null);
+  const [locatedId, setLocatedId] = useState<string | null>(null);
   const [claimTarget, setClaimTarget] = useState<{ strategy: Strategy; claimId: string } | null>(
     null,
   );
@@ -182,10 +252,44 @@ export default function Page() {
   const historical = !!selected && selected.id !== arena.snapshot?.activeVersionId;
   const running = arena.active && ["running", "ready"].includes(arena.active.status);
   const configured = arena.health?.model.configured;
-  const closeAttack = useCallback(() => setAttack(null), []);
-  const selectAttack = (a: Attack) => setAttack(a);
+  // Resolve by ID, so an open drawer follows status changes from newer snapshots.
+  const attack = selected?.attacks.find((a) => a.id === attackId) ?? null;
+  const closeAttack = useCallback(() => setAttackId(null), []);
+  const selectAttack = (a: Attack) => {
+    setLocatedId(null);
+    setAttackId(a.id);
+  };
+  const goToRoute = (id: string, targetId = `route-${id}`) => {
+    setMobileRoute(id);
+    // Runs after the tab switch commits and after a closing drawer has returned focus.
+    requestAnimationFrame(() => {
+      const target = document.getElementById(targetId);
+      target?.scrollIntoView({ block: "start" });
+      target?.focus({ preventScroll: true });
+    });
+  };
+  const locateAttack = (a: Attack) => {
+    setAttackId(null);
+    setLocatedId(a.id);
+    goToRoute(a.targetStrategyId, `dispute-${a.id}`);
+  };
+  // Entering an arena or a new version starts at its goal, not where the form's button was.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const activeVersionId = arena.snapshot?.activeVersionId;
+  useEffect(() => {
+    if (!activeVersionId) return;
+    const frame = requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      headingRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeVersionId]);
   const versionEvents = arena.snapshot?.events.filter((e) => e.versionId === selected?.id) ?? [];
   const selectedSteps = arena.snapshot?.steps.filter((s) => s.versionId === selected?.id) ?? [];
+  const selectedRunning = !!selected && ["running", "ready"].includes(selected.status);
+  const parentVersion = arena.snapshot?.versions.find((v) => v.id === selected?.parentVersionId);
+  const parentChanges =
+    parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
   return (
     <div className="site-shell">
       <a href="#main" className="skip-link">
@@ -209,10 +313,8 @@ export default function Page() {
             <i />
           </span>
           <span>方案擂台</span>
-          <span className="wordmark-en">STRATEGY ARENA</span>
         </button>
         <div className="header-right">
-          <span className="header-motto">让想法交锋，让行动有据。</span>
           <button
             type="button"
             className={`model-pill ${configured === false ? "unconfigured" : ""}`}
@@ -249,33 +351,13 @@ export default function Page() {
         {!arena.snapshot ? (
           <>
             <section className="hero">
-              <div className="hero-kicker">
-                <span className="eyebrow">A BETTER WAY TO DECIDE</span>
-                <span>学习 / 生活 / 工作 / 创作</span>
-              </div>
-              <div className="hero-heading">
-                <h1>
-                  让好想法，
-                  <br />
-                  <span className="hero-last">
-                    打过一场<span className="hero-period">。</span>
-                    <svg viewBox="0 0 520 30" aria-hidden="true">
-                      <path d="M3 21C140 3 328 1 513 13M13 27C155 13 348 10 502 18" />
-                    </svg>
-                  </span>
-                </h1>
-                <div className="hero-aside">
-                  <span className="hero-asterisk">↗</span>
-                  <p>
-                    别急着选一个答案。
-                    <br />
-                    让三种路线独立出发，
-                    <br />
-                    相互质疑，用证据修正。
-                  </p>
-                  <span className="hero-aside-note">最后，带着成立条件行动。</span>
-                </div>
-              </div>
+              <h1>
+                <span>让好想法，</span>
+                <span>打过一场。</span>
+              </h1>
+              <p>
+                别急着选一个答案。让三条路线独立出发、相互质疑、用证据修正，最后带着成立条件行动。
+              </p>
             </section>
             <section className="entry-section" aria-label="开始一次方案推演">
               <div className="entry-form-wrap">
@@ -288,7 +370,7 @@ export default function Page() {
                     }}
                   >
                     <div>
-                      <span className="eyebrow">PRIVATE PREVIEW</span>
+                      <span className="eyebrow">受邀预览</span>
                       <h2>凭访问码入场</h2>
                       <p>这是一个受邀预览。输入运行者提供的访问码，即可开始真实推演。</p>
                     </div>
@@ -350,57 +432,24 @@ export default function Page() {
                 )}
               </div>
               <aside className="entry-explainer">
-                <div className="explainer-heading">
-                  <span className="eyebrow">HOW IT WORKS</span>
-                  <span>三种策略，接受追问。</span>
-                </div>
-                <h2>
-                  三路独立。
-                  <br />
-                  一轮交锋。
-                </h2>
-                <div className="mini-arena" aria-label="推演机制示意">
-                  <div className="mini-route">
-                    <span>A</span>
-                    <i />
-                    <i />
-                    <small>独立提案</small>
-                  </div>
-                  <div className="mini-route">
-                    <span>B</span>
-                    <i />
-                    <i />
-                    <small>不同路线</small>
-                  </div>
-                  <div className="mini-route">
-                    <span>C</span>
-                    <i />
-                    <i />
-                    <small>反向思考</small>
-                  </div>
-                  <div className="mini-attack">
-                    <Crosshair size={17} />
-                    <span>关键前提，逐条挑战</span>
-                    <ArrowRight size={16} />
-                  </div>
-                </div>
+                <h2>一场推演怎么进行</h2>
                 <ol className="process-explainer">
                   <li>
-                    <span>01</span>
+                    <span>1</span>
                     <div>
-                      <strong>先展开选择</strong>
+                      <strong>三路独立提案</strong>
                       <p>从你的目标与限制出发，形成三条可比较的路线。</p>
                     </div>
                   </li>
                   <li>
-                    <span>02</span>
+                    <span>2</span>
                     <div>
-                      <strong>让判断接受质疑</strong>
-                      <p>追问具体原话，检索材料、核算投入，再修订方案。</p>
+                      <strong>逐条质疑和核验</strong>
+                      <p>追问具体原话，检索你的材料、核算投入，再修订方案。</p>
                     </div>
                   </li>
                   <li>
-                    <span>03</span>
+                    <span>3</span>
                     <div>
                       <strong>给出有条件的建议</strong>
                       <p>说清何时成立、还缺什么证据，以及现在的第一步。</p>
@@ -409,29 +458,16 @@ export default function Page() {
                 </ol>
                 <div className="honesty-note">
                   <FileSearch size={15} />
-                  <p>
-                    未知会保留未知。估算会标明估算。
-                    <br />
-                    你随时可以补充条件，重新开局。
-                  </p>
+                  <p>未知会保留未知，估算会标明估算。你随时可以补充条件，重新开局。</p>
                 </div>
               </aside>
-            </section>
-            <section className="manifesto">
-              <span className="eyebrow">GOOD DECISIONS ARE MADE, NOT GUESSED.</span>
-              <p>
-                答案不必一开始就对。
-                <br />
-                <span>但每一轮，都应该更接近可行动。</span>
-              </p>
-              <ArrowDown size={24} strokeWidth={1.3} />
             </section>
           </>
         ) : (
           selected && (
             <div className="arena-view">
               <div className="arena-topline">
-                <span className="eyebrow">LIVE ARENA / 你的方案现场</span>
+                <span className="eyebrow">推演现场</span>
                 <div className="arena-top-actions">
                   <button
                     type="button"
@@ -468,7 +504,8 @@ export default function Page() {
                         value={selected.id}
                         onChange={(e) => {
                           setVersionId(e.target.value);
-                          setAttack(null);
+                          setAttackId(null);
+                          setLocatedId(null);
                         }}
                       >
                         {arena.snapshot.versions.map((v) => (
@@ -480,13 +517,15 @@ export default function Page() {
                       </select>
                       <ChevronDown size={12} />
                     </label>
-                    <span className={`run-status ${selected.status}`}>
+                    <span className={`run-status ${selected.status}`} role="status">
                       {selected.status === "running" && <span className="working-dot" />}
                       {statusLabels[selected.status]}
                     </span>
                     {historical && <span className="historical-tag">只读</span>}
                   </div>
-                  <h1>{selected.challenge.goal}</h1>
+                  <h1 ref={headingRef} tabIndex={-1}>
+                    {selected.challenge.goal}
+                  </h1>
                   <div className="arena-conditions">
                     {selected.challenge.constraints && (
                       <span>
@@ -517,6 +556,19 @@ export default function Page() {
                       <CornerIcon />
                       本轮改动：{selected.changeReason}
                     </p>
+                  )}
+                  {parentVersion && parentChanges.length > 0 && (
+                    <div className="condition-delta">
+                      <span>相比 V{String(parentVersion.number).padStart(2, "0")}</span>
+                      <ul>
+                        {parentChanges.map((c) => (
+                          <li key={c.label}>
+                            <strong>{c.label}</strong>
+                            {c.detail}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
                 <div className="arena-cost">
@@ -555,32 +607,47 @@ export default function Page() {
                   </button>
                 </div>
               )}
-              {selected.error && (
-                <div className="version-error" role="alert">
-                  <strong>本轮暂时停在这里</strong>
-                  <p>{selected.error}</p>
-                  <span>已产生的结果保留在下方。请求状态不确定时，请先刷新确认。</span>
-                </div>
-              )}
+              <RunNotice
+                version={selected}
+                historical={historical}
+                busy={arena.busy}
+                onRefresh={() => arena.sync()}
+              />
               <section className="stage-rail" aria-label="推演进度">
                 {STAGES.map((stage, i) => {
                   const steps = selectedSteps.filter((s) => s.stage === stage);
                   const completed =
                     steps.length > 0 &&
                     steps.every((s) => s.status === "completed" || s.status === "skipped");
+                  const failed = steps.some((s) => s.status === "failed");
+                  const unknown = steps.some((s) => s.status === "uncertain");
                   const current = selected.stage === stage && !completed;
                   return (
                     <div
                       key={stage}
-                      className={`stage ${completed ? "done" : ""} ${current ? "current" : ""}`}
+                      className={`stage ${completed ? "done" : ""} ${current ? "current" : ""} ${failed ? "failed" : ""} ${unknown ? "unknown" : ""}`}
                       aria-current={current ? "step" : undefined}
                     >
                       <span className="stage-index">
-                        {completed ? <Check size={13} /> : String(i + 1).padStart(2, "0")}
+                        {failed ? (
+                          <X size={13} aria-hidden="true" />
+                        ) : unknown ? (
+                          <CircleHelp size={13} aria-hidden="true" />
+                        ) : completed ? (
+                          <Check size={13} aria-hidden="true" />
+                        ) : (
+                          String(i + 1).padStart(2, "0")
+                        )}
                       </span>
                       <span>
                         {STAGE_LABELS[stage]}
-                        {current && running && <small>进行中</small>}
+                        {failed ? (
+                          <small>失败</small>
+                        ) : unknown ? (
+                          <small>待确认</small>
+                        ) : (
+                          current && selectedRunning && <small>进行中</small>
+                        )}
                       </span>
                       {i < 4 && <ArrowRight size={13} />}
                     </div>
@@ -615,7 +682,7 @@ export default function Page() {
               )}
               <div className="arena-section-title">
                 <h2>
-                  让路线，正面交锋<span>{selected.strategies.length}/3 条已形成</span>
+                  三条路线<span>{selected.strategies.length}/3 条已形成</span>
                 </h2>
                 <button
                   className="events-toggle"
@@ -656,6 +723,15 @@ export default function Page() {
                   )}
                 </section>
               )}
+              {selected.strategies.length > 0 && (
+                <DisputeBoard
+                  version={selected}
+                  selectedAttack={attack?.id ?? locatedId ?? undefined}
+                  onEvidence={selectAttack}
+                  onLocate={locateAttack}
+                  onRoute={(id) => goToRoute(id)}
+                />
+              )}
               <div className="mobile-route-tabs" role="tablist" aria-label="策略路线">
                 {["A", "B", "C"].map((id) => (
                   <button
@@ -682,7 +758,11 @@ export default function Page() {
                     onClick={() => setMobileRoute(id)}
                   >
                     {id}
-                    <span>{selected.strategies.find((s) => s.id === id)?.title ?? "等待提案"}</span>
+                    <span>
+                      {selected.strategies.some((s) => s.id === id)
+                        ? `${selected.attacks.filter((a) => a.targetStrategyId === id).length} 条争议`
+                        : "等待提案"}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -692,6 +772,7 @@ export default function Page() {
                   return (
                     <div
                       id={`route-${id}`}
+                      tabIndex={-1}
                       role="tabpanel"
                       aria-labelledby={`tab-${id}`}
                       className={`strategy-column ${mobileRoute === id ? "mobile-active" : ""}`}
@@ -701,8 +782,9 @@ export default function Page() {
                         <StrategyCard
                           strategy={s}
                           version={selected}
-                          readOnly={historical || arena.busy}
-                          selectedAttack={attack?.id}
+                          historical={historical}
+                          busy={arena.busy}
+                          selectedAttack={attack?.id ?? locatedId ?? undefined}
                           onAttack={selectAttack}
                           onClaim={(strategy, claimId) => {
                             setClaimTarget({ strategy, claimId });
@@ -753,7 +835,6 @@ export default function Page() {
           <span className="footer-brand">方案擂台</span>
           <span>让好策略，经得起挑战。</span>
         </div>
-        <span>THINK IN PARALLEL. ACT WITH REASON.</span>
         <button type="button" className="text-button" onClick={() => setModelOpen(true)}>
           模型与版本
           <ArrowUpRight size={12} />
@@ -889,7 +970,12 @@ export default function Page() {
         </Modal>
       )}
       {attack && selected && (
-        <EvidenceDrawer attack={attack} version={selected} onClose={closeAttack} />
+        <EvidenceDrawer
+          attack={attack}
+          version={selected}
+          onClose={closeAttack}
+          onLocate={locateAttack}
+        />
       )}
       {stopConfirm && (
         <Modal title="在这里收束本轮？" onClose={() => setStopConfirm(false)}>

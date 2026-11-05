@@ -161,69 +161,6 @@
   line-height: 16px;
   color: var(--c-t2);
 }
-/* Opening */
-.c-intro {
-  position: fixed;
-  z-index: 60;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 0 11vw;
-  background: #050608;
-  color: #fff;
-}
-.c-film {
-  position: fixed;
-  z-index: 55;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 0 9vw;
-  background: #050608;
-  color: #fff;
-  pointer-events: none;
-}
-.c-film small {
-  font-size: clamp(20px, 2vw, 32px);
-  font-weight: 800;
-  color: #6fe0a4;
-}
-.c-film .head {
-  max-width: 17em;
-  margin-top: 8px;
-  font-size: clamp(46px, 6vw, 104px);
-  line-height: 1.08;
-  font-weight: 900;
-  letter-spacing: -0.045em;
-}
-.c-film ul {
-  min-height: 4em;
-  margin: 24px 0 0;
-  padding: 0;
-  list-style: none;
-  font-size: clamp(14px, 1.2vw, 19px);
-  color: #b8bcc2;
-}
-.c-intro .q {
-  max-width: 26em;
-  font-size: clamp(30px, 3.4vw, 54px);
-  line-height: 1.16;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-}
-.c-intro ul {
-  min-height: 9em;
-  margin: 26px 0 0;
-  padding: 0;
-  list-style: none;
-  font-size: 15px;
-  color: #9da2a9;
-}
-.c-intro li {
-  animation: c-rise 0.22s ease-out;
-}
 /* Skeleton */
 .c-hud {
   position: relative;
@@ -502,82 +439,20 @@
 .c-stage3 {
   position: relative;
   min-height: 0;
-  overflow: hidden;
-  perspective: 1400px;
-  perspective-origin: 50% 42%;
-}
-.c-rig,
-.c-world {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  /* Tilted boards dip behind these planes; only the boards may take a click. */
-  pointer-events: none;
-}
-.c-board {
-  pointer-events: auto;
-}
-.c-rig {
-  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.c-world {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.04fr) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: clamp(30px, 3.6vw, 62px);
-  padding: 6px;
-  transition: transform 1.05s cubic-bezier(0.65, 0, 0.15, 1);
-  will-change: transform;
 }
-.c-fx {
+.c-ring {
   position: absolute;
-  z-index: 4;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  z-index: 5;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
   pointer-events: none;
-}
-.c-stamp {
-  position: absolute;
-  z-index: 7;
-  padding: 1px 12px;
-  border: 3px solid currentColor;
-  background: rgb(255 255 255 / 0.9);
-  font-size: clamp(20px, 2vw, 34px);
-  font-weight: 900;
-  letter-spacing: -0.02em;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.c-tear {
-  position: absolute;
-  z-index: 6;
-  padding: 2px 6px;
-  background: var(--c-t0);
-  color: #fff;
-  box-shadow: 0 18px 50px rgb(11 13 16 / 0.45);
-  pointer-events: none;
-}
-.c-board::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  background: linear-gradient(
-    105deg,
-    transparent 38%,
-    rgb(255 255 255 / 0.95) 50%,
-    transparent 62%
-  );
-  pointer-events: none;
-}
-.c-board.speaking::after,
-.c-board.pick::after {
-  animation: c-sheen 1.1s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.c-board.dim {
-  opacity: 0.42;
-  filter: blur(1.6px);
 }
 .c-board-B {
   max-height: 53%;
@@ -599,14 +474,6 @@
     box-shadow 0.2s,
     opacity 0.6s,
     filter 0.6s;
-}
-.c-board-A {
-  transform: rotateY(4deg);
-  transform-origin: left center;
-}
-.c-board-C {
-  transform: rotateY(-4deg);
-  transform-origin: right center;
 }
 .c-board.speaking {
   border-color: var(--c-t0);
@@ -732,7 +599,7 @@
   stroke: rgb(143 95 0 / 0.8);
 }
 .c-root .c-thread.on {
-  stroke-width: 2.8;
+  stroke-width: 2;
   stroke: var(--c-t0);
 }
 .c-packet {
@@ -1361,47 +1228,172 @@
     opacity: 0;
   }
 }
-/* Theatre: while a film runs, the panels step aside and the stage takes the room. */
-.c-bottom {
-  transition:
-    height 0.8s cubic-bezier(0.65, 0, 0.15, 1),
-    opacity 0.5s;
-}
+/* Motion: quick and small. It points at what just changed and never moves the layout. */
 .c-wall {
-  transition: opacity 0.8s;
-}
-.c-trace {
-  transition: opacity 0.5s;
-}
-.c-root.theater .c-bottom {
-  height: 0;
-  margin-top: -5px;
-  overflow: hidden;
-  opacity: 0;
-}
-.c-root.theater .c-wall {
   opacity: 0.45;
 }
-.c-root.theater .c-float {
-  width: 54%;
-}
-.c-root.theater .c-float-card {
-  font-size: 14px;
-}
-.c-root.theater .c-now .big {
-  font-size: 22px;
-}
 .c-board.dim {
-  opacity: 0.5;
+  opacity: 0.55;
 }
-@keyframes c-sheen {
-  0% {
-    opacity: 1;
-    transform: translateX(-100%);
+.c-board.pick {
+  transition: box-shadow 0.4s;
+}
+.c-char {
+  display: inline-block;
+  animation: c-char 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.c-fadein {
+  animation: c-fade 0.3s ease-out;
+}
+.c-root .changed.fresh {
+  font-weight: 600;
+}
+.c-board {
+  animation: c-rise 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.c-board-B {
+  animation-delay: 0.05s;
+}
+.c-board-C {
+  animation-delay: 0.1s;
+}
+.c-board.enter .c-board-body > * {
+  animation: c-rise 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.c-board.enter .c-board-body > :nth-child(2) {
+  animation-delay: 0.05s;
+}
+.c-board.enter .c-board-body > :nth-child(3) {
+  animation-delay: 0.1s;
+}
+.c-board.enter .c-board-body > :nth-child(4) {
+  animation-delay: 0.15s;
+}
+.c-board.enter .c-board-body > :nth-child(5) {
+  animation-delay: 0.2s;
+}
+.c-board.enter .c-board-body > :nth-child(6) {
+  animation-delay: 0.25s;
+}
+.c-board.enter .c-board-body > :nth-child(n + 7) {
+  animation-delay: 0.3s;
+}
+.c-claim em i {
+  animation: c-pop 0.3s cubic-bezier(0.2, 1.3, 0.4, 1);
+  display: inline-block;
+}
+.c-now .big,
+.c-now p {
+  animation: c-fade 0.25s ease-out;
+}
+.c-log .hot {
+  animation: c-fade 0.3s ease-out;
+}
+.c-row {
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.c-scope i {
+  transform-origin: bottom;
+  animation: c-bar 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.c-time .ticks button {
+  transition:
+    background 0.2s,
+    box-shadow 0.2s;
+}
+.c-claim {
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.c-verdict.ready .grid > div,
+.c-verdict.ready p,
+.c-verdict.ready .quiet {
+  animation: c-fade 0.4s ease-out 0.12s backwards;
+}
+.console-shell .text-button,
+.console-shell .secondary-button,
+.console-shell .primary-button,
+.console-shell .domain-chip,
+.c-ctrl button {
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s,
+    transform 0.1s;
+}
+.console-shell .text-button:not(:disabled):active,
+.console-shell .secondary-button:not(:disabled):active,
+.console-shell .primary-button:not(:disabled):active,
+.console-shell .domain-chip:active,
+.c-ctrl button:not(:disabled):active {
+  transform: scale(0.97);
+}
+.console-shell .primary-button:not(:disabled):hover {
+  background: #2d3138;
+}
+.console-shell .field textarea,
+.console-shell .field input {
+  transition: border-color 0.15s;
+}
+.console-shell .field textarea:focus,
+.console-shell .field input:focus {
+  border-color: var(--c-t0);
+}
+.console-shell .drawer-backdrop {
+  animation: c-fade 0.2s ease-out;
+}
+.console-shell .evidence-drawer {
+  animation: c-drawer 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.console-shell .modal[open] {
+  animation: c-rise 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.console-shell .modal[open]::backdrop {
+  animation: c-fade 0.2s ease-out;
+}
+.console-shell.home .h-lead > p,
+.console-shell.home .h-form,
+.h-flow {
+  animation: c-rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) 0.1s backwards;
+}
+.h-flow {
+  animation-delay: 0.18s;
+}
+@keyframes c-char {
+  from {
+    opacity: 0;
+    transform: translateY(0.25em);
   }
-  100% {
-    opacity: 1;
-    transform: translateX(100%);
+}
+@keyframes c-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes c-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes c-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+@keyframes c-bar {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes c-drawer {
+  from {
+    transform: translateX(28px);
+    opacity: 0;
   }
 }
 @keyframes c-strike {
@@ -1409,16 +1401,7 @@
     background-size: 0 2px;
   }
 }
-@keyframes c-rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-}
 @media (max-width: 1100px) {
-  .c-stage3 {
-    overflow: visible;
-  }
   .console-shell .h-form .access-panel {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1470,13 +1453,6 @@
     margin-bottom: 6px;
     transform: none;
   }
-  .c-rig,
-  .c-world {
-    position: static;
-    display: block;
-    transform: none !important;
-  }
-  .c-fx,
   .c-threads,
   .c-packet,
   .c-wall {
@@ -1490,14 +1466,13 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .h-packet {
-    display: none;
-  }
-  .c-board,
-  .c-float-card .ln,
-  .c-verdict.ready,
-  .c-intro li {
+  .console-shell *,
+  .console-shell *::before,
+  .console-shell *::after {
     animation: none !important;
     transition: none !important;
+  }
+  .h-packet {
+    display: none;
   }
 }

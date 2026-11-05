@@ -41,6 +41,7 @@ export function ArenaConsole({
   slate,
   notices,
   conditions,
+  selectedAttack,
   historical,
   busy,
   onEvidence,
@@ -249,6 +250,7 @@ export function ArenaConsole({
                         key={b.id}
                         type="button"
                         aria-label={`第 ${i + 1} 步`}
+                        data-tip={`第 ${i + 1} 步`}
                         aria-current={i === index ? "step" : undefined}
                         className={`${i <= index ? "seen" : ""} ${i === index ? "cur" : ""} ${b.stage === "verify" && b.attack ? `is-${b.attack.status}` : ""}`}
                         onClick={() => goTo(i)}
@@ -279,6 +281,7 @@ export function ArenaConsole({
             directed={directed}
             camera={cursor !== null || playing}
             lead={lead}
+            located={selectedAttack}
             entering={intro && !revealed}
             readOnly={historical || busy}
             onClaim={onClaim}
@@ -416,7 +419,10 @@ export function ArenaConsole({
                   <button
                     key={a.id}
                     type="button"
-                    className={`c-row ${a.id === current?.attack?.id ? "sel" : ""}`}
+                    id={`dispute-${a.id}`}
+                    data-attack={a.id}
+                    title="查看这条质疑的证据"
+                    className={`c-row ${a.id === current?.attack?.id ? "sel" : ""} ${a.id === selectedAttack ? "located" : ""}`}
                     onClick={() => onEvidence(a)}
                   >
                     <em className={`is-${state}`}>

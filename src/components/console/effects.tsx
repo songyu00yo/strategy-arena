@@ -401,3 +401,83 @@ export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string
   }, [dark, embers]);
   return <canvas ref={ref} className="c-dust" aria-hidden="true" />;
 }
+
+const CLICKABLE = "button, a[href], select, summary, label, [role='button']";
+
+/** Every press answers the same way: a sprung push, a ring and a few sparks from the exact point touched. */
+export function ClickFx() {
+  useEffect(() => {
+    if (reducedMotion()) return;
+    const burst = (x: number, y: number, color: string) => {
+      const ring = document.createElement("div");
+      ring.className = "c-press-ring";
+      ring.style.cssText = `left:${x}px;top:${y}px;color:rgb(${color})`;
+      document.body.appendChild(ring);
+      ring.animate(
+        [
+          { transform: "translate(-50%,-50%) scale(.2)", opacity: 0.85 },
+          { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
+        ],
+        { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
+      ).onfinish = () => ring.remove();
+      for (let i = 0; i < 7; i++) {
+        const spark = document.createElement("div");
+        spark.className = "c-press-spark";
+        spark.style.cssText = `left:${x}px;top:${y}px;background:rgb(${color})`;
+        document.body.appendChild(spark);
+        const angle = (i / 7) * Math.PI * 2 + Math.random() * 0.6;
+        const reach = 18 + Math.random() * 22;
+        spark.animate(
+          [
+            { transform: "translate(-50%,-50%)", opacity: 0.9 },
+            {
+              transform: `translate(calc(-50% + ${Math.cos(angle) * reach}px),calc(-50% + ${Math.sin(angle) * reach}px)) scale(.3)`,
+              opacity: 0,
+            },
+          ],
+          { duration: 380 + Math.random() * 160, easing: "cubic-bezier(.16,1,.3,1)" },
+        ).onfinish = () => spark.remove();
+      }
+    };
+    const answer = (target: HTMLElement, x: number, y: number) => {
+      const route = getComputedStyle(target).getPropertyValue("--route").trim();
+      burst(x, y, route ? route.replaceAll(" ", ",") : "11,13,16");
+      target.animate(
+        [
+          { scale: "1" },
+          { scale: "0.955", offset: 0.28 },
+          { scale: "1.018", offset: 0.68 },
+          { scale: "1" },
+        ],
+        { duration: 340, easing: "ease-out" },
+      );
+      // Dialogs and fills grow from where the press happened.
+      const box = target.getBoundingClientRect();
+      target.style.setProperty("--cx", `${x - box.left}px`);
+      target.style.setProperty("--cy", `${y - box.top}px`);
+      const root = document.documentElement.style;
+      root.setProperty("--press-dx", `${x - innerWidth / 2}px`);
+      root.setProperty("--press-dy", `${y - innerHeight / 2}px`);
+    };
+    const onPointer = (event: PointerEvent) => {
+      const target = (event.target as Element | null)?.closest<HTMLElement>(CLICKABLE);
+      if (!target || target.matches(":disabled")) return;
+      answer(target, event.clientX, event.clientY);
+    };
+    // A keyboard press has no pointer behind it, so it answers from the control's centre.
+    const onClick = (event: MouseEvent) => {
+      if (event.detail !== 0) return;
+      const target = (event.target as Element | null)?.closest<HTMLElement>(CLICKABLE);
+      if (!target || target.matches(":disabled")) return;
+      const box = target.getBoundingClientRect();
+      answer(target, box.left + box.width / 2, box.top + box.height / 2);
+    };
+    addEventListener("pointerdown", onPointer, true);
+    addEventListener("click", onClick, true);
+    return () => {
+      removeEventListener("pointerdown", onPointer, true);
+      removeEventListener("click", onClick, true);
+    };
+  }, []);
+  return null;
+}

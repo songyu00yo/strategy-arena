@@ -43,6 +43,7 @@ export function RouteStage({
   directed,
   camera,
   lead,
+  located,
   entering,
   readOnly,
   onClaim,
@@ -53,8 +54,9 @@ export function RouteStage({
   speed: number;
   directed: boolean;
   camera: boolean;
-  /** Pause before a step acts, leaving room for its stage word. */
-  lead: number;
+  /** Pause before a step acts, leaving room for its stage word. */ lead: number;
+  /** A challenge the viewer asked to find on the boards. */
+  located?: string;
   entering: boolean;
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
@@ -649,6 +651,37 @@ export function RouteStage({
     return () => removeEventListener("mousemove", onMove);
   }, []);
 
+  // Pointing at a claim or a challenge lights the threads tied to it, so the page explains itself.
+  useEffect(() => {
+    const light = (event: Event, on: boolean) => {
+      const node = event.target as Element | null;
+      const row = node?.closest?.<HTMLElement>(".c-row[data-attack]");
+      const claim = node?.closest?.<HTMLElement>("[data-claim]");
+      if (!row && !claim) return;
+      const ids = row
+        ? [row.dataset.attack]
+        : live.current
+            .filter((a) => `${a.targetStrategyId}:${a.targetClaimId}` === claim!.dataset.claim)
+            .map((a) => a.id);
+      for (const id of ids) {
+        document.querySelector(`.c-thread[data-attack="${id}"]`)?.classList.toggle("lit", on);
+        const a = live.current.find((x) => x.id === id);
+        if (row && a)
+          document
+            .querySelector(`[data-claim="${a.targetStrategyId}:${a.targetClaimId}"]`)
+            ?.classList.toggle("lit", on);
+      }
+    };
+    const over = (e: Event) => light(e, true);
+    const out = (e: Event) => light(e, false);
+    document.addEventListener("mouseover", over);
+    document.addEventListener("mouseout", out);
+    return () => {
+      document.removeEventListener("mouseover", over);
+      document.removeEventListener("mouseout", out);
+    };
+  }, []);
+
   const involved = (id: string) => {
     if (!camera || !current || current.stage === "judge") return true;
     return current.agent === id || current.to === id;
@@ -709,7 +742,7 @@ export function RouteStage({
                   key={claimId}
                   type="button"
                   data-claim={`${id}:${claimId}`}
-                  className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""}`}
+                  className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
                   disabled={readOnly || !after}
                   title={after ? "向这条判断发起挑战" : "这条主张已撤回"}
                   onClick={() => onClaim(view, claimId)}
@@ -771,7 +804,8 @@ export function RouteStage({
                 if (node) paths.current.set(a.id, node);
                 else paths.current.delete(a.id);
               }}
-              className={`c-thread is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""}`}
+              data-attack={a.id}
+              className={`c-thread is-${stateOf(a)} ${a.id === activeAttack?.id ? "on" : ""} ${a.id === located ? "located" : ""}`}
             />
             <path
               pathLength={1}

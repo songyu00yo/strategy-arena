@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ArenaSnapshot, Challenge } from "@/lib/contracts";
+import type { ArenaSnapshot, Challenge, ModelMode } from "@/lib/contracts";
 
 export interface Health {
   status: string;
@@ -281,10 +281,15 @@ export function useArena() {
       }
     },
     clearError: () => setError(""),
-    create: (challenge: Challenge) => mutate("/api/arenas", challenge),
-    rematch: (challenge: Challenge, changeReason: string) =>
+    create: (challenge: Challenge, modelMode: ModelMode = "auto") =>
+      mutate("/api/arenas", { ...challenge, modelMode }),
+    rematch: (challenge: Challenge, changeReason: string, modelMode?: ModelMode) =>
       latest.current
-        ? mutate(`/api/arenas/${latest.current.id}/versions`, { challenge, changeReason })
+        ? mutate(`/api/arenas/${latest.current.id}/versions`, {
+            challenge,
+            changeReason,
+            modelMode,
+          })
         : Promise.resolve(false),
     intervene: (targetStrategyId: string, targetClaimId: string, text: string) =>
       latest.current

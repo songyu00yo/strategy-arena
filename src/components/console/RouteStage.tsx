@@ -47,6 +47,7 @@ export function RouteStage({
   lead,
   located,
   reviewing,
+  pulled,
   onStep,
   onEvidence,
   entering,
@@ -63,6 +64,7 @@ export function RouteStage({
   /** A challenge the viewer asked to find on the boards. */ located?: string;
   /** Looking back over a finished game: each step can show how it turned out. */
   reviewing: boolean;
+  pulled: number | null;
   onStep: (index: number) => void;
   onEvidence: (attack: Attack) => void;
   entering: boolean;
@@ -885,6 +887,7 @@ export function RouteStage({
         directed={directed}
         lead={lead}
         reviewing={reviewing}
+        pulled={pulled}
         onStep={onStep}
       />
       <LiveRecord

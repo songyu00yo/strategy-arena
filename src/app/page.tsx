@@ -28,6 +28,7 @@ import {
   type ArenaVersion,
   type Challenge,
 } from "@/lib/contracts";
+import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
 import { StrategyCard, PendingCard } from "@/components/strategy-card";
 import { DisputeBoard } from "@/components/dispute-board";
@@ -273,17 +274,30 @@ export default function Page() {
     setLocatedId(a.id);
     goToRoute(a.targetStrategyId, `dispute-${a.id}`);
   };
-  // Entering an arena or a new version starts at its goal, not where the form's button was.
+  // Only a displayed-version transition or a completed local rematch requests heading focus.
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const activeVersionId = arena.snapshot?.activeVersionId;
+  const previousDisplayedVersion = useRef<string | undefined>(undefined);
+  const localVersionNavigation = useRef(false);
+  const displayedVersionId = selected?.id;
+  const overlayOpen =
+    editing || modelOpen || claimTarget !== null || stopConfirm || attack !== null;
   useEffect(() => {
-    if (!activeVersionId) return;
+    const transitioned = previousDisplayedVersion.current !== displayedVersionId;
+    previousDisplayedVersion.current = displayedVersionId;
+    if (
+      (!transitioned && !localVersionNavigation.current) ||
+      !displayedVersionId ||
+      historical ||
+      overlayOpen
+    )
+      return;
+    localVersionNavigation.current = false;
     const frame = requestAnimationFrame(() => {
       window.scrollTo({ top: 0, behavior: "instant" });
       headingRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeVersionId]);
+  }, [displayedVersionId, historical, overlayOpen]);
   const versionEvents = arena.snapshot?.events.filter((e) => e.versionId === selected?.id) ?? [];
   const selectedSteps = arena.snapshot?.steps.filter((s) => s.versionId === selected?.id) ?? [];
   const selectedRunning = !!selected && ["running", "ready"].includes(selected.status);
@@ -616,11 +630,7 @@ export default function Page() {
               <section className="stage-rail" aria-label="推演进度">
                 {STAGES.map((stage, i) => {
                   const steps = selectedSteps.filter((s) => s.stage === stage);
-                  const completed =
-                    steps.length > 0 &&
-                    steps.every((s) => s.status === "completed" || s.status === "skipped");
-                  const failed = steps.some((s) => s.status === "failed");
-                  const unknown = steps.some((s) => s.status === "uncertain");
+                  const { completed, failed, unknown } = stageProgress(steps);
                   const current = selected.stage === stage && !completed;
                   return (
                     <div
@@ -917,6 +927,7 @@ export default function Page() {
             onCancel={() => setEditing(false)}
             onSubmit={async (challenge, reason, modelMode) => {
               if (await arena.rematch(challenge, reason, modelMode)) {
+                localVersionNavigation.current = true;
                 setVersionId(null);
                 setEditing(false);
               }
@@ -937,6 +948,7 @@ export default function Page() {
                 if (
                   await arena.intervene(claimTarget.strategy.id, claimTarget.claimId, challengeText)
                 ) {
+                  localVersionNavigation.current = true;
                   setClaimTarget(null);
                   setVersionId(null);
                 }

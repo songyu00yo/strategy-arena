@@ -2,14 +2,15 @@
 import { useEffect, useRef } from "react";
 import {
   ArrowRight,
-  Check,
   FileSearch,
   Calculator,
   X,
   CornerDownRight,
   ExternalLink,
+  LocateFixed,
 } from "lucide-react";
 import type { ArenaVersion, Attack, Evidence } from "@/lib/contracts";
+import { attackMeta, decisionMeta, evidenceMeta, StatusTag } from "@/components/status";
 
 function EvidenceItem({ item }: { item: Evidence }) {
   const external = /^https?:\/\//.test(item.source);
@@ -18,16 +19,7 @@ function EvidenceItem({ item }: { item: Evidence }) {
       <div className="evidence-item-heading">
         {item.tool === "calculate" ? <Calculator size={16} /> : <FileSearch size={16} />}
         <h4>{item.title}</h4>
-        <span>
-          {
-            {
-              found: "找到材料",
-              calculated: "计算完成",
-              unavailable: "无可用证据",
-              error: "核验失败",
-            }[item.status]
-          }
-        </span>
+        <StatusTag meta={evidenceMeta[item.status]} />
       </div>
       {item.expression && (
         <div className="calculation">
@@ -64,10 +56,12 @@ export function EvidenceDrawer({
   attack,
   version,
   onClose,
+  onLocate,
 }: {
   attack: Attack;
   version: ArenaVersion;
   onClose: () => void;
+  onLocate: (attack: Attack) => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -80,7 +74,7 @@ export function EvidenceDrawer({
       if (e.key === "Escape") onClose();
       if (e.key === "Tab") {
         const nodes = dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button, a[href], input, textarea, [tabindex="0"]',
+          'button:not(:disabled), a[href], input, textarea, summary, [tabindex="0"]',
         );
         if (!nodes?.length) return;
         const first = nodes[0];
@@ -112,6 +106,9 @@ export function EvidenceDrawer({
         .map((response) => ({ revision: r, response })),
     );
   const finding = version.verdict?.attackFindings.find((f) => f.attackId === attack.id);
+  // Show what a citation points at, never a bare internal evidence ID.
+  const citations = (ids: string[]) =>
+    ids.map((id) => version.evidence.find((e) => e.id === id)?.title ?? id).join("、");
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside
@@ -124,8 +121,18 @@ export function EvidenceDrawer({
       >
         <div className="drawer-heading">
           <div>
-            <span className="eyebrow">THE EVIDENCE / 证据链</span>
+            <span className="eyebrow">证据链</span>
             <h2 id="evidence-title">这一条，站得住吗？</h2>
+            <div className="drawer-summary">
+              <StatusTag meta={attackMeta[attack.status]} />
+              <span>
+                {attack.from} 质疑路线 {attack.targetStrategyId}
+              </span>
+              <button type="button" className="text-button" onClick={() => onLocate(attack)}>
+                <LocateFixed size={13} aria-hidden="true" />
+                在路线 {attack.targetStrategyId} 中定位
+              </button>
+            </div>
           </div>
           <button
             className="icon-button"
@@ -173,14 +180,7 @@ export function EvidenceDrawer({
             <span className="evidence-step">04 / 路线如何回应</span>
             {response ? (
               <div className="revision-response">
-                <span className="response-decision">
-                  <Check size={14} />
-                  {
-                    { accept: "接受质疑", reject: "反驳质疑", unresolved: "保留未决" }[
-                      response.decision
-                    ]
-                  }
-                </span>
+                <StatusTag meta={decisionMeta[response.decision]} />
                 <p>{response.reason}</p>
                 {response.change && (
                   <div className="response-change">
@@ -189,7 +189,7 @@ export function EvidenceDrawer({
                   </div>
                 )}
                 {response.evidenceIds.length > 0 && (
-                  <small>引用证据：{response.evidenceIds.join("、")}</small>
+                  <small>引用证据：{citations(response.evidenceIds)}</small>
                 )}
               </div>
             ) : (
@@ -245,7 +245,7 @@ export function EvidenceDrawer({
               </span>
               <h3>{finding.reason}</h3>
               {finding.evidenceIds.length > 0 && (
-                <small>裁决引用证据：{finding.evidenceIds.join("、")}</small>
+                <small>裁决引用证据：{citations(finding.evidenceIds)}</small>
               )}
               <p>
                 {version.verdict?.preferred && (

@@ -82,19 +82,6 @@ export function ArenaConsole({
   const [stepwise, setStepwise] = useState(false);
   const [wholeResult, setWholeResult] = useState(false);
   const [openStep, setOpenStep] = useState<number | null>(null);
-  // The gap in the chain outlasts the card's flight home, so it never closes under a card in the air.
-  const [pulled, setPulled] = useState<number | null>(null);
-  const gapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const openCard = useCallback((i: number) => {
-    clearTimeout(gapTimer.current);
-    setOpenStep(i);
-    setPulled(i);
-  }, []);
-  const closeCard = useCallback(() => {
-    setOpenStep(null);
-    clearTimeout(gapTimer.current);
-    gapTimer.current = setTimeout(() => setPulled(null), reducedMotion() ? 0 : 425);
-  }, []);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
@@ -374,8 +361,7 @@ export function ArenaConsole({
             lead={lead}
             located={selectedAttack}
             reviewing={reviewing}
-            pulled={pulled}
-            onStep={openCard}
+            onStep={setOpenStep}
             onEvidence={onEvidence}
             entering={intro && !revealed}
             readOnly={historical || busy}
@@ -489,7 +475,7 @@ export function ArenaConsole({
           </div>
         </main>
         <div className="c-bottom">
-          <RouteChart version={version} beats={beats} index={index} onStep={openCard} />
+          <RouteChart version={version} beats={beats} index={index} onStep={setOpenStep} />
           <section className="c-list" aria-label="全部质疑">
             <h2>
               全部质疑 <span>点击看证据</span>
@@ -532,14 +518,14 @@ export function ArenaConsole({
           index={openStep}
           last={index}
           reviewing={reviewing}
-          onOpen={openCard}
-          onClose={closeCard}
+          onOpen={setOpenStep}
+          onClose={() => setOpenStep(null)}
           onStage={(i) => {
-            closeCard();
+            setOpenStep(null);
             goTo(i);
           }}
           onEvidence={(attack) => {
-            closeCard();
+            setOpenStep(null);
             onEvidence(attack);
           }}
         />

@@ -3551,31 +3551,54 @@
 }
 /* ------ A step drawn out of the chain: the same card, enlarged. ------ */
 .c-pull {
+  flex-direction: column;
   width: min(860px, 92vw);
   max-width: none;
   max-height: 86vh;
   margin: auto;
-  padding: 0;
-  overflow: hidden;
+  padding: 4px 0 0;
+  overflow: visible;
   border: 0;
-  border-top: 4px solid rgb(var(--route));
-  background: #fff;
+  background: none;
   color: var(--c-t0);
   font-size: 13.5px;
-  box-shadow:
-    0 0 0 1px #0b0d10,
-    0 30px 80px rgb(11 13 16 / 0.42),
-    0 0 60px rgb(var(--route) / 0.22);
-  flex-direction: column;
   transform-origin: 0 0;
-  will-change: transform;
 }
 .c-pull[open] {
   display: flex;
 }
 .c-pull::backdrop {
   background: rgb(11 13 16 / 0.42);
-  animation: c-fade 0.32s ease-out;
+}
+.c-pull-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-top: 4px solid rgb(var(--route));
+  background: #fff;
+  box-shadow:
+    0 0 0 1px #0b0d10,
+    0 30px 80px rgb(11 13 16 / 0.42);
+  transform-origin: 0 0;
+}
+.c-pull > :not(.c-pull-bg, .c-pull-face) {
+  position: relative;
+  z-index: 1;
+}
+.console-shell .c-pull-face {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 2;
+  max-height: none;
+  margin: 0;
+  background: #fff;
+  box-shadow: none;
+  visibility: visible;
+  transition: none;
+  animation: none;
+  translate: none;
+  transform-origin: 0 0;
+  pointer-events: none;
 }
 .c-pull .tb {
   flex: none;
@@ -3635,31 +3658,6 @@
   gap: 12px;
   padding: 8px 0;
   border-top: 1px solid var(--c-line);
-  animation: c-pull-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) backwards;
-}
-.c-step dl > div:nth-child(1) {
-  animation-delay: 0.16s;
-}
-.c-step dl > div:nth-child(2) {
-  animation-delay: 0.22s;
-}
-.c-step dl > div:nth-child(3) {
-  animation-delay: 0.28s;
-}
-.c-step dl > div:nth-child(4) {
-  animation-delay: 0.34s;
-}
-.c-step dl > div:nth-child(5) {
-  animation-delay: 0.4s;
-}
-.c-step dl > div:nth-child(n + 6) {
-  animation-delay: 0.46s;
-}
-@keyframes c-pull-in {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
 }
 .c-step dt {
   font-size: 12.5px;
@@ -3692,10 +3690,12 @@
   gap: 8px;
   padding: 10px 18px 12px;
   border-top: 1px solid var(--c-line);
-  animation: c-fade 0.3s ease-out 0.42s backwards;
 }
 .c-pull .actions > span {
   flex: 1;
+}
+.c-root.held .c-thread-flow {
+  animation-play-state: paused;
 }
 /* The gap it left, and the cards making room. */
 .c-deck-card.pulled {
@@ -3709,10 +3709,6 @@
     transform 0.8s cubic-bezier(0.18, 1.2, 0.3, 1),
     opacity 0.5s,
     translate 0.36s cubic-bezier(0.2, 0.9, 0.3, 1);
-}
-.c-pull.arrived .c-step dl > div {
-  animation-delay: 0s;
-  animation-duration: 0.3s;
 }
 .console-shell:not(.home) .site-header {
   top: 5px;
@@ -3834,11 +3830,6 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .c-pull,
-  .c-pull *,
-  .c-pull::backdrop {
-    animation: none !important;
-  }
   .console-shell *,
   .console-shell *::before,
   .console-shell *::after {

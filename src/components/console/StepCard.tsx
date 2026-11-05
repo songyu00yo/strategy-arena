@@ -1,28 +1,140 @@
 "use client";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import { X } from "lucide-react";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { STAGE_LABELS, type ArenaVersion, type Attack } from "@/lib/contracts";
-import { leaveAs, reducedMotion, ROUTE_COLOR } from "./effects";
+import { holdMotion, reducedMotion, ROUTE_COLOR } from "./effects";
 import { nameOf, type Beat } from "./beats";
 
-/**
- * How to draw an open card as the one in the chain: same top-left, same width, and cropped to the
- * chain card's height so the first frame reads as that card and not a tiny page.
- */
-function slotOf(index: number, open: DOMRect) {
-  const slot = document.querySelector(`[data-step-source="${index}"]`)?.getBoundingClientRect();
-  if (!slot) return null;
-  const scale = slot.width / open.width;
-  return {
-    dx: slot.left - open.left,
-    dy: slot.top - open.top,
-    scale,
-    crop: Math.max(0, open.height - slot.height / scale),
-  };
+/** One spring drives the whole flight, so nothing in it can change speed abruptly. */
+type Spring = { ms: number; w: number; z: number };
+const DRAW: Spring = { ms: 620, w: 14.1, z: 0.8 };
+const LAND: Spring = { ms: 460, w: 19.6, z: 1 };
+const STEPS = 40;
+const TILT = (20 * Math.PI) / 180;
+
+function spring(ms: number, { w, z }: Spring) {
+  const t = ms / 1000;
+  if (z >= 1) return 1 - (1 + w * t) * Math.exp(-w * t);
+  const wd = w * Math.sqrt(1 - z * z);
+  return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + ((z * w) / wd) * Math.sin(wd * t));
 }
-const TILT = "perspective(1200px) rotateY(20deg)";
-const FULL = "inset(-120px)";
+function smooth(from: number, to: number, x: number) {
+  const t = Math.min(1, Math.max(0, (x - from) / (to - from)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Leave a gap where this step sits in the chain. Set on the DOM so the page never re-renders mid-flight. */
+function markDeck(pulled: number | null, gap = pulled !== null) {
+  document.querySelectorAll<HTMLElement>("[data-step-source]").forEach((card) => {
+    const i = Number(card.dataset.stepSource);
+    card.classList.toggle("pulled", i === pulled);
+    card.classList.toggle("past-gap", gap && pulled !== null && i > pulled);
+  });
+}
+
+/** A copy of the chain card, sitting exactly over the top of the open one until it fades. */
+function faceOf(source: HTMLElement, scale: number) {
+  const face = source.cloneNode(true) as HTMLElement;
+  face.removeAttribute("data-step-source");
+  face.removeAttribute("role");
+  face.removeAttribute("tabindex");
+  face.classList.remove("pulled", "past-gap");
+  face.classList.add("c-pull-face");
+  face.setAttribute("aria-hidden", "true");
+  face.style.width = `${source.offsetWidth}px`;
+  face.style.height = `${source.offsetHeight}px`;
+  face.style.transform = `scale(${scale})`;
+  return face;
+}
+
+/**
+ * Every part of the card as a function of one number: 0 is in the chain, 1 is fully open.
+ * Only transform and opacity change, so the flight runs on the compositor.
+ */
+function fly(el: HTMLDialogElement, index: number, from: number, to: number, how: Spring) {
+  // Measured first: from here on the animations below change what the browser reports.
+  const open = el.getBoundingClientRect();
+  const lines = [
+    ...el.querySelectorAll<HTMLElement>(
+      ":scope > .tb, .c-step h3, .c-step dl > div, :scope > .actions",
+    ),
+  ].map((line) => ({
+    line,
+    bottom: Math.min(1, (line.getBoundingClientRect().bottom - open.top) / open.height),
+  }));
+  const source = document.querySelector<HTMLElement>(`[data-step-source="${index}"]`);
+  const slot = source?.getBoundingClientRect();
+  const samples = Array.from({ length: STEPS + 1 }, (_, i) =>
+    i === STEPS ? to : from + (to - from) * spring((how.ms * i) / STEPS, how),
+  );
+  const timing = { duration: how.ms, fill: "both", easing: "linear" } as const;
+  const parts: Animation[] = [
+    el.animate(
+      samples.map((p) => ({ opacity: smooth(0, 0.8, p) })),
+      { ...timing, pseudoElement: "::backdrop" },
+    ),
+  ];
+  el.querySelector(".c-pull-face")?.remove();
+  if (!source || !slot || !source.offsetWidth) {
+    parts.unshift(
+      el.animate(
+        samples.map((p) => ({
+          transform: `translateY(${(1 - p) * 24}px) scale(${0.94 + 0.06 * p})`,
+          opacity: smooth(0, 0.6, p),
+        })),
+        timing,
+      ),
+    );
+    return parts;
+  }
+  const dx = slot.left - open.left;
+  const dy = slot.top - open.top;
+  const small = slot.width / open.width / Math.cos(TILT);
+  const fit = open.width / source.offsetWidth;
+  const low = Math.min(1, (source.offsetHeight * fit) / open.height);
+  const height = (p: number) => low + (1 - low) * smooth(0.04, 0.86, p);
+  parts.unshift(
+    el.animate(
+      samples.map((p) => {
+        const x = dx * (1 - smooth(0.12, 1, p));
+        const y = dy * (1 - p) - 70 * Math.sin(Math.PI * Math.min(p, 1));
+        const turn = Math.max(0, 1 - p) ** 2 * 20;
+        return {
+          transform: `translate(${x}px,${y}px) perspective(1200px) rotateY(${turn}deg) scale(${small + (1 - small) * p})`,
+        };
+      }),
+      timing,
+    ),
+    (el.querySelector(".c-pull-bg") as HTMLElement).animate(
+      samples.map((p) => ({ transform: `scaleY(${Math.min(1, height(p))})` })),
+      timing,
+    ),
+  );
+  const face = faceOf(source, fit);
+  el.append(face);
+  parts.push(
+    face.animate(
+      samples.map((p) => ({ opacity: 1 - smooth(0.05, 0.3, p) })),
+      timing,
+    ),
+  );
+  // Each line of detail appears as the growing card reaches it.
+  lines.forEach(({ line, bottom }) => {
+    let start = 0.1;
+    while (start < 1 && height(start) < bottom) start += 0.01;
+    parts.push(
+      line.animate(
+        samples.map((p) => {
+          const shown = smooth(start, start + 0.16, p);
+          return { opacity: shown, transform: `translateY(${(1 - shown) * 10}px)` };
+        }),
+        timing,
+      ),
+    );
+  });
+  return parts;
+}
 
 type Row = { label: string; text: string; tone?: string };
 
@@ -141,98 +253,70 @@ export function StepCard({
   const beat = beats[index];
   const known = reviewing ? beats : beats.slice(0, last + 1);
   const ref = useRef<HTMLDialogElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const showing = useRef(index);
+  const leaving = useRef(false);
   const first = useRef(true);
-  const [arrived, setArrived] = useState(false);
-  useEffect(() => {
-    showing.current = index;
-  }, [index]);
+  const flight = useRef<{ parts: Animation[]; from: number; to: number; how: Spring; at: number }>(
+    null,
+  );
 
-  // Close: the card goes back into its slot, wherever the viewer has paged to by then.
-  useLayoutEffect(() => {
+  const launch = (to: number, how: Spring, done: () => void) => {
     const el = ref.current;
-    return () => {
-      if (!el) return;
-      const slot = slotOf(showing.current, el.getBoundingClientRect());
-      leaveAs(
-        el,
-        slot
-          ? [
-              { transform: "none", clipPath: FULL, offset: 0 },
-              {
-                transform: `translate(${slot.dx}px,${slot.dy - 120}px) perspective(1200px) rotateY(8deg) scale(${slot.scale * 1.05})`,
-                clipPath: `inset(0 0 ${slot.crop * 0.8}px 0)`,
-                offset: 0.68,
-              },
-              {
-                transform: `translate(${slot.dx}px,${slot.dy}px) ${TILT} scale(${slot.scale})`,
-                clipPath: `inset(0 0 ${slot.crop}px 0)`,
-                offset: 1,
-              },
-            ]
-          : [
-              { transform: "none", opacity: 1 },
-              { transform: "translateY(18px) scale(.94)", opacity: 0 },
-            ],
-        {
-          duration: 430,
-          backdrop: "rgb(11 13 16 / 0.42)",
-          easing: "cubic-bezier(.5,0,.2,1)",
-          display: "flex",
-        },
-      );
-    };
-  }, []);
+    if (!el) return;
+    const now = flight.current;
+    const elapsed = now ? performance.now() - now.at : Infinity;
+    const from = !now
+      ? 1 - to
+      : elapsed >= now.how.ms
+        ? now.to
+        : now.from + (now.to - now.from) * spring(elapsed, now.how);
+    now?.parts.forEach((part) => part.cancel());
+    const parts = fly(el, showing.current, from, to, how);
+    flight.current = { parts, from, to, how, at: performance.now() };
+    parts[0].onfinish = done;
+  };
 
-  // Open: draw the card out of the stack.
+  // Open: draw the card out of the stack. Once there it holds no animation at all.
   useLayoutEffect(() => {
     const el = ref.current;
     const previous = document.activeElement as HTMLElement | null;
+    holdMotion(true);
     el?.showModal();
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    if (el && !reducedMotion()) {
-      const open = el.getBoundingClientRect();
-      const slot = slotOf(index, open);
-      el.animate(
-        slot
-          ? [
-              {
-                transform: `translate(${slot.dx}px,${slot.dy}px) ${TILT} scale(${slot.scale})`,
-                clipPath: `inset(0 0 ${slot.crop}px 0)`,
-                offset: 0,
-              },
-              {
-                transform: `translate(${slot.dx}px,${slot.dy - 130}px) perspective(1200px) rotateY(6deg) scale(${slot.scale * 1.05})`,
-                clipPath: `inset(0 0 ${slot.crop * 0.8}px 0)`,
-                offset: 0.34,
-              },
-              { transform: "translate(0,-6px) scale(1.01)", clipPath: FULL, offset: 0.84 },
-              { transform: "none", clipPath: FULL, offset: 1 },
-            ]
-          : [
-              { transform: "translateY(24px) scale(.94)", opacity: 0 },
-              { transform: "none", opacity: 1 },
-            ],
-        { duration: slot ? 680 : 320, easing: "cubic-bezier(.55,0,.15,1)" },
-      );
-    }
-    const settled = setTimeout(() => setArrived(true), 720);
+    markDeck(index);
+    if (!reducedMotion())
+      launch(1, DRAW, () => {
+        el?.querySelector(".c-pull-face")?.remove();
+        flight.current?.parts.forEach((part) => part.cancel());
+        flight.current = { parts: [], from: 1, to: 1, how: DRAW, at: 0 };
+      });
     return () => {
-      document.body.style.overflow = overflow;
-      clearTimeout(settled);
+      holdMotion(false);
+      markDeck(null);
       el?.close();
-      // The source card is hidden until this one is back in its slot, and hidden things cannot take focus.
-      setTimeout(() => {
-        if (document.activeElement === document.body) previous?.focus({ preventScroll: true });
-      }, 450);
+      previous?.focus({ preventScroll: true });
     };
     // The card opens once; paging inside it changes content only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep the gap under the step on show, including when new results redraw the chain.
+  useLayoutEffect(() => {
+    showing.current = index;
+    if (!leaving.current) markDeck(index);
+  });
+
+  /** Put the card back, then carry on with what the viewer asked for. */
+  const leave = (then: () => void) => {
+    if (leaving.current) return;
+    leaving.current = true;
+    if (reducedMotion()) return then();
+    // The later cards close up while it descends, so it lands in a slot that is ready for it.
+    setTimeout(() => markDeck(showing.current, false), LAND.ms * 0.45);
+    launch(0, LAND, then);
+  };
+
   // Paging: the new step's detail slides in, on the same card.
-  const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (first.current) {
       first.current = false;
@@ -252,7 +336,7 @@ export function StepCard({
   return (
     <dialog
       ref={ref}
-      className={`c-pull ${arrived ? "arrived" : ""}`}
+      className="c-pull"
       aria-labelledby="c-pull-title"
       style={
         {
@@ -261,12 +345,13 @@ export function StepCard({
       }
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        leave(onClose);
       }}
       onClick={(event) => {
-        if (event.target === ref.current) onClose();
+        if (event.target === ref.current) leave(onClose);
       }}
     >
+      <div className="c-pull-bg" />
       <div className="tb">
         <b id="c-pull-title">
           第 {index + 1} 步 · {STAGE_LABELS[beat.stage]}
@@ -276,13 +361,13 @@ export function StepCard({
           {beat.to ? ` → ${nameOf(beat.to)}` : ""}
           {verified ? ` · ${attackMeta[beat.attack!.status].label}` : ""}
         </span>
-        <button type="button" aria-label="收起这张卡片" onClick={onClose}>
+        <button type="button" aria-label="收起这张卡片" onClick={() => leave(onClose)}>
           <X size={17} />
         </button>
       </div>
       <div className="c-step" ref={body}>
         <h3>{beat.title}</h3>
-        <dl key={beat.id}>
+        <dl>
           {rowsOf(version, beat, known).map((row) => (
             <div key={row.label} className={row.tone}>
               <dt>{row.label}</dt>
@@ -309,11 +394,15 @@ export function StepCard({
           下一步
         </button>
         <span />
-        <button type="button" className="text-button" onClick={() => onStage(index)}>
+        <button type="button" className="text-button" onClick={() => leave(() => onStage(index))}>
           在舞台上看这一步
         </button>
         {beat.attack && (
-          <button type="button" className="primary-button" onClick={() => onEvidence(beat.attack!)}>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => leave(() => onEvidence(beat.attack!))}
+          >
             看证据
           </button>
         )}

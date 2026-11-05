@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
-import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
+import { Chars, motionHeld, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
 import type { Beat } from "./beats";
 
 const CLAIM = { user: "用户给定", estimate: "估算", unknown: "待核", supported: "有据" };
@@ -47,7 +47,6 @@ export function RouteStage({
   lead,
   located,
   reviewing,
-  pulled,
   onStep,
   onEvidence,
   entering,
@@ -64,7 +63,6 @@ export function RouteStage({
   /** A challenge the viewer asked to find on the boards. */ located?: string;
   /** Looking back over a finished game: each step can show how it turned out. */
   reviewing: boolean;
-  pulled: number | null;
   onStep: (index: number) => void;
   onEvidence: (attack: Attack) => void;
   entering: boolean;
@@ -394,6 +392,10 @@ export function RouteStage({
     const tick = (now: number) => {
       const dt = Math.min(0.033, (now - last) / 1000);
       last = now;
+      if (motionHeld()) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
       const origin =
         (flight.current && !flight.current.landed) || kick.current > 0
           ? host.getBoundingClientRect()
@@ -887,7 +889,6 @@ export function RouteStage({
         directed={directed}
         lead={lead}
         reviewing={reviewing}
-        pulled={pulled}
         onStep={onStep}
       />
       <LiveRecord

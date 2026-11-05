@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } f
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { nameOf, outputOf, type Beat } from "./beats";
-import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
+import { Chars, Decode, Dust, motionHeld, reducedMotion, ROUTE_COLOR } from "./effects";
 import { STAGE_LABELS, type Stage } from "@/lib/contracts";
 
 const reduced = reducedMotion;
@@ -413,6 +413,10 @@ export function RecordWall({
     const tick = (t: number) => {
       const dt = Math.min(64, t - last);
       last = t;
+      if (motionHeld()) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
       budget += dt;
       // Typing wakes at a text-like pace, not every frame, and adds a few characters at a time.
       const typing = budget >= 48;
@@ -491,7 +495,6 @@ export function ChainDeck({
   directed,
   lead,
   reviewing,
-  pulled,
   onStep,
 }: {
   version: ArenaVersion;
@@ -500,8 +503,6 @@ export function ChainDeck({
   directed: boolean;
   lead: number;
   reviewing: boolean;
-  /** The step currently drawn out of the stack, which leaves a gap here. */
-  pulled: number | null;
   onStep: (index: number) => void;
 }) {
   const shown = beats.slice(0, index + 1);
@@ -628,7 +629,7 @@ export function ChainDeck({
                     }
                   },
                 })}
-            className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""} ${state ? `is-${state}` : ""} ${pulled === i ? "pulled" : ""} ${pulled !== null && i > pulled ? "past-gap" : ""}`}
+            className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""} ${state ? `is-${state}` : ""}`}
             style={
               {
                 "--d": depth,

@@ -114,16 +114,12 @@ const noScroll = (page: Page) =>
     const root = document.documentElement;
     return Math.max(root.scrollWidth - root.clientWidth, root.scrollHeight - root.clientHeight);
   });
-// The opening titles get their own test; everything else starts past them.
-const skipIntro = (page: Page) =>
-  page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
 
 for (const screen of screens) {
   test.describe(`${screen.name} ${screen.width}x${screen.height}`, () => {
     test.use({ viewport: { width: screen.width, height: screen.height } });
 
     test("the whole console fits one screen", async ({ page }, testInfo) => {
-      await skipIntro(page);
       await mountFixture(page, snapshot());
       await openArena(page);
       await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
@@ -131,7 +127,7 @@ for (const screen of screens) {
       await capture(page, testInfo, `console-${screen.name}-verdict`, false);
       await page.keyboard.press("Home");
       await page.getByRole("button", { name: "从头放映" }).click();
-      await page.waitForTimeout(2400 * 4 + 900);
+      await page.waitForTimeout(1200 * 3 + 900);
       await capture(page, testInfo, `console-${screen.name}-challenge`, false);
       expect(await noScroll(page)).toBeLessThanOrEqual(0);
       await expect(page.locator(".c-board")).toHaveCount(3);
@@ -160,7 +156,6 @@ for (const screen of screens) {
 }
 
 test("phone width never scrolls sideways", async ({ page }, testInfo) => {
-  await skipIntro(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   const sideways = () =>
@@ -179,18 +174,7 @@ test.describe("behaviour", () => {
   test.use({ viewport: { width: 1512, height: 860 } });
   test.setTimeout(120_000);
 
-  test("opening titles report real counts and any key skips them", async ({ page }, testInfo) => {
-    await mountFixture(page, snapshot());
-    await openArena(page);
-    await expect(page.locator(".c-intro")).toContainText("七天内");
-    await page.waitForTimeout(900);
-    await capture(page, testInfo, "console-intro", false);
-    await page.keyboard.press("x");
-    await expect(page.locator(".c-intro")).toHaveCount(0);
-  });
-
   test("stepping walks the record and hides what has not happened", async ({ page }, testInfo) => {
-    await skipIntro(page);
     await mountFixture(page, snapshot());
     await openArena(page);
     for (let i = 0; i < 11; i++) await page.keyboard.press("ArrowLeft");
@@ -230,7 +214,6 @@ test.describe("behaviour", () => {
   });
 
   test("long records stay inside their panels", async ({ page }, testInfo) => {
-    await skipIntro(page);
     const long =
       "这是一条较长的测试文本，长度接近真实模型输出，用来检查内容变多之后，控制台依然不滚动，面板和浮动窗也不会超出屏幕。";
     const attacks: Attack[] = [
@@ -271,7 +254,6 @@ test.describe("behaviour", () => {
   });
 
   test("history and dialogs stay usable", async ({ page }, testInfo) => {
-    await skipIntro(page);
     await mountFixture(
       page,
       snapshotOf([
@@ -291,53 +273,46 @@ test.describe("behaviour", () => {
     await capture(page, testInfo, "console-edit", false);
   });
 
-  test("the opening runs the game from its first step, then hands over", async ({ page }) => {
-    test.setTimeout(120_000);
-    await mountFixture(page, snapshot());
-    await openArena(page);
-    // Taking over with a key must stop on the first step, not on the result.
-    await page.locator(".c-intro").waitFor();
-    await page.keyboard.press("x");
-    await expect(page.locator(".c-root.theater")).toBeVisible();
-    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toHaveCount(0);
-    await page.getByRole("button", { name: "暂停放映" }).click();
-    await expect(page.locator(".c-root.theater")).toHaveCount(0);
-    await page.keyboard.press("End");
-    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
-    await expect(page.locator(".c-film")).toHaveCount(0);
-  });
-
-  test("stepping onto the verdict plays it full screen and folds into the panel", async ({
-    page,
-  }, testInfo) => {
-    await skipIntro(page);
-    await mountFixture(page, snapshot());
-    await openArena(page);
-    await page.keyboard.press("ArrowLeft");
-    await page.keyboard.press("ArrowRight");
-    await expect(page.locator(".c-film")).toBeVisible();
-    await page.waitForTimeout(1600);
-    await capture(page, testInfo, "console-film", false);
-    await expect(page.locator(".c-film")).toHaveCount(0, { timeout: 8000 });
-    await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
-  });
-
   test.describe("reduced motion", () => {
     test.use({ reducedMotion: "reduce" });
-    test("skips the film and the camera", async ({ page }) => {
+    test("stepping shows no moving letters or flights", async ({ page }) => {
       await mountFixture(page, snapshot());
       await openArena(page);
-      await expect(page.locator(".c-intro")).toHaveCount(0);
-      await page.keyboard.press("End");
       await page.keyboard.press("ArrowLeft");
       await page.keyboard.press("ArrowRight");
-      await expect(page.locator(".c-film")).toHaveCount(0);
-      expect(await page.locator(".c-world").evaluate((el) => el.style.transform)).toBe("none");
+      await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toBeVisible();
+      const running = await page.evaluate(
+        () => document.getAnimations().filter((a) => a.playState === "running").length,
+      );
+      expect(running).toBe(0);
     });
   });
 
+  test("playing a replay never moves the layout or covers the screen", async ({
+    page,
+  }, testInfo) => {
+    await mountFixture(page, snapshot());
+    await openArena(page);
+    const boxes = async () =>
+      page.evaluate(() =>
+        ["A", "C", "NOW"].map((id) => {
+          const el = document.querySelector(id === "NOW" ? ".c-now" : `[data-board="${id}"]`)!;
+          const box = el.getBoundingClientRect();
+          return [Math.round(box.left), Math.round(box.top)];
+        }),
+      );
+    await page.waitForTimeout(600);
+    const before = await boxes();
+    await page.getByRole("button", { name: "从头放映" }).click();
+    await page.waitForTimeout(4600);
+    expect(await boxes()).toEqual(before);
+    await expect(page.locator(".c-root")).toBeVisible();
+    await expect(page.getByRole("region", { name: "正在发生" })).toBeVisible();
+    await capture(page, testInfo, "console-replay", false);
+    expect(await noScroll(page)).toBeLessThanOrEqual(0);
+  });
+
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {
-    await skipIntro(page);
     await mountFixture(
       page,
       snapshotOf(
@@ -363,7 +338,6 @@ test.describe("behaviour", () => {
   });
 
   test("an empty game shows no records and an empty wall", async ({ page }, testInfo) => {
-    await skipIntro(page);
     await mountFixture(
       page,
       snapshotOf(

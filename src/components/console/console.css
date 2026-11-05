@@ -1400,7 +1400,6 @@
   stroke-width: 5;
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  filter: drop-shadow(0 0 7px rgb(var(--route)));
 }
 .c-board.enter .c-outline rect {
   animation: c-trace-out 1.9s cubic-bezier(0.6, 0, 0.2, 1) 0.2s;
@@ -1463,7 +1462,6 @@
   line-height: 0.8;
   font-weight: 900;
   letter-spacing: -0.06em;
-  text-shadow: 0 0 30px currentColor;
   pointer-events: none;
   will-change: transform, opacity;
 }
@@ -1622,7 +1620,6 @@
 .c-char {
   display: inline-block;
   animation: c-char 0.46s cubic-bezier(0.2, 1, 0.3, 1) backwards;
-  will-change: transform, opacity;
 }
 .c-dust {
   position: absolute;
@@ -1887,14 +1884,12 @@
   from {
     opacity: 0;
     transform: translate3d(0, 14px, -40px) rotateX(-24deg);
-    filter: blur(2px);
   }
 }
 @keyframes c-char {
   from {
     opacity: 0;
     transform: translateY(0.35em) rotateX(-40deg);
-    filter: blur(2px);
   }
 }
 @keyframes c-chapter-out {
@@ -1949,7 +1944,6 @@
   from {
     opacity: 0;
     transform: translateY(-8px);
-    filter: blur(1px);
   }
 }
 @keyframes c-logline {
@@ -1962,7 +1956,6 @@
   from {
     opacity: 0;
     transform: translateX(10px);
-    filter: blur(1px);
   }
 }
 @keyframes c-bar {
@@ -2014,14 +2007,12 @@
   from {
     opacity: 0;
     transform: translateY(16px) scale(0.98);
-    filter: blur(2px);
   }
 }
 @keyframes c-formin {
   from {
     opacity: 0;
     transform: translateY(16px);
-    filter: blur(2px);
   }
 }
 @keyframes c-sheen {
@@ -2311,9 +2302,15 @@
   .c-claim em {
     font-size: 14.5px;
   }
+  .c-live .tb {
+    font-size: 14px;
+  }
+  .c-live .body {
+    font-size: 14.5px;
+  }
   .c-deck-card {
-    --s: min(72px, calc(46cqw / var(--n)));
-    width: min(47cqw, 800px);
+    --s: min(72px, calc(38cqw / var(--n)));
+    width: 60cqw;
     height: min(190px, calc(100% - 8px));
   }
   .c-deck-card.c-deck-now {
@@ -2733,7 +2730,205 @@
     box-shadow: 0 0 0 3px var(--c-t0);
   }
 }
+/* ------ Performance: glass is faked with opacity. Live blur over moving layers is what dropped frames. ------ */
+.console-shell * {
+  backdrop-filter: none !important;
+}
+.c-thread,
+.c-root .c-thread,
+.c-root.theater .c-thread,
+.c-root .c-thread.on,
+.c-root.theater .c-thread.on,
+.c-root .c-thread.lit {
+  filter: none;
+}
+.c-root .c-thread.on,
+.c-root.theater .c-thread.on {
+  stroke-width: 2.6;
+}
+.c-board {
+  --glass: 0.9;
+  transition:
+    transform 0.6s cubic-bezier(0.2, 0.9, 0.3, 1),
+    background-color 0.4s,
+    border-color 0.3s;
+  contain: layout paint;
+}
+.c-root .c-board.dim,
+.c-root.theater .c-board.dim {
+  --glass: 0.72;
+}
+.c-root .c-board.speaking,
+.c-root .c-board.target {
+  box-shadow:
+    0 0 0 1px rgb(var(--route)),
+    0 12px 34px rgb(var(--route) / 0.26);
+}
+.c-root.theater .c-board.speaking,
+.c-root.theater .c-board.target {
+  box-shadow:
+    0 0 0 1px rgb(var(--route)),
+    0 12px 34px rgb(var(--route) / 0.26);
+}
+.c-root.theater .c-board {
+  will-change: transform;
+}
+.c-cw {
+  contain: strict;
+  background: rgb(255 255 255 / 0.74);
+  transition:
+    opacity 0.6s,
+    border-color 0.3s,
+    background-color 0.3s;
+}
+.c-cw.now {
+  box-shadow: none;
+}
+.c-root .c-verdict,
+.c-root .c-list {
+  background: rgb(255 255 255 / 0.96);
+}
+.c-root .c-verdict:not(.ready) {
+  background: rgb(255 255 255 / 0.85);
+}
+.c-trace {
+  background: rgb(255 255 255 / 0.92);
+}
+.c-deck-card {
+  background: rgb(255 255 255 / 0.93);
+  box-shadow: 0 6px 16px rgb(11 13 16 / 0.1);
+}
+.c-deck-card.c-deck-now {
+  box-shadow: 0 12px 30px rgb(11 13 16 / 0.2);
+}
+.c-root .c-claim.hot {
+  animation: none;
+}
+.c-board::after {
+  display: none;
+}
+.c-flash {
+  will-change: opacity;
+}
+/* ------ Clear stage: the lower band is divided, so no window hides another's motion. ------ */
+.c-deck {
+  right: 34.5%;
+}
+.c-deck-card {
+  --s: min(50px, calc(38cqw / var(--n)));
+  left: 40%;
+  width: 60cqw;
+}
+.c-live {
+  position: absolute;
+  z-index: 6;
+  right: 0;
+  bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  width: 33.5%;
+  height: calc(40% - 8px);
+  overflow: hidden;
+  border: 1px solid var(--c-t0);
+  border-top: 3px solid rgb(var(--route));
+  background: #fff;
+  box-shadow: 0 12px 30px rgb(11 13 16 / 0.18);
+  pointer-events: none;
+}
+.c-live.arrive {
+  animation: c-live-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.c-live .tb {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 10px;
+  border-bottom: 1px solid var(--c-line);
+  font-size: 12px;
+  color: var(--c-t2);
+  white-space: nowrap;
+}
+.c-live .tb b {
+  color: var(--c-t0);
+}
+.c-live .body {
+  flex: 1;
+  min-height: 0;
+  padding: 3px 10px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--c-t1);
+}
+.c-live .body > div:first-child {
+  font-weight: 700;
+  color: var(--c-t0);
+}
+@keyframes c-live-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+/* An empty verdict needs little room; the stage takes the rest until there is one to show. */
+.c-bottom:has(.c-verdict:not(.ready)) {
+  height: clamp(92px, 12vh, 132px);
+}
+/* Text changing inside a window should never make the browser re-measure the whole page. */
+.c-live,
+.c-deck-card,
+.c-trace,
+.c-now,
+.c-list,
+.c-verdict {
+  contain: layout paint;
+}
+.c-packet {
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+/* Windows are translucent enough to feel layered, opaque enough that the wall never fights their text. */
+.c-board {
+  --glass: 0.965;
+}
+.c-root .c-board.dim,
+.c-root.theater .c-board.dim {
+  --glass: 0.93;
+}
+.c-root .c-board.speaking,
+.c-root .c-board.target {
+  --glass: 1;
+}
+.c-root .c-verdict,
+.c-root .c-list,
+.c-trace {
+  background: #fff;
+}
+.c-root .c-verdict:not(.ready) {
+  background: rgb(255 255 255 / 0.94);
+}
+.c-cw.now {
+  border-color: var(--c-line2);
+  background: rgb(255 255 255 / 0.74);
+}
+.c-cw.now .tb b,
+.c-cw.now .body {
+  color: var(--c-t2);
+}
 @media (max-width: 1100px) {
+  .c-live {
+    position: static;
+    width: auto;
+    height: auto;
+    max-height: 200px;
+    margin-bottom: 6px;
+  }
+  .c-deck-card {
+    left: auto;
+  }
   .c-deck {
     position: static;
     height: auto;

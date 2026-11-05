@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 export const reducedMotion = () =>
   typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -55,11 +55,12 @@ export class Sparks {
   private height = 0;
   private time = 0;
   dark = false;
+  private blank = false;
   dust = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.context = canvas.getContext("2d");
-    for (let i = 0; i < 160; i++)
+    for (let i = 0; i < 60; i++)
       this.motes.push({
         x: Math.random(),
         y: Math.random(),
@@ -87,7 +88,8 @@ export class Sparks {
   fit(width: number, height: number) {
     this.width = width;
     this.height = height;
-    const ratio = Math.min(2, devicePixelRatio || 1);
+    // Soft light needs no retina pixels, and a full-screen layer at 2x is what costs frames.
+    const ratio = 1;
     if (this.canvas.width === Math.round(width * ratio)) return;
     this.canvas.width = Math.round(width * ratio);
     this.canvas.height = Math.round(height * ratio);
@@ -200,6 +202,11 @@ export class Sparks {
     const c = this.context;
     if (!c) return;
     this.time += dt;
+    // Nothing on screen: leave the layer alone so the compositor has no work.
+    const idle =
+      !this.sparks.length && !this.rings.length && !this.streams.length && this.dust <= 0.01;
+    if (idle && this.blank) return;
+    this.blank = idle;
     c.clearRect(0, 0, this.width, this.height);
     c.globalCompositeOperation = this.dark ? "lighter" : "source-over";
     if (this.dust > 0.01) {
@@ -307,12 +314,19 @@ export function Decode({
     const duration = Math.min(1000, 300 + glyphs.length * 16);
     const began = performance.now() + delay;
     let frame = 0;
+    let painted = 0;
     const tick = (now: number) => {
       const k = (now - began) / duration;
       if (k >= 1) {
         el.textContent = text;
         return;
       }
+      // Scrambling reads fine at half the frame rate, and every text change costs a layout.
+      if (now - painted < 33) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
+      painted = now;
       const solved = Math.floor(Math.max(0, k) * glyphs.length);
       el.textContent =
         k < 0
@@ -347,13 +361,11 @@ export function Roll({ value, delay = 0 }: { value: number; delay?: number }) {
       el.textContent = value.toLocaleString();
       return;
     }
-    el.animate(
-      [
-        { transform: "scale(1.3)", textShadow: "0 0 8px currentColor" },
-        { transform: "none", textShadow: "0 0 0 transparent" },
-      ],
-      { duration: 700, delay, easing: "cubic-bezier(.2,1.4,.3,1)" },
-    );
+    el.animate([{ transform: "scale(1.3)" }, { transform: "none" }], {
+      duration: 700,
+      delay,
+      easing: "cubic-bezier(.2,1.4,.3,1)",
+    });
     const began = performance.now() + delay;
     let frame = 0;
     const tick = (now: number) => {
@@ -386,18 +398,27 @@ export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string
     const sparks = new Sparks(canvas);
     sparks.dark = dark;
     sparks.dust = 1;
+    const size = new ResizeObserver(() => sparks.fit(canvas.clientWidth, canvas.clientHeight));
+    size.observe(canvas);
     let frame = 0;
     let last = performance.now();
     const tick = (now: number) => {
+      // Ambient motion needs no more than half the frame rate.
+      if (now - last < 30) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      sparks.fit(canvas.clientWidth, canvas.clientHeight);
       if (embers?.length) sparks.ember(embers[Math.floor(Math.random() * embers.length)]);
       sparks.tick(dt);
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      size.disconnect();
+    };
   }, [dark, embers]);
   return <canvas ref={ref} className="c-dust" aria-hidden="true" />;
 }
@@ -405,6 +426,66 @@ export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string
 const CLICKABLE = "button, a[href], select, summary, label, [role='button']";
 
 /** Every press answers the same way: a sprung push, a ring and a few sparks from the exact point touched. */
+/**
+ * Closing is animated by a stand-in. The real element leaves at once, so focus and state stay correct,
+ * and every way of closing (button, Esc, backdrop, submit) gets the same exit.
+ */
+export function leaveAs(
+  el: HTMLElement | null,
+  frames: Keyframe[],
+  options: { duration?: number; backdrop?: string; inner?: string; innerFrames?: Keyframe[] } = {},
+) {
+  if (!el || reducedMotion()) return;
+  const host = el.closest(".console-shell") ?? document.querySelector(".console-shell");
+  const box = el.getBoundingClientRect();
+  if (!host || !box.width) return;
+  const ghost = document.createElement("div");
+  ghost.className = el.className;
+  ghost.innerHTML = el.innerHTML;
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.inert = true;
+  ghost.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+  ghost.querySelectorAll("[role]").forEach((node) => node.removeAttribute("role"));
+  const duration = options.duration ?? 240;
+  ghost.style.cssText = `position:fixed;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px;margin:0;max-width:none;max-height:none;z-index:200;pointer-events:none;display:block;animation:none;overflow:hidden`;
+  host.appendChild(ghost);
+  ghost.animate(frames, {
+    duration,
+    easing: "cubic-bezier(.4,0,.8,.3)",
+    fill: "forwards",
+  }).onfinish = () => ghost.remove();
+  if (options.backdrop) {
+    const veil = document.createElement("div");
+    veil.style.cssText = `position:fixed;inset:0;z-index:199;pointer-events:none;background:${options.backdrop}`;
+    host.appendChild(veil);
+    veil.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration,
+      easing: "ease-out",
+      fill: "forwards",
+    }).onfinish = () => veil.remove();
+  }
+}
+
+/** A container that animates out when it is removed. */
+export function Leaving({
+  frames,
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { frames: Keyframe[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const exit = useRef(frames);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const leave = exit.current;
+    return () => leaveAs(el, leave, { duration: 200 });
+  }, []);
+  return (
+    <div ref={ref} {...props}>
+      {children}
+    </div>
+  );
+}
+
 export function ClickFx() {
   useEffect(() => {
     if (reducedMotion()) return;

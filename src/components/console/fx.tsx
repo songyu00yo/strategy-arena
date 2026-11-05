@@ -212,52 +212,57 @@ type WallRecord = {
 const WALL_ROW: Record<Stage, number> = { propose: 0, attack: 1, verify: 2, revise: 3, judge: 3 };
 const WALL_LIMIT = 24;
 
+function linesOf(version: ArenaVersion, beat: Beat): string[] {
+  let lines: string[] = [];
+  if (beat.strategy) {
+    const s = beat.strategy;
+    lines = [s.thesis, ...s.steps, ...s.claims.map((c) => `${c.id}：${c.text}`), s.firstAction];
+  } else if (beat.stage === "attack" && beat.attack) {
+    const a = beat.attack;
+    lines = [`原话：${a.claimQuote}`, `质疑：${a.reason}`, a.impact, `核验：${a.verification}`];
+  } else if (beat.stage === "verify" && beat.attack) {
+    lines = [
+      attackMeta[beat.attack.status].label,
+      ...version.evidence
+        .filter((e) => e.attackId === beat.attack!.id)
+        .flatMap((e) => [
+          e.title,
+          e.expression ? `${e.expression} = ${e.result ?? "无法计算"}` : "",
+          e.assumptions,
+          e.content,
+          e.source,
+        ])
+        .filter(Boolean),
+    ];
+  } else if (beat.revision) {
+    lines = [
+      beat.revision.summary,
+      ...(beat.changes ?? []).map((c) => `改动：${c}`),
+      ...beat.revision.responses.flatMap((r) => [
+        `${decisionMeta[r.decision].label}：${r.reason}`,
+        r.change,
+      ]),
+    ].filter(Boolean);
+  } else if (beat.verdict) {
+    const v = beat.verdict;
+    lines = [
+      v.headline,
+      v.rationale,
+      ...v.conditions.map((c) => `前提：${c}`),
+      ...v.uncertainties.map((c) => `待确认：${c}`),
+      ...v.nextActions.map((c) => `下一步：${c}`),
+    ];
+  }
+  return lines;
+}
+
 /** The wall shows only what has happened so far: real proposals, challenges, checks and revisions. */
 function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[]): WallRecord[] {
   const records: WallRecord[] = [];
   for (const beat of shown) {
     const row = WALL_ROW[beat.stage];
     const label = `${String(shown.indexOf(beat) + 1).padStart(2, "0")} ${STAGE_LABELS[beat.stage]}`;
-    let lines: string[] = [];
-    if (beat.strategy) {
-      const s = beat.strategy;
-      lines = [s.thesis, ...s.steps, ...s.claims.map((c) => `${c.id}：${c.text}`), s.firstAction];
-    } else if (beat.stage === "attack" && beat.attack) {
-      const a = beat.attack;
-      lines = [`原话：${a.claimQuote}`, `质疑：${a.reason}`, a.impact, `核验：${a.verification}`];
-    } else if (beat.stage === "verify" && beat.attack) {
-      lines = [
-        attackMeta[beat.attack.status].label,
-        ...version.evidence
-          .filter((e) => e.attackId === beat.attack!.id)
-          .flatMap((e) => [
-            e.title,
-            e.expression ? `${e.expression} = ${e.result ?? "无法计算"}` : "",
-            e.assumptions,
-            e.content,
-            e.source,
-          ])
-          .filter(Boolean),
-      ];
-    } else if (beat.revision) {
-      lines = [
-        beat.revision.summary,
-        ...(beat.changes ?? []).map((c) => `改动：${c}`),
-        ...beat.revision.responses.flatMap((r) => [
-          `${decisionMeta[r.decision].label}：${r.reason}`,
-          r.change,
-        ]),
-      ].filter(Boolean);
-    } else if (beat.verdict) {
-      const v = beat.verdict;
-      lines = [
-        v.headline,
-        v.rationale,
-        ...v.conditions.map((c) => `前提：${c}`),
-        ...v.uncertainties.map((c) => `待确认：${c}`),
-        ...v.nextActions.map((c) => `下一步：${c}`),
-      ];
-    }
+    const lines = linesOf(version, beat);
     records.push({
       id: beat.id,
       row,
@@ -286,7 +291,6 @@ type Panel = {
   y: number;
   z: number;
   aim: number;
-  phase: number;
   lines: string[];
   row: number;
   ch: number;
@@ -352,7 +356,6 @@ export function RecordWall({
           y: (record.row - 1.5) * 188,
           z: -1100,
           aim: -300,
-          phase: (i * 1.7) % 6.28,
           lines: record.lines,
           row: 0,
           ch: 0,
@@ -362,9 +365,7 @@ export function RecordWall({
         panels.current.set(record.id, panel);
       }
       panel.aim = focus ? -170 : -250 - Math.min(rank, 14) * 44;
-      const blur = focus ? 0 : Math.min(1.8, 0.25 + rank * 0.14);
       panel.el.className = `c-cw ${focus ? "now" : ""}`;
-      panel.el.style.filter = blur ? `blur(${blur}px)` : "none";
       panel.el.style.opacity = String(focus ? 1 : Math.max(0.5, 0.92 - rank * 0.035));
       panel.el.style.zIndex = String(100 - rank);
     });
@@ -386,15 +387,13 @@ export function RecordWall({
   }, []);
   useEffect(() => {
     const all = panels.current;
-    const place = (p: Panel, t: number) => {
-      const dx = Math.sin(t / 7000 + p.phase) * 10;
-      const dy = Math.cos(t / 9000 + p.phase) * 7;
-      p.el.style.transform = `translate3d(${p.x + dx - 180}px, ${p.y + dy - 115}px, ${p.z}px)`;
+    const place = (p: Panel) => {
+      p.el.style.transform = `translate3d(${p.x - 180}px, ${p.y - 115}px, ${p.z}px)`;
     };
     if (reduced()) {
       for (const p of all.values()) {
         p.z = p.aim;
-        place(p, 0);
+        place(p);
         p.rows.forEach((row, i) => (row.textContent = p.lines[i]));
       }
       return;
@@ -407,8 +406,10 @@ export function RecordWall({
       const dt = Math.min(64, t - last);
       last = t;
       budget += dt;
-      const steps = Math.floor(budget / 16);
-      budget -= steps * 16;
+      // Typing wakes at a text-like pace, not every frame, and adds a few characters at a time.
+      const typing = budget >= 48;
+      const steps = typing ? 3 : 0;
+      if (typing) budget = 0;
       // Rewrite one settled panel at a time, so the wall stays alive and never goes blank.
       if (t > nextRetype) {
         nextRetype = t + 1500;
@@ -422,8 +423,14 @@ export function RecordWall({
         }
       }
       for (const p of all.values()) {
-        p.z += (p.aim - p.z) * Math.min(1, dt * 0.004);
-        place(p, t);
+        // Panels only move while settling into depth; a still layer costs nothing.
+        if (Math.abs(p.aim - p.z) > 0.5) {
+          p.z += (p.aim - p.z) * Math.min(1, dt * 0.004);
+          place(p);
+        } else if (p.z !== p.aim) {
+          p.z = p.aim;
+          place(p);
+        }
         if (!p.typing) continue;
         for (let n = 0; n < steps && p.typing; n++) {
           if (p.row >= p.lines.length) {
@@ -497,9 +504,8 @@ export function ChainDeck({
           rotate: "y -12deg",
           scale: "1.02",
           opacity: 0,
-          filter: "blur(3px)",
         },
-        { translate: "0 0", rotate: "y 0deg", scale: "1", opacity: 1, filter: "blur(0)" },
+        { translate: "0 0", rotate: "y 0deg", scale: "1", opacity: 1 },
       ],
       { duration: 520, delay: lead + 40, easing: "cubic-bezier(.16,1.05,.3,1)", fill: "backwards" },
     );
@@ -621,6 +627,54 @@ export function ChainDeck({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** The record of the current step, always in clear view, written out as it happens. */
+export function LiveRecord({
+  version,
+  beat,
+  index,
+  directed,
+  lead,
+}: {
+  version: ArenaVersion;
+  beat: Beat | null;
+  index: number;
+  directed: boolean;
+  lead: number;
+}) {
+  if (!beat) return null;
+  const lines = linesOf(version, beat);
+  return (
+    <div
+      key={beat.id}
+      className={`c-live ${directed ? "arrive" : ""}`}
+      aria-hidden="true"
+      style={
+        {
+          "--route": (ROUTE_COLOR[beat.agent] ?? "11,13,16").replaceAll(",", " "),
+          animationDelay: `${lead}ms`,
+        } as CSSProperties
+      }
+    >
+      <div className="tb">
+        <b>
+          {String(index + 1).padStart(2, "0")} {STAGE_LABELS[beat.stage]}
+        </b>
+        <span>
+          {nameOf(beat.agent)}
+          {beat.to ? ` → ${nameOf(beat.to)}` : ""}
+        </span>
+      </div>
+      <div className="body">
+        {lines.map((line, i) => (
+          <div key={`${i}:${line}`}>
+            <Decode text={line} active={directed} delay={lead + 160 + i * 110} />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -28,11 +28,16 @@ import {
 import { ChallengeForm } from "@/components/challenge-form";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
-import { Chars, ClickFx, Dust } from "@/components/console/effects";
+import { Chars, ClickFx, Dust, Leaving } from "@/components/console/effects";
 import { HomeFlow } from "@/components/console/HomeFlow";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import { useArena } from "@/components/use-arena";
+
+const ERROR_EXIT: Keyframe[] = [
+  { transform: "none", opacity: 1 },
+  { transform: "translateY(-14px)", opacity: 0 },
+];
 
 const statusLabels = {
   ready: "准备上场",
@@ -206,7 +211,7 @@ export default function Page() {
       </header>
       <main id="main">
         {arena.error && (
-          <div className="global-error" role="alert">
+          <Leaving className="global-error" role="alert" frames={ERROR_EXIT}>
             <span>{arena.error}</span>
             <div>
               {arena.snapshot && (
@@ -224,7 +229,7 @@ export default function Page() {
                 <X size={16} />
               </button>
             </div>
-          </div>
+          </Leaving>
         )}
         {!arena.snapshot ? (
           <div className="h-grid">

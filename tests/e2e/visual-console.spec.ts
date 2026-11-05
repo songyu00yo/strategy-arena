@@ -272,10 +272,13 @@ test.describe("behaviour", () => {
     expect(await noScroll(page)).toBeLessThanOrEqual(0);
     const fits = await page.evaluate(() => {
       const card = document.querySelector(".c-float-card")!;
-      const body = card.querySelector(".body")!;
+      const body = card.querySelector(".body")!.getBoundingClientRect();
+      const line = card.querySelector(".ln.run")!.getBoundingClientRect();
+      // Long records scroll inside the card, with the line being worked on in view.
       return (
         card.getBoundingClientRect().bottom <= innerHeight &&
-        body.scrollHeight <= body.clientHeight + 1
+        line.top >= body.top - 1 &&
+        line.bottom <= body.bottom + 1
       );
     });
     expect(fits).toBe(true);
@@ -553,6 +556,66 @@ test.describe("behaviour", () => {
     await expect(dialog).toBeVisible();
     expect(await audit()).toEqual([]);
   });
+
+  test("dialogs and the evidence panel animate out however they close", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    await mountFixture(page, snapshot());
+    await openArena(page);
+    const row = page.getByRole("region", { name: "全部质疑" }).getByRole("button").first();
+    for (const close of ["button", "escape"]) {
+      await row.click();
+      const drawer = page.getByRole("dialog", { name: "这一条，站得住吗？" });
+      await expect(drawer).toBeVisible();
+      await page.waitForTimeout(350);
+      if (close === "button") await drawer.getByRole("button", { name: "关闭证据详情" }).click();
+      else await page.keyboard.press("Escape");
+      await expect(drawer).toHaveCount(0);
+      await expect(page.locator(".console-shell > .evidence-drawer")).toHaveCount(1);
+      await expect(page.locator(".console-shell > .evidence-drawer")).toHaveCount(0, {
+        timeout: 2000,
+      });
+    }
+    await page.locator(".c-claim", { hasText: "A2" }).click();
+    const dialog = page.getByRole("dialog", { name: "向这条判断发起挑战" });
+    await expect(dialog).toBeVisible();
+    await page.waitForTimeout(500);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".console-shell > .modal")).toHaveCount(1);
+    await expect(page.locator(".console-shell > .modal")).toHaveCount(0, { timeout: 2000 });
+  });
+
+  for (const [width, height] of [
+    [1512, 860],
+    [1366, 768],
+    [1920, 970],
+  ]) {
+    test(`the lower windows never hide each other at ${width}x${height}`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+      await mountFixture(page, snapshot());
+      await openArena(page);
+      for (let step = 0; step < 12; step++) {
+        const hit = await page.evaluate(() => {
+          const box = (q: string) => document.querySelector(q)!.getBoundingClientRect();
+          const live = box(".c-live");
+          const front = box(".c-deck-now");
+          const stage = box(".c-stage3");
+          const clash =
+            live.left < front.right - 1 &&
+            front.left < live.right - 1 &&
+            live.top < front.bottom - 1 &&
+            front.top < live.bottom - 1;
+          return {
+            clash,
+            inside: live.right <= stage.right + 1 && live.bottom <= stage.bottom + 1,
+          };
+        });
+        expect(hit).toEqual({ clash: false, inside: true });
+        await page.keyboard.press("ArrowLeft");
+      }
+    });
+  }
 
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {
     await skipIntro(page);

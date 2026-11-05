@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
-import { ChainDeck } from "./fx";
+import { ChainDeck, LiveRecord } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
 import type { Beat } from "./beats";
 
@@ -16,6 +16,8 @@ const WORD: Record<Attack["status"], string> = {
 /** CSS custom colours use the space-separated form so they can take an alpha. */
 const spaced = (rgb: string) => rgb.replaceAll(",", " ");
 const centre = (box: DOMRect) => ({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
+
+const EMPTY_RECT = { left: 0, top: 0, width: 0, height: 0 } as DOMRect;
 
 type Flight = {
   attack: Attack;
@@ -32,7 +34,7 @@ const spring = (s: Spring, target: number, k: number, c: number, dt: number) => 
   s.p += s.v * dt;
 };
 const axis = (): Spring => ({ p: 0, v: 0 });
-const bodyOf = () => ({ x: axis(), y: axis(), z: axis(), r: axis() });
+const bodyOf = () => ({ x: axis(), y: axis(), z: axis(), r: axis(), rest: true });
 
 /** Three boards in real 3D space. A sprung camera and sprung boards keep every step flowing into the next. */
 export function RouteStage({
@@ -69,6 +71,8 @@ export function RouteStage({
   const stateOf = (a: Attack) => (seen.has(`v:${a.id}`) ? a.status : "pending");
   const hot = activeAttack ? `${activeAttack.targetStrategyId}:${activeAttack.targetClaimId}` : "";
 
+  const beatId = current?.id;
+  const signature = attacks.map((a) => a.id).join();
   const stage = useRef<HTMLDivElement>(null);
   const rig = useRef<HTMLDivElement>(null);
   const world = useRef<HTMLDivElement>(null);
@@ -79,6 +83,7 @@ export function RouteStage({
   const flows = useRef(new Map<string, SVGPathElement>());
   const dots = useRef(new Map<string, SVGCircleElement>());
   const flight = useRef<Flight | null>(null);
+  const kick = useRef(60);
   const live = useRef(attacks);
   const filming = useRef(camera);
   const shot = useRef({ x: 0, y: 0, s: 1, r: 0 });
@@ -120,7 +125,6 @@ export function RouteStage({
     cam.current.x.v += (Math.random() - 0.5) * 56 * power;
   };
 
-  const beatId = current?.id;
   const isDirected = () => directed && !reducedMotion();
 
   // Each step launches one flight along its thread.
@@ -207,25 +211,21 @@ export function RouteStage({
             {
               transform: "translate(-50%,-50%) scale(1.3)",
               opacity: 0,
-              filter: "blur(14px)",
               offset: 0,
             },
             {
               transform: "translate(-50%,-50%) scale(1)",
               opacity: 0.5,
-              filter: "blur(0)",
               offset: 0.4,
             },
             {
               transform: "translate(-50%,-50%) scale(.98)",
               opacity: 0.5,
-              filter: "blur(0)",
               offset: 0.52,
             },
             {
               transform: `translate(-50%,-50%) translate(${tx}px,${ty}px) scale(.05)`,
               opacity: 0.3,
-              filter: "blur(0)",
               offset: 1,
             },
           ],
@@ -267,10 +267,10 @@ export function RouteStage({
         });
         node.animate(
           [
-            { rotate: "y 0deg", filter: "blur(0)", scale: "1" },
-            { rotate: "y 16deg", filter: "blur(1px)", scale: "0.97", offset: 0.5 },
-            { rotate: "y -3deg", filter: "blur(0)", scale: "1.005", offset: 0.82 },
-            { rotate: "y 0deg", filter: "blur(0)", scale: "1" },
+            { rotate: "y 0deg", scale: "1" },
+            { rotate: "y 16deg", scale: "0.97", offset: 0.5 },
+            { rotate: "y -3deg", scale: "1.005", offset: 0.82 },
+            { rotate: "y 0deg", scale: "1" },
           ],
           { duration: 720 / speed, easing: "cubic-bezier(.4,0,.2,1)" },
         );
@@ -312,6 +312,9 @@ export function RouteStage({
     const sparks = new Sparks(surface);
     fx.current = sparks;
     const reduce = reducedMotion();
+    const fitSparks = () => sparks.fit(innerWidth, innerHeight);
+    fitSparks();
+    addEventListener("resize", fitSparks);
 
     const stamp = (x: number, y: number, attack: Attack) => {
       const mark = document.createElement("div");
@@ -325,13 +328,11 @@ export function RouteStage({
           {
             transform: "translate(-50%,-50%) scale(1.9) rotate(-9deg)",
             opacity: 0,
-            filter: "blur(3px)",
             offset: 0,
           },
           {
             transform: "translate(-50%,-50%) scale(.97) rotate(-4deg)",
             opacity: 1,
-            filter: "blur(0)",
             offset: 0.1,
           },
           { transform: "translate(-50%,-50%) scale(1) rotate(-5deg)", opacity: 1, offset: 0.16 },
@@ -385,31 +386,35 @@ export function RouteStage({
     const tick = (now: number) => {
       const dt = Math.min(0.033, (now - last) / 1000);
       last = now;
-      const origin = host.getBoundingClientRect();
-      sparks.fit(innerWidth, innerHeight);
-      sparks.dust += ((filming.current ? 1 : 0) - sparks.dust) * Math.min(1, dt * 2);
+      const origin =
+        (flight.current && !flight.current.landed) || kick.current > 0
+          ? host.getBoundingClientRect()
+          : EMPTY_RECT;
 
       // Camera: sprung, with a slow drift so a held shot never goes dead.
       const c = cam.current;
-      const t = now / 1000;
       const on = filming.current && !reduce;
       const aim = on ? shot.current : { x: 0, y: 0, s: 1, r: 0 };
-      const drift = on ? 1 : 0;
-      spring(c.x, aim.x + drift * Math.sin(t * 0.37) * 4, 30, 9.5, dt);
-      spring(c.y, aim.y + drift * Math.cos(t * 0.29) * 3, 30, 9.5, dt);
-      spring(c.s, aim.s + drift * Math.sin(t * 0.5) * 0.005, 30, 9.5, dt);
-      spring(c.r, aim.r + drift * Math.sin(t * 0.23) * 0.4, 30, 9.5, dt);
-      const still =
-        !on &&
-        Math.abs(c.x.p) + Math.abs(c.y.p) + Math.abs(c.r.p) < 0.05 &&
-        Math.abs(c.s.p - 1) < 0.0005;
-      el.style.transform = still
-        ? "none"
-        : `translate3d(${c.x.p}px,${c.y.p}px,0) scale(${c.s.p}) rotateY(${c.r.p}deg)`;
+      spring(c.x, aim.x, 30, 9.5, dt);
+      spring(c.y, aim.y, 30, 9.5, dt);
+      spring(c.s, aim.s, 30, 9.5, dt);
+      spring(c.r, aim.r, 30, 9.5, dt);
+      const moving =
+        Math.abs(c.x.v) + Math.abs(c.y.v) + Math.abs(c.r.v) > 0.04 ||
+        Math.abs(c.s.v) > 0.0004 ||
+        Math.abs(c.x.p - aim.x) + Math.abs(c.y.p - aim.y) + Math.abs(c.r.p - aim.r) > 0.04 ||
+        Math.abs(c.s.p - aim.s) > 0.0004;
+      if (moving) {
+        kick.current = 20;
+        el.style.transform = `translate3d(${c.x.p}px,${c.y.p}px,0) scale(${c.s.p}) rotateY(${c.r.p}deg)`;
+      } else if (!on && el.style.transform !== "none") {
+        el.style.transform = "none";
+      }
 
       // Boards: each on its own spring, so a blow rings through them and settles.
       for (const id of ["A", "B", "C"]) {
         const b = bodies.current[id];
+        if (b.rest && !b.x.v && !b.y.v && !b.z.v && !b.r.v) continue;
         const node = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
         if (!node) continue;
         spring(b.x, 0, 70, 9, dt);
@@ -419,8 +424,17 @@ export function RouteStage({
         const quiet =
           Math.abs(b.x.p) + Math.abs(b.y.p) + Math.abs(b.z.p) + Math.abs(b.r.p) < 0.05 &&
           Math.abs(b.x.v) + Math.abs(b.z.v) < 0.5;
-        node.style.translate = quiet ? "" : `${b.x.p}px ${b.y.p}px ${b.z.p}px`;
-        node.style.rotate = quiet ? "" : `y ${b.r.p}deg`;
+        if (quiet) {
+          for (const axis of [b.x, b.y, b.z, b.r]) axis.p = axis.v = 0;
+          b.rest = true;
+          node.style.translate = "";
+          node.style.rotate = "";
+        } else {
+          b.rest = false;
+          kick.current = 20;
+          node.style.translate = `${b.x.p}px ${b.y.p}px ${b.z.p}px`;
+          node.style.rotate = `y ${b.r.p}deg`;
+        }
       }
 
       const flying = flight.current;
@@ -432,14 +446,21 @@ export function RouteStage({
         : 0;
       const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 
-      const middle = host.querySelector('[data-board="B"]')?.getBoundingClientRect();
-      live.current.forEach((a, i) => {
+      // Threads are re-measured only while something moves: reading layout every frame is what cost time.
+      const measuring = kick.current > 0 || (!!flying && !flying.landed);
+      if (kick.current > 0) kick.current -= 1;
+      const rects = new Map<string, DOMRect | undefined>();
+      const rect = (id: string) => {
+        if (!rects.has(id))
+          rects.set(id, host.querySelector(`[data-board="${id}"]`)?.getBoundingClientRect());
+        return rects.get(id);
+      };
+      const middle = measuring ? rect("B") : undefined;
+      (measuring ? live.current : []).forEach((a, i) => {
         const path = paths.current.get(a.id);
         const flow = flows.current.get(a.id);
-        const from = host.querySelector(`[data-board="${a.from}"]`)?.getBoundingClientRect();
-        const box = host
-          .querySelector(`[data-board="${a.targetStrategyId}"]`)
-          ?.getBoundingClientRect();
+        const from = rect(a.from);
+        const box = rect(a.targetStrategyId);
         if (!path || !from || !box) return;
         const claim = host
           .querySelector(`[data-claim="${a.targetStrategyId}:${a.targetClaimId}"]`)
@@ -476,9 +497,9 @@ export function RouteStage({
           flying?.kind === "attack" && flying.attack.id === a.id ? String(1 - eased) : "0";
       });
 
-      dot.style.opacity = "0";
+      if (!flying) dot.style.opacity = "0";
       const path = flying && paths.current.get(flying.attack.id);
-      if (flying && path?.getAttribute("d")) {
+      if (flying && measuring && path?.getAttribute("d")) {
         const color =
           flying.kind === "verify"
             ? STATE_COLOR[flying.attack.status]
@@ -486,8 +507,7 @@ export function RouteStage({
         const point = path.getPointAtLength(path.getTotalLength() * eased);
         const px = point.x + origin.left;
         const py = point.y + origin.top;
-        dot.style.left = `${point.x}px`;
-        dot.style.top = `${point.y}px`;
+        dot.style.transform = `translate(${point.x}px,${point.y}px) translate(-50%,-50%)`;
         // Once a check lands, the stamp says it; the label steps aside.
         dot.style.opacity =
           elapsed < 0 || (flying.kind === "verify" && flying.duration > 0 && flying.landed)
@@ -534,7 +554,10 @@ export function RouteStage({
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      removeEventListener("resize", fitSparks);
+    };
     // The loop reads current state through refs and lives as long as the stage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -561,7 +584,7 @@ export function RouteStage({
       const a = middle(current.agent);
       const b = middle(current.to);
       at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) };
-      scale = Math.abs(a.x - b.x) > W * 0.5 ? 1 : 1.025;
+      scale = Math.abs(a.x - b.x) > W * 0.5 ? 0.97 : 1.025;
       turn = a.x < b.x ? -1.8 : 1.8;
     } else if (current.stage === "verify" && current.to) {
       at = middle(current.to);
@@ -601,6 +624,26 @@ export function RouteStage({
     shot.current = { x, y, s: scale, r: turn };
   }, [current]);
 
+  // A new step or thread can shift things, so it asks for a fresh measure. Refreshed data alone does not.
+  useEffect(() => {
+    kick.current = Math.max(kick.current, 40);
+  }, [beatId, signature, hot, camera]);
+  useEffect(() => {
+    const host = stage.current;
+    if (!host) return;
+    const wake = () => {
+      kick.current = Math.max(kick.current, 6);
+    };
+    const observer = new ResizeObserver(wake);
+    observer.observe(host);
+    host.querySelectorAll("[data-board]").forEach((node) => observer.observe(node));
+    host.addEventListener("scroll", wake, true);
+    return () => {
+      observer.disconnect();
+      host.removeEventListener("scroll", wake, true);
+    };
+  }, []);
+
   // Bring the doubted claim into view inside its board, without moving the page.
   useEffect(() => {
     if (!hot) return;
@@ -618,18 +661,12 @@ export function RouteStage({
       push("C", 50, 44, 900, -18);
     }, 80);
     stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
-      node.animate(
-        [
-          { opacity: 0, filter: "blur(14px)" },
-          { opacity: 1, filter: "blur(0)" },
-        ],
-        {
-          duration: 620,
-          delay: 80 + i * 90,
-          easing: "ease-out",
-          fill: "backwards",
-        },
-      );
+      node.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 620,
+        delay: 80 + i * 90,
+        easing: "ease-out",
+        fill: "backwards",
+      });
     });
     return () => clearTimeout(kick);
   }, [entering]);
@@ -839,6 +876,7 @@ export function RouteStage({
         {current?.packet}
       </div>
       <ChainDeck version={version} beats={beats} index={index} directed={directed} lead={lead} />
+      <LiveRecord version={version} beat={current} index={index} directed={directed} lead={lead} />
     </div>
   );
 }

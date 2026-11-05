@@ -433,7 +433,7 @@ const CLICKABLE = "button, a[href], select, summary, label, [role='button']";
 export function leaveAs(
   el: HTMLElement | null,
   frames: Keyframe[],
-  options: { duration?: number; backdrop?: string; inner?: string; innerFrames?: Keyframe[] } = {},
+  options: { duration?: number; backdrop?: string; easing?: string; display?: string } = {},
 ) {
   if (!el || reducedMotion()) return;
   const host = el.closest(".console-shell") ?? document.querySelector(".console-shell");
@@ -447,11 +447,13 @@ export function leaveAs(
   ghost.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
   ghost.querySelectorAll("[role]").forEach((node) => node.removeAttribute("role"));
   const duration = options.duration ?? 240;
-  ghost.style.cssText = `position:fixed;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px;margin:0;max-width:none;max-height:none;z-index:200;pointer-events:none;display:block;animation:none;overflow:hidden`;
+  ghost.style.cssText = `position:fixed;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px;margin:0;max-width:none;max-height:none;z-index:200;pointer-events:none;display:${options.display ?? "block"};animation:none;overflow:hidden`;
+  const route = el.style.getPropertyValue("--route");
+  if (route) ghost.style.setProperty("--route", route);
   host.appendChild(ghost);
   ghost.animate(frames, {
     duration,
-    easing: "cubic-bezier(.4,0,.8,.3)",
+    easing: options.easing ?? "cubic-bezier(.4,0,.8,.3)",
     fill: "forwards",
   }).onfinish = () => ghost.remove();
   if (options.backdrop) {

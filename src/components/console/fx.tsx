@@ -491,6 +491,7 @@ export function ChainDeck({
   directed,
   lead,
   reviewing,
+  pulled,
   onStep,
 }: {
   version: ArenaVersion;
@@ -499,6 +500,8 @@ export function ChainDeck({
   directed: boolean;
   lead: number;
   reviewing: boolean;
+  /** The step currently drawn out of the stack, which leaves a gap here. */
+  pulled: number | null;
   onStep: (index: number) => void;
 }) {
   const shown = beats.slice(0, index + 1);
@@ -601,6 +604,7 @@ export function ChainDeck({
           <div
             key={beat.id}
             ref={isFront ? front : undefined}
+            data-step-source={i}
             {...(isFront
               ? {}
               : {
@@ -624,7 +628,7 @@ export function ChainDeck({
                     }
                   },
                 })}
-            className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""} ${state ? `is-${state}` : ""}`}
+            className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""} ${state ? `is-${state}` : ""} ${pulled === i ? "pulled" : ""} ${pulled !== null && i > pulled ? "past-gap" : ""}`}
             style={
               {
                 "--d": depth,

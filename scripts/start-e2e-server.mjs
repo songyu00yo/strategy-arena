@@ -1,6 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { e2eAddress } from "./test-address.mjs";
+
+const { port } = e2eAddress();
 
 // Exercise the same safe standalone package that will be released.
 mkdirSync("work", { recursive: true });
@@ -15,8 +18,10 @@ const server = spawn(process.execPath, ["server.js"], {
   stdio: "inherit",
   env: {
     ...process.env,
+    MODEL_API_KEY: "",
+    ARENA_WORKER_ENABLED: "false",
     HOSTNAME: "127.0.0.1",
-    PORT: "3100",
+    PORT: String(port),
     ARENA_DATABASE_PATH: resolve("test-results/e2e.sqlite"),
   },
 });

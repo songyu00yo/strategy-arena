@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { advanceFixture, fixtureChallenge, fixtureSnapshot, fixtureVersion } from "./ui.fixture";
 import type { Challenge } from "../../src/lib/contracts";
+import { e2eAddress } from "../../scripts/test-address.mjs";
+
+const { origin } = e2eAddress();
 
 test("real API without model key reports configuration state and enforces owner isolation", async ({
   request,
@@ -12,7 +15,7 @@ test("real API without model key reports configuration state and enforces owner 
   expect(
     (
       await request.post("/api/arenas", {
-        headers: { Origin: "http://127.0.0.1:3100" },
+        headers: { Origin: origin },
         data: fixtureChallenge,
       })
     ).status(),
@@ -20,7 +23,7 @@ test("real API without model key reports configuration state and enforces owner 
   expect(
     (
       await request.post("/api/access", {
-        headers: { Origin: "http://127.0.0.1:3100" },
+        headers: { Origin: origin },
         data: { code: "wrong-fixture-code" },
       })
     ).status(),
@@ -28,25 +31,25 @@ test("real API without model key reports configuration state and enforces owner 
   expect(
     (
       await request.post("/api/access", {
-        headers: { Origin: "http://127.0.0.1:3100" },
+        headers: { Origin: origin },
         data: { code: "e2e-only-access-code" },
       })
     ).status(),
   ).toBe(200);
   const create = await request.post("/api/arenas", {
-    headers: { Origin: "http://127.0.0.1:3100" },
+    headers: { Origin: origin },
     data: fixtureChallenge,
   });
   expect(create.status()).toBe(201);
   const snapshot = await create.json();
   expect((await request.get(`/api/arenas/${snapshot.id}`)).status()).toBe(200);
-  const foreign = await playwright.request.newContext({ baseURL: "http://127.0.0.1:3100" });
+  const foreign = await playwright.request.newContext({ baseURL: origin });
   try {
     expect((await foreign.get(`/api/arenas/${snapshot.id}`)).status()).toBe(401);
     expect(
       (
         await foreign.post("/api/access", {
-          headers: { Origin: "http://127.0.0.1:3100" },
+          headers: { Origin: origin },
           data: { code: "e2e-only-access-code" },
         })
       ).status(),
@@ -56,7 +59,7 @@ test("real API without model key reports configuration state and enforces owner 
     await foreign.dispose();
   }
   const advance = await request.post(`/api/arenas/${snapshot.id}/advance`, {
-    headers: { Origin: "http://127.0.0.1:3100" },
+    headers: { Origin: origin },
     data: { versionId: snapshot.activeVersionId },
   });
   expect(advance.status()).toBe(503);
@@ -70,7 +73,7 @@ test("real unconfigured homepage explains missing key and prevents starting a pa
   page,
 }) => {
   await page.request.post("/api/access", {
-    headers: { Origin: "http://127.0.0.1:3100" },
+    headers: { Origin: origin },
     data: { code: "e2e-only-access-code" },
   });
   await page.goto("/");

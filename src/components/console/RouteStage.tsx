@@ -46,6 +46,9 @@ export function RouteStage({
   camera,
   lead,
   located,
+  reviewing,
+  onStep,
+  onEvidence,
   entering,
   readOnly,
   onClaim,
@@ -57,8 +60,11 @@ export function RouteStage({
   directed: boolean;
   camera: boolean;
   /** Pause before a step acts, leaving room for its stage word. */ lead: number;
-  /** A challenge the viewer asked to find on the boards. */
-  located?: string;
+  /** A challenge the viewer asked to find on the boards. */ located?: string;
+  /** Looking back over a finished game: each step can show how it turned out. */
+  reviewing: boolean;
+  onStep: (index: number) => void;
+  onEvidence: (attack: Attack) => void;
   entering: boolean;
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
@@ -872,8 +878,23 @@ export function RouteStage({
       >
         {current?.packet}
       </div>
-      <ChainDeck version={version} beats={beats} index={index} directed={directed} lead={lead} />
-      <LiveRecord version={version} beat={current} index={index} directed={directed} lead={lead} />
+      <ChainDeck
+        version={version}
+        beats={beats}
+        index={index}
+        directed={directed}
+        lead={lead}
+        reviewing={reviewing}
+        onStep={onStep}
+      />
+      <LiveRecord
+        version={version}
+        beat={current}
+        index={index}
+        directed={directed}
+        lead={lead}
+        onEvidence={onEvidence}
+      />
     </div>
   );
 }

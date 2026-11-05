@@ -144,7 +144,7 @@ for (const screen of screens) {
       await capture(page, testInfo, `console-${screen.name}-verdict`, false);
       await page.keyboard.press("Home");
       await page.getByRole("button", { name: "从头放映" }).click();
-      await page.waitForTimeout(1600 * 3 + 560 + 800);
+      await page.waitForTimeout(2600 * 3 + 560 + 800);
       await capture(page, testInfo, `console-${screen.name}-challenge`, false);
       expect(await noScroll(page)).toBeLessThanOrEqual(0);
       await expect(page.locator(".c-board")).toHaveCount(3);
@@ -215,7 +215,9 @@ test.describe("behaviour", () => {
     await expect(page.locator(".c-thread.on")).toHaveCount(1);
     await expect(page.locator(".c-packet")).toHaveText("质疑 A1");
     await expect(page.getByRole("heading", { name: /先做带返工预留/ })).toHaveCount(0);
-    await expect(page.locator(".c-float-card")).toContainText("等待");
+    // Looking back over a finished game shows how the dispute ended, not an empty wait.
+    await expect(page.locator(".c-float-card")).toContainText("质疑成立");
+    await expect(page.locator(".c-float-card")).not.toContainText("等待");
     await expect(page.locator(".c-claim.hot")).toContainText("A1");
     await page.waitForTimeout(800);
     await capture(page, testInfo, "console-step", false);
@@ -704,6 +706,111 @@ test.describe("behaviour", () => {
     await expect(page.getByText("演示模式：内容是预设的")).toBeVisible();
     await expect(page.getByText("真实调用模型")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "真实模型推演" })).toHaveCount(0);
+  });
+
+  test("the result leads once reached and steps away while looking back", async ({
+    page,
+  }, testInfo) => {
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    await mountFixture(page, snapshot());
+    await openArena(page);
+    const result = page.getByRole("region", { name: "结论" });
+    await expect(result).toBeVisible();
+    await expect(result.getByText("现在第一步")).toBeInViewport();
+    await expect(result.getByRole("heading")).toContainText("先做带返工预留");
+    await page.waitForTimeout(700);
+    await capture(page, testInfo, "console-result", false);
+    expect(await noScroll(page)).toBeLessThanOrEqual(0);
+    // Any past step opens from the chain, with the reasons in full, and the way back is obvious.
+    // Every card in the fan must be reachable by a real pointer, however tightly they overlap.
+    const exposed = (label: string) =>
+      page.evaluate((name) => {
+        const card = document.querySelector<HTMLElement>(`[aria-label="${name}"]`)!;
+        const box = card.getBoundingClientRect();
+        for (let x = box.left + 1; x < box.right; x += 2) {
+          const y = box.top + box.height / 2;
+          if (document.elementFromPoint(x, y)?.closest("[aria-label]") === card) return { x, y };
+        }
+        return null;
+      }, label);
+    for (let step = 1; step <= 14; step++)
+      expect(await exposed(`回看第 ${step} 步`), `card ${step}`).not.toBeNull();
+    const spot = (await exposed("回看第 4 步"))!;
+    await page.mouse.move(spot.x, spot.y);
+    await expect(page.locator(".c-deck-peek")).toContainText("第 4 步");
+    await page.waitForTimeout(250);
+    await capture(page, testInfo, "console-peek", false);
+    await page.mouse.click(spot.x, spot.y);
+    await expect(result).toHaveCount(0);
+    await expect(page.locator(".c-float-card")).toContainText("质疑成立");
+    await expect(page.locator(".c-float-card")).toContainText("接受质疑");
+    await page.waitForTimeout(1200);
+    await capture(page, testInfo, "console-review", false);
+    await page
+      .getByRole("region", { name: "这一步详情" })
+      .getByRole("button", { name: "看这条质疑的证据" })
+      .click();
+    const drawer = page.getByRole("dialog", { name: "这一条，站得住吗？" });
+    await expect(drawer).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(drawer).toHaveCount(0);
+    await page.getByRole("button", { name: "回到结果" }).click();
+    await expect(result).toBeVisible();
+    await expect(page.getByRole("button", { name: "回到结果" })).toHaveCount(0);
+  });
+
+  test("the chart compares routes from the record and opens a route's revision", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    await mountFixture(page, snapshot());
+    await openArena(page);
+    const chart = page.getByRole("region", { name: "三路对比" });
+    await expect(chart.locator(".row")).toHaveCount(3);
+    // Estimates show as recorded, and the first route's revised 7 hours sits at its 7-hour limit.
+    await expect(chart.locator(".row").first()).toContainText("7小时");
+    await expect(chart.locator(".row").first()).toContainText("成立 1");
+    await expect(chart.getByText(/综合|评分|得分/)).toHaveCount(0);
+    await page.getByRole("button", { name: "查看路线 A 的修订过程" }).click();
+    await expect(page.getByRole("region", { name: "正在发生" })).toContainText("方案 A");
+    await expect(page.locator(".c-board.speaking")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "回到结果" })).toBeVisible();
+  });
+
+  test("step-by-step viewing waits for the viewer", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    await mountFixture(page, snapshot());
+    await openArena(page);
+    await page.getByRole("button", { name: "逐步看" }).click();
+    await page.getByRole("button", { name: "从头放映" }).click();
+    const step = page.locator(".c-now .fl span");
+    await expect(step).toHaveText(/^1\//);
+    await page.waitForTimeout(3600);
+    await expect(step).toHaveText(/^1\//);
+    await page.keyboard.press("ArrowRight");
+    await expect(step).toHaveText(/^2\//);
+    await expect(page.locator(".c-root.theater")).toHaveCount(1);
+    await page.getByRole("button", { name: "放映速度" }).click();
+    await expect(page.getByRole("button", { name: "放映速度" })).toHaveText("慢速");
+  });
+
+  test("the situation card is optional and travels with the materials", async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
+    await mountFixture(page, snapshot());
+    const sent: { goal?: string; materials?: string }[] = [];
+    await page.route("**/api/arenas", async (route) => {
+      sent.push(route.request().postDataJSON());
+      await route.fulfill({ json: snapshot() });
+    });
+    await page.goto("/");
+    const toggle = page.getByRole("button", { name: /说说你现在的处境/ });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await page.getByLabel("你的目标、备选方案或想法").fill("这是一个足够长的自定义问题。");
+    await toggle.click();
+    await page.getByLabel(/你现在的处境/).fill("刚换过一次工作");
+    await page.getByRole("button", { name: "让方案上场" }).click();
+    await expect(page.locator(".c-root")).toBeVisible();
+    expect(sent[0].materials).toBe("【我的处境】刚换过一次工作");
   });
 
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {

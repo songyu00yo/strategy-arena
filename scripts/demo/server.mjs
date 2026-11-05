@@ -151,7 +151,7 @@ const readBody = (req) =>
   });
 
 /** Creates the demo server. `target` is the port of the production build that serves pages. */
-export function createDemoServer({ target, stepMs = 1800 }) {
+export function createDemoServer({ target, stepMs = 3000 }) {
   const arenas = new Map();
   async function api(req, res, path) {
     if (path === "/api/health")

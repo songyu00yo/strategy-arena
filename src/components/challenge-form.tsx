@@ -124,6 +124,7 @@ export function ChallengeForm({
   pending,
   disabled = false,
   editing = false,
+  demo = false,
   onSubmit,
   onCancel,
 }: {
@@ -132,6 +133,8 @@ export function ChallengeForm({
   pending: boolean;
   disabled?: boolean;
   editing?: boolean;
+  /** Demo mode calls no model, and the form says so. */
+  demo?: boolean;
   onSubmit: (challenge: Challenge, reason: string) => void;
   onCancel?: () => void;
 }) {
@@ -445,7 +448,11 @@ export function ChallengeForm({
         </p>
       )}
       <div className="form-bottom">
-        <span className="form-assurance">真实调用模型，按用量估算费用。</span>
+        <span className="form-assurance">
+          {demo
+            ? "演示模式：内容是预设的，不调用模型，不产生费用。"
+            : "真实调用模型，按用量估算费用。"}
+        </span>
         <div className="submit-actions">
           {onCancel && (
             <button type="button" className="secondary-button" onClick={onCancel}>

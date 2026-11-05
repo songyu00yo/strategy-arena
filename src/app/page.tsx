@@ -138,6 +138,8 @@ export default function Page() {
   const historical = !!selected && selected.id !== arena.snapshot?.activeVersionId;
   const running = arena.active && ["running", "ready"].includes(arena.active.status);
   const configured = arena.health?.model.configured;
+  // Demo mode (pnpm demo) must never read as a live model run.
+  const demo = arena.health?.version === "demo";
   // Resolve by ID, so an open drawer follows status changes from newer snapshots.
   const attack = selected?.attacks.find((a) => a.id === attackId) ?? null;
   const closeAttack = useCallback(() => setAttackId(null), []);
@@ -204,7 +206,13 @@ export default function Page() {
             onClick={() => setModelOpen(true)}
           >
             <span className={`connection-dot ${configured ? "connected" : ""}`} />
-            {configured === false ? "模型待配置" : arena.health ? "真实模型推演" : "连接服务中"}
+            {demo
+              ? "演示内容，未调用模型"
+              : configured === false
+                ? "模型待配置"
+                : arena.health
+                  ? "真实模型推演"
+                  : "连接服务中"}
             <Settings2 size={13} />
           </button>
         </div>
@@ -280,6 +288,7 @@ export default function Page() {
                   </div>
                 ) : (
                   <ChallengeForm
+                    demo={demo}
                     pending={arena.busy}
                     disabled={configured === false || !arena.health || accessRequired}
                     onSubmit={async (challenge) => {
@@ -620,6 +629,7 @@ export default function Page() {
             补充限制、材料或偏好后生成新版本，原版本会保留。请说明改动原因。
           </p>
           <ChallengeForm
+            demo={demo}
             initial={selected.challenge}
             pending={arena.busy}
             editing

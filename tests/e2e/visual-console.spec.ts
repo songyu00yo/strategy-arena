@@ -680,6 +680,32 @@ test.describe("behaviour", () => {
     expect(sent.options).toEqual(chosen.challenge.options);
   });
 
+  test("demo mode says so instead of claiming a live model", async ({ page }) => {
+    await mountFixture(page, snapshot());
+    await page.route("**/api/health", (route) =>
+      route.fulfill({
+        json: {
+          status: "ok",
+          version: "demo",
+          commit: "demo",
+          model: {
+            id: "demo-no-model",
+            configured: true,
+            promptVersion: "demo",
+            schemaVersion: "1",
+          },
+          requiresAccessCode: false,
+          accessGranted: true,
+        },
+      }),
+    );
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: "演示内容，未调用模型" })).toBeVisible();
+    await expect(page.getByText("演示模式：内容是预设的")).toBeVisible();
+    await expect(page.getByText("真实调用模型")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "真实模型推演" })).toHaveCount(0);
+  });
+
   test("failed run says so and keeps the record", async ({ page }, testInfo) => {
     await skipIntro(page);
     await mountFixture(

@@ -372,7 +372,11 @@ export function ArenaConsole({
                   />
                 ))}
               </div>
-              <small>模型隐藏推理未保存，这里只有真实步骤。{model.id}</small>
+              <small>
+                {model.id === "demo-no-model"
+                  ? "演示内容：步骤和用量都是预设的，未调用模型。"
+                  : `模型隐藏推理未保存，这里只有真实步骤。${model.id}`}
+              </small>
             </section>
           </div>
         </main>

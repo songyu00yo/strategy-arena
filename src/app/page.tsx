@@ -9,7 +9,6 @@ import {
   CircleAlert,
   CircleHelp,
   Crosshair,
-  FileSearch,
   Layers3,
   LoaderCircle,
   Plus,
@@ -27,7 +26,9 @@ import {
   type Challenge,
 } from "@/lib/contracts";
 import { ChallengeForm } from "@/components/challenge-form";
-import { CanvasRoom } from "@/components/sheet/canvas-room";
+import { ArenaConsole } from "@/components/console/ArenaConsole";
+import "@/components/console/console.css";
+import { HomeFlow } from "@/components/console/HomeFlow";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import { useArena } from "@/components/use-arena";
@@ -41,13 +42,6 @@ const statusLabels = {
   uncertain: "结果待确认",
   superseded: "历史版本",
 };
-const HOME_CURSORS = [
-  { id: "A", name: "方案 A", left: "-2%", top: "30%" },
-  { id: "B", name: "方案 B", left: "52%", top: "9%" },
-  { id: "C", name: "方案 C", left: "91%", top: "9%" },
-  { id: "verify", name: "核验", left: "88%", top: "66%" },
-  { id: "judge", name: "裁判", left: "9%", top: "72%" },
-];
 function money(value: number) {
   return value < 0.01 && value > 0 ? "< ¥0.01" : `¥${value.toFixed(2)}`;
 }
@@ -173,7 +167,7 @@ export default function Page() {
   const parentChanges =
     parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
   return (
-    <div className={`site-shell ${arena.snapshot ? "studio-shell" : "studio-shell home-shell"}`}>
+    <div className={`site-shell console-shell ${arena.snapshot ? "" : "home"}`}>
       <a href="#main" className="skip-link">
         跳转到主要内容
       </a>
@@ -231,36 +225,11 @@ export default function Page() {
           </div>
         )}
         {!arena.snapshot ? (
-          <>
-            <div className="home-cursors" aria-hidden="true">
-              {HOME_CURSORS.map((c) => (
-                <div
-                  key={c.id}
-                  className={`cursor busy agent-${c.id}`}
-                  style={{ left: c.left, top: c.top }}
-                >
-                  <div className="cursor-inner">
-                    <svg width="16" height="18" viewBox="0 0 16 18">
-                      <path d="M1 1l5.6 15.2 2.2-6.4 6.4-2.2z" />
-                    </svg>
-                    <span>
-                      <span className="cursor-full">{c.name}</span>
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <section className="hero">
-              <h1>
-                <span>让好想法，</span>
-                <span>打过一场。</span>
-              </h1>
-              <p>
-                别急着选一个答案。让三条路线独立出发、相互质疑、用证据修正，最后带着成立条件行动。
-              </p>
-            </section>
-            <section className="entry-section" aria-label="开始一次方案推演">
-              <div className="entry-form-wrap">
+          <div className="h-grid">
+            <section className="h-lead" aria-label="开始一次方案推演">
+              <h1>先让三个方案互相挑错，再决定。</h1>
+              <p>说出你的问题。三条路线各自提案、互相质疑、查证修正，最后给你一个带条件的建议。</p>
+              <div className="h-form">
                 {accessRequired && (
                   <form
                     className="access-panel"
@@ -330,45 +299,17 @@ export default function Page() {
                   </div>
                 )}
               </div>
-              <aside className="entry-explainer">
-                <h2>一场推演怎么进行</h2>
-                <ol className="process-explainer">
-                  <li>
-                    <span>1</span>
-                    <div>
-                      <strong>三路独立提案</strong>
-                      <p>从你的目标与限制出发，形成三条可比较的路线。</p>
-                    </div>
-                  </li>
-                  <li>
-                    <span>2</span>
-                    <div>
-                      <strong>逐条质疑和核验</strong>
-                      <p>追问具体原话，检索你的材料、核算投入，再修订方案。</p>
-                    </div>
-                  </li>
-                  <li>
-                    <span>3</span>
-                    <div>
-                      <strong>给出有条件的建议</strong>
-                      <p>说清何时成立、还缺什么证据，以及现在的第一步。</p>
-                    </div>
-                  </li>
-                </ol>
-                <div className="honesty-note">
-                  <FileSearch size={15} />
-                  <p>未知会保留未知，估算会标明估算。你随时可以补充条件，重新开局。</p>
-                </div>
-              </aside>
             </section>
-          </>
+            <HomeFlow />
+          </div>
         ) : (
           selected && (
             <div className="arena-view">
-              <CanvasRoom
+              <ArenaConsole
                 key={selected.id}
                 version={selected}
                 steps={selectedSteps}
+                model={arena.snapshot.model}
                 events={versionEvents}
                 historical={historical}
                 busy={arena.busy}

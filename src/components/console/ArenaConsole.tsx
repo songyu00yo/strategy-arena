@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   STAGES,
   STAGE_LABELS,
@@ -10,9 +10,10 @@ import {
   type Attack,
   type Strategy,
 } from "@/lib/contracts";
-import { attackMeta, comparisonMeta } from "@/components/status";
-import { Chars, reducedMotion, Roll } from "./effects";
+import { attackMeta } from "@/components/status";
+import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
 import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
+import { RouteChart } from "./RouteChart";
 import { RouteStage } from "./RouteStage";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
 
@@ -26,7 +27,12 @@ const METRIC_STATE: Record<string, string> = {
 };
 
 /** How long each kind of step holds the screen during a film. */
-const SHOT_MS = { propose: 1600, attack: 1900, verify: 1800, revise: 1400, judge: 3900 };
+const SHOT_MS = { propose: 2600, attack: 3200, verify: 3000, revise: 2600, judge: 4200 };
+const SPEEDS = [
+  { value: 1, label: "常速" },
+  { value: 0.6, label: "慢速" },
+  { value: 1.8, label: "快速" },
+];
 
 const OUTCOME = {
   recommendation: "当前条件下的建议",
@@ -72,6 +78,8 @@ export function ArenaConsole({
   const [revealed, setRevealed] = useState(false);
   const [motion, setMotion] = useState(false);
   const [filmDone, setFilmDone] = useState(false);
+  const [stepwise, setStepwise] = useState(false);
+  const [wholeResult, setWholeResult] = useState(false);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
@@ -113,6 +121,8 @@ export function ArenaConsole({
   const shotClock = useRef({ index: -1, at: 0 });
   useEffect(() => {
     if (!playing || !stage) return;
+    // Step by step: the viewer moves on when ready. Only the last step still finishes by itself.
+    if (stepwise && index < last) return;
     // Only a game already complete at first sight skips ahead; one being watched walks to its end.
     const behind = !live && startedLive.current && index <= 1 && last - index > 2;
     if (intro && !revealed && !behind) return;
@@ -141,17 +151,18 @@ export function ArenaConsole({
       behind ? 0 : Math.max(0, hold - (now - shotClock.current.at)),
     );
     return () => clearTimeout(timer);
-  }, [playing, index, last, stage, speed, live, intro, revealed, lead]);
+  }, [playing, index, last, stage, speed, live, intro, revealed, lead, stepwise]);
 
   const goTo = useCallback(
     (i: number) => {
       startedLive.current = false;
-      setPlaying(false);
+      // In step-by-step viewing, moving on is the point; anything else leaves playback.
+      setPlaying((p) => p && stepwise && i === index + 1);
       setMotion(i === index + 1);
       setFilmDone(false);
       setCursor(i >= last ? null : Math.max(i, 0));
     },
-    [last, index],
+    [last, index, stepwise],
   );
   const replay = () => {
     startedLive.current = false;
@@ -207,6 +218,12 @@ export function ArenaConsole({
   const peak = Math.max(1, ...used.map((u) => u.inputTokens + u.outputTokens));
   const verdict = seen.has("judge") ? version.verdict : null;
   const directed = motion;
+  // The result takes the lead once the game has reached it. Looking back at a step hides it.
+  const atResult = !!verdict && index === last;
+  // Looking back over a finished game, each step shows how it turned out.
+  const reviewing = !!version.verdict && !live && !playing;
+  const canReturn = !!version.verdict && index < last && !playing;
+  const speedLabel = SPEEDS.find((s) => s.value === speed)?.label ?? "常速";
   // Counts roll when the energy reaches them, not before.
   const rollDelay = !directed
     ? 0
@@ -225,7 +242,7 @@ export function ArenaConsole({
   ];
 
   return (
-    <div className={`c-root ${playing ? "theater" : ""} `}>
+    <div className={`c-root ${playing ? "theater" : ""} ${atResult ? "at-result" : ""}`}>
       <RecordWall version={version} shown={shown} currentId={current?.id} events={logged} />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
@@ -275,6 +292,61 @@ export function ArenaConsole({
             ))}
           </dl>
         </div>
+        {atResult && verdict && (
+          <section
+            className={`c-result ${directed ? "arrive" : ""} ${wholeResult ? "whole" : ""}`}
+            aria-label="结论"
+            id="verdict"
+          >
+            <div className="lead">
+              <div className="tag">
+                <b
+                  className={verdict.preferred ? "pick" : "none"}
+                  style={
+                    verdict.preferred
+                      ? ({
+                          "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
+                        } as CSSProperties)
+                      : undefined
+                  }
+                >
+                  {verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
+                </b>
+                <span>{OUTCOME[verdict.outcome]}</span>
+              </div>
+              <h2>
+                <Chars text={verdict.headline} active={directed} delay={500} />
+              </h2>
+              <p>{verdict.rationale}</p>
+            </div>
+            <div className="act">
+              <div className="first">
+                <small>现在第一步</small>
+                <strong>{verdict.nextActions[0]}</strong>
+              </div>
+              <dl>
+                <div>
+                  <dt>前提</dt>
+                  <dd>{listOf(verdict.conditions) || "未给出"}</dd>
+                </div>
+                <div>
+                  <dt>仍需确认</dt>
+                  <dd>{listOf(verdict.uncertainties) || "未列出"}</dd>
+                </div>
+                <div>
+                  <dt>退出条件</dt>
+                  <dd>{verdict.exitCondition}</dd>
+                </div>
+              </dl>
+              {verdict.nextActions.length > 1 && (
+                <p className="more">接着做：{listOf(verdict.nextActions.slice(1))}</p>
+              )}
+              <button type="button" onClick={() => setWholeResult((w) => !w)}>
+                {wholeResult ? "收起结论" : "看完整结论"}
+              </button>
+            </div>
+          </section>
+        )}
         <main className="c-main">
           <RouteStage
             version={version}
@@ -285,6 +357,9 @@ export function ArenaConsole({
             camera={cursor !== null || playing}
             lead={lead}
             located={selectedAttack}
+            reviewing={reviewing}
+            onStep={goTo}
+            onEvidence={onEvidence}
             entering={intro && !revealed}
             readOnly={historical || busy}
             onClaim={onClaim}
@@ -317,6 +392,11 @@ export function ArenaConsole({
                 />
               </div>
               <p>{current ? current.plain : "同一模型分成五个角色，替你比较三条路线。"}</p>
+              {canReturn && (
+                <button type="button" className="c-back" onClick={() => goTo(last)}>
+                  回到结果 →
+                </button>
+              )}
               <div className="c-ctrl">
                 <button
                   type="button"
@@ -340,9 +420,20 @@ export function ArenaConsole({
                 <button
                   type="button"
                   aria-label="放映速度"
-                  onClick={() => setSpeed((s) => (s >= 4 ? 0.5 : s * 2))}
+                  onClick={() =>
+                    setSpeed((s) => SPEEDS[(SPEEDS.findIndex((x) => x.value === s) + 1) % 3].value)
+                  }
                 >
-                  {speed}×
+                  {speedLabel}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={stepwise}
+                  title="每一步停住，按 → 或“下一步”继续"
+                  className={stepwise ? "on" : ""}
+                  onClick={() => setStepwise((v) => !v)}
+                >
+                  逐步看
                 </button>
               </div>
             </section>
@@ -381,39 +472,7 @@ export function ArenaConsole({
           </div>
         </main>
         <div className="c-bottom">
-          <section className={`c-verdict ${verdict ? "ready" : ""}`} aria-label="裁决">
-            {verdict ? (
-              <div key="v" id="verdict" tabIndex={-1}>
-                <small>{OUTCOME[verdict.outcome]}</small>
-                <h2>
-                  {verdict.preferred && <span>建议 {verdict.preferred}：</span>}
-                  <Chars text={verdict.headline} active={directed} />
-                </h2>
-                <p>{verdict.rationale}</p>
-                <div className="grid">
-                  <div>
-                    <b>下一步</b> {listOf(verdict.nextActions)}
-                  </div>
-                  <div>
-                    <b>前提</b> {listOf(verdict.conditions) || "未给出"}
-                  </div>
-                  <div>
-                    <b>仍需确认</b> {listOf(verdict.uncertainties) || "未列出"}
-                  </div>
-                  <div>
-                    <b>退出</b> {verdict.exitCondition}
-                  </div>
-                </div>
-                {verdict.comparisons.map((c) => (
-                  <div key={c.strategyId} className="quiet">
-                    {c.strategyId} {comparisonMeta[c.status].label} · {c.reason}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="quiet">裁决留在全部质疑结束之后。</div>
-            )}
-          </section>
+          <RouteChart version={version} beats={beats} index={index} onStep={goTo} />
           <section className="c-list" aria-label="全部质疑">
             <h2>
               全部质疑 <span>点击看证据</span>

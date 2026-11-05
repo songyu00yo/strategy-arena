@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import type { ArenaEvent, ArenaVersion, Verdict } from "@/lib/contracts";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { nameOf, outputOf, type Beat } from "./beats";
 import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
@@ -155,7 +155,7 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
     let closing: Animation | undefined;
     const close = () => {
       if (closing) return;
-      const panel = document.querySelector(".c-verdict")?.getBoundingClientRect();
+      const panel = document.querySelector(".c-result")?.getBoundingClientRect();
       const inset = panel
         ? `inset(${panel.top}px ${innerWidth - panel.right}px ${innerHeight - panel.bottom}px ${panel.left}px)`
         : "inset(50%)";
@@ -204,6 +204,7 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
 
 type WallRecord = {
   id: string;
+  agent: string;
   row: number;
   title: string;
   meta: string;
@@ -265,6 +266,7 @@ function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[])
     const lines = linesOf(version, beat);
     records.push({
       id: beat.id,
+      agent: beat.agent,
       row,
       title: label,
       meta: `${nameOf(beat.agent)}${beat.to ? ` → ${nameOf(beat.to)}` : ""}`,
@@ -276,6 +278,7 @@ function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[])
     if (output && event.stage)
       records.push({
         id: `o:${event.seq}`,
+        agent: event.actor?.split(":")[0] ?? "",
         row: WALL_ROW[event.stage],
         title: "模型结构化输出",
         meta: event.actor ?? "",
@@ -364,9 +367,14 @@ export function RecordWall({
         };
         panels.current.set(record.id, panel);
       }
-      panel.aim = focus ? -170 : -250 - Math.min(rank, 14) * 44;
-      panel.el.className = `c-cw ${focus ? "now" : ""}`;
-      panel.el.style.opacity = String(focus ? 1 : Math.max(0.5, 0.92 - rank * 0.035));
+      panel.aim = focus ? -170 : -250 - Math.min(rank, 14) * 44; // Three planes of depth, so the wall reads as stacked windows and not a flat sheet.
+      const plane = rank < 4 ? "near" : rank < 10 ? "mid" : "far";
+      panel.el.className = `c-cw ${plane} ${focus ? "now" : ""}`;
+      panel.el.style.setProperty(
+        "--route",
+        (ROUTE_COLOR[record.agent] ?? "90,100,120").replaceAll(",", " "),
+      );
+      panel.el.style.animationDelay = `${-((i * 1.3) % 9)}s`;
       panel.el.style.zIndex = String(100 - rank);
     });
     for (const [id, panel] of panels.current)
@@ -482,15 +490,20 @@ export function ChainDeck({
   index,
   directed,
   lead,
+  reviewing,
+  onStep,
 }: {
   version: ArenaVersion;
   beats: Beat[];
   index: number;
   directed: boolean;
   lead: number;
+  reviewing: boolean;
+  onStep: (index: number) => void;
 }) {
   const shown = beats.slice(0, index + 1);
   const front = useRef<HTMLDivElement>(null);
+  const [peek, setPeek] = useState<number | null>(null);
   const current = beats[index];
   const seenIds = new Set(shown.map((b) => b.id));
   const attack = current?.attack;
@@ -518,11 +531,12 @@ export function ChainDeck({
     const row = body?.querySelector<HTMLElement>(".ln.run");
     if (body && row) body.scrollTop = Math.max(0, row.offsetTop - 2);
   }, [current?.id]);
-  if (!shown.length) return null;
-  const checked = !!attack && seenIds.has(`v:${attack.id}`);
+  if (!shown.length) return null; // Looking back, a step shows how it turned out, so the reasons can be weighed in one place.
+  const known = reviewing ? beats : shown;
+  const checked = !!attack && (reviewing || seenIds.has(`v:${attack.id}`));
   const response =
     attack &&
-    shown
+    known
       .find((b) => b.id === `r:${attack.targetStrategyId}`)
       ?.revision?.responses.find((r) => r.attackId === attack.id);
   const evidence = attack ? version.evidence.filter((e) => e.attackId === attack.id) : [];
@@ -550,12 +564,32 @@ export function ChainDeck({
         ],
       ]
     : [];
+  const peeked = peek !== null ? shown[peek] : null;
   return (
-    <div
-      className="c-deck"
-      aria-hidden="true"
-      style={{ "--n": Math.max(shown.length - 1, 1) } as CSSProperties}
-    >
+    <div className="c-deck" style={{ "--n": Math.max(shown.length - 1, 1) } as CSSProperties}>
+      {peeked && (
+        <div
+          key={peeked.id}
+          className="c-deck-peek"
+          aria-hidden="true"
+          style={
+            {
+              "--route": (ROUTE_COLOR[peeked.agent] ?? "11,13,16").replaceAll(",", " "),
+            } as CSSProperties
+          }
+        >
+          <em>
+            第 {peek! + 1} 步 · {nameOf(peeked.agent)}
+            {peeked.to ? ` → ${nameOf(peeked.to)}` : ""} · {STAGE_LABELS[peeked.stage]}
+            {peeked.stage === "verify" && peeked.attack && reviewing
+              ? ` · ${attackMeta[peeked.attack.status].label}`
+              : ""}
+          </em>
+          <strong>{peeked.title}</strong>
+          <p>{peeked.plain}</p>
+          <small>点击回到这一步</small>
+        </div>
+      )}
       {shown.map((beat, i) => {
         const depth = shown.length - 1 - i;
         const isFront = depth === 0;
@@ -567,6 +601,29 @@ export function ChainDeck({
           <div
             key={beat.id}
             ref={isFront ? front : undefined}
+            {...(isFront
+              ? {}
+              : {
+                  role: "button",
+                  tabIndex: 0,
+                  "aria-label": `回看第 ${i + 1} 步`,
+                  title: beat.title,
+                  onClick: () => {
+                    setPeek(null);
+                    onStep(i);
+                  },
+                  // The card stays put while pointed at: moving it would slip out from under the pointer.
+                  onMouseEnter: () => setPeek(i),
+                  onMouseLeave: () => setPeek(null),
+                  onFocus: () => setPeek(i),
+                  onBlur: () => setPeek(null),
+                  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onStep(i);
+                    }
+                  },
+                })}
             className={`c-deck-card ${isFront ? "c-deck-now" : ""} ${dispute ? "c-float-card" : ""} ${state ? `is-${state}` : ""}`}
             style={
               {
@@ -638,12 +695,14 @@ export function LiveRecord({
   index,
   directed,
   lead,
+  onEvidence,
 }: {
   version: ArenaVersion;
   beat: Beat | null;
   index: number;
   directed: boolean;
   lead: number;
+  onEvidence: (attack: Attack) => void;
 }) {
   if (!beat) return null;
   const lines = linesOf(version, beat);
@@ -651,7 +710,8 @@ export function LiveRecord({
     <div
       key={beat.id}
       className={`c-live ${directed ? "arrive" : ""}`}
-      aria-hidden="true"
+      role="region"
+      aria-label="这一步详情"
       style={
         {
           "--route": (ROUTE_COLOR[beat.agent] ?? "11,13,16").replaceAll(",", " "),
@@ -664,10 +724,14 @@ export function LiveRecord({
           {String(index + 1).padStart(2, "0")} {STAGE_LABELS[beat.stage]}
         </b>
         <span>
-          {nameOf(beat.agent)}
-          {beat.to ? ` → ${nameOf(beat.to)}` : ""}
+          {nameOf(beat.agent)} {beat.to ? ` → ${nameOf(beat.to)}` : ""}
         </span>
       </div>
+      {beat.attack && (
+        <button type="button" className="c-live-action" onClick={() => onEvidence(beat.attack!)}>
+          看这条质疑的证据 →
+        </button>
+      )}
       <div className="body">
         {lines.map((line, i) => (
           <div key={`${i}:${line}`}>

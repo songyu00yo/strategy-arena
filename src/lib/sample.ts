@@ -16,11 +16,18 @@ export const videoChallenge: Challenge = {
 const EXAMPLE_NOTE = "【示例材料 · 虚构情境，仅用于演示，非真实数据】";
 
 /** Synthetic questions offered on the home page. They only fill the form; every result still comes from a real run. */
-export const samples: { id: string; label: string; challenge: Challenge }[] = [
-  { id: "video", label: "试填一个视频任务", challenge: videoChallenge },
+export const samples: { id: string; label: string; situation: string; challenge: Challenge }[] = [
+  {
+    id: "video",
+    label: "试填一个视频任务",
+    situation: "第一次做视频，手上只有照片，这周还有别的事要忙。最担心做到一半发现导出有水印。",
+    challenge: videoChallenge,
+  },
   {
     id: "study",
     label: "考研还是就业",
+    situation:
+      "同学大多在备考，我自己其实说不清为什么要读研。实习时对工作不反感。最担心选错后再也回不了头。",
     challenge: {
       domain: "learning",
       goal: "大三下学期，要在全力考研、直接就业、先工作两年再读研三条路里选一条。希望判断哪条更适合现在的我，以及第一步该做什么。",
@@ -35,6 +42,8 @@ export const samples: { id: string; label: string; challenge: Challenge }[] = [
   {
     id: "city",
     label: "要不要换城市",
+    situation:
+      "现在的工作稳定但涨薪慢，父亲刚做完手术。伴侣说支持，但看得出不想搬。最担心自己后悔。",
     challenge: {
       domain: "life",
       goal: "收到外地一份薪资高 30% 的工作邀约，但伴侣和父母都在现在的城市。要在接受、拒绝、争取远程三种做法中决定，并想清楚各自的代价。",
@@ -49,6 +58,8 @@ export const samples: { id: string; label: string; challenge: Challenge }[] = [
   {
     id: "ops",
     label: "工单系统选型",
+    situation:
+      "现在靠表格和群消息处理工单，已经漏过两次客户问题。老板只要求尽快上线。最担心上线后没人维护。",
     challenge: {
       domain: "work",
       goal: "五人小团队要在六周内上线内部工单系统。比较自研、采购 SaaS、改造开源项目三条路线，给出可执行的决定和第一周要做的事。",
@@ -63,6 +74,7 @@ export const samples: { id: string; label: string; challenge: Challenge }[] = [
   {
     id: "channel",
     label: "内容账号起步",
+    situation: "之前开过一个账号，三周就断更了。这次想先做到能坚持。最担心讲错内容误导别人。",
     challenge: {
       domain: "creation",
       goal: "想下班后做一个讲个人理财入门的内容账号，三个月内验证有没有人看。比较图文、短视频、播客三种形式，决定先做哪一种。",

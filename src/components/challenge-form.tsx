@@ -6,6 +6,16 @@ import { ChallengeSchema, type Challenge } from "@/lib/contracts";
 import { samples } from "@/lib/sample";
 import { flyLight, reducedMotion, ROUTE_COLOR } from "@/components/console/effects";
 
+/** The personal situation travels at the head of the materials, under a label. No new API field. */
+const SITUATION_MARK = "【我的处境】";
+function splitSituation(materials: string) {
+  if (!materials.startsWith(SITUATION_MARK)) return { situation: "", rest: materials };
+  const end = materials.indexOf("\n\n");
+  return end < 0
+    ? { situation: materials.slice(SITUATION_MARK.length), rest: "" }
+    : { situation: materials.slice(SITUATION_MARK.length, end), rest: materials.slice(end + 2) };
+}
+
 export const emptyChallenge: Challenge = {
   goal: "",
   constraints: "",
@@ -29,9 +39,10 @@ type Fill = { key: string; text: string; start: number; end: number; color: stri
 const LIGHT = [ROUTE_COLOR.A, ROUTE_COLOR.B, ROUTE_COLOR.C];
 
 /** The order and pace of a sample fill, so each field starts as the last one is finishing. */
-function fillPlan(sample: Challenge): Fill[] {
+function fillPlan(sample: Challenge, situation: string): Fill[] {
   const fields: [string, string, number][] = [
     ["goal", sample.goal, 820],
+    ["situation", situation, 480],
     ["constraints", sample.constraints, 430],
     ["preferences", sample.preferences, 340],
     ...sample.options.map((o, i): [string, string, number] => [`option${i}`, o, 170]),
@@ -138,7 +149,12 @@ export function ChallengeForm({
   onSubmit: (challenge: Challenge, reason: string) => void;
   onCancel?: () => void;
 }) {
-  const [value, setValue] = useState<Challenge>(initial ?? emptyChallenge);
+  const parts = splitSituation(initial?.materials ?? "");
+  const [value, setValue] = useState<Challenge>(
+    initial ? { ...initial, materials: parts.rest } : emptyChallenge,
+  );
+  const [situation, setSituation] = useState(parts.situation);
+  const [situationOpen, setSituationOpen] = useState(!!parts.situation);
   const [details, setDetails] = useState(editing);
   const [error, setError] = useState("");
   const [reason, setReason] = useState("");
@@ -172,10 +188,13 @@ export function ChallengeForm({
       : { className: "" };
 
   function fillSample(id: string, button: HTMLElement) {
-    const sample = samples.find((s) => s.id === id)?.challenge;
-    if (!sample) return;
+    const chosen = samples.find((s) => s.id === id);
+    const sample = chosen?.challenge;
+    if (!chosen || !sample) return;
     settle();
     setValue(sample);
+    setSituation(chosen.situation);
+    setSituationOpen(true);
     setPicked(id);
     setError("");
     if (reducedMotion()) {
@@ -183,7 +202,7 @@ export function ChallengeForm({
       return;
     }
     setTyped({});
-    stopFill.current = runFill(fillPlan(sample), button, form.current, {
+    stopFill.current = runFill(fillPlan(sample, chosen.situation), button, form.current, {
       open: () => setDetails(true),
       light: (key, color) => setActive({ key, color }),
       type: setTyped,
@@ -199,8 +218,12 @@ export function ChallengeForm({
   function submit(event: React.FormEvent) {
     event.preventDefault();
     settle();
+    const note = situation.trim();
     const result = ChallengeSchema.safeParse({
       ...value,
+      materials: note
+        ? `${SITUATION_MARK}${note}${value.materials ? `\n\n${value.materials}` : ""}`
+        : value.materials,
       options: value.options.map((o) => o.trim()).filter(Boolean),
     });
     if (!result.success) {
@@ -216,6 +239,7 @@ export function ChallengeForm({
   }
   const domainShown = typed && (typed.goal ?? 0) < value.goal.length ? "general" : value.domain;
   const goalGlow = glow("goal");
+  const situationGlow = glow("situation");
   const constraintsGlow = glow("constraints");
   const preferencesGlow = glow("preferences");
   const materialsGlow = glow("materials");
@@ -305,6 +329,38 @@ export function ChallengeForm({
             maxLength={1500}
             placeholder="例如：更看重长期收益、希望简单上手"
             rows={2}
+          />
+        </label>
+      </div>
+      <button
+        type="button"
+        className="details-toggle situation-toggle"
+        onClick={() => setSituationOpen(!situationOpen)}
+        aria-expanded={situationOpen}
+      >
+        {situationOpen ? <X size={14} /> : <Plus size={14} />}
+        说说你现在的处境，建议会更贴合你
+        <span>选填</span>
+      </button>
+      <div className={`extra-wrap ${situationOpen ? "open" : ""}`} inert={!situationOpen}>
+        <label
+          className={`field situation-field ${situationGlow.className}`}
+          style={situationGlow.style}
+        >
+          <span>
+            你现在的处境 <small>现在的情况、已经试过什么、最担心什么</small>
+          </span>
+          <textarea
+            data-fill="situation"
+            value={shown("situation", situation)}
+            onChange={(e) => {
+              settle();
+              setPicked(null);
+              setSituation(e.target.value);
+            }}
+            maxLength={1500}
+            rows={2}
+            placeholder="例如：刚换过一次工作，存款够撑半年，最担心再次选错。"
           />
         </label>
       </div>

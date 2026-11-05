@@ -18,6 +18,17 @@ import { allowedReleaseSource } from "./release-safety.mjs";
 const require = createRequire(import.meta.url);
 const markerPath = (root) => join(root, ".next/arena-build-info.json");
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+/** Next loads .env.local during compilation. Empty overrides prevent paid work at build time. */
+export function buildEnvironment(inherited = process.env) {
+  return {
+    ...inherited,
+    MODEL_API_KEY: "",
+    DEEPSEEK_API_KEY: "",
+    OPENAI_API_KEY: "",
+    ARENA_WORKER_ENABLED: "false",
+    ARENA_BILLING_DATABASE_PATH: "",
+  };
+}
 function git(root, args, input) {
   return execFileSync("git", args, {
     cwd: root,
@@ -164,6 +175,7 @@ export function build({ directory = process.cwd(), run } = {}) {
       execFileSync(process.execPath, [require.resolve("next/dist/bin/next"), "build"], {
         cwd: root,
         stdio: "inherit",
+        env: buildEnvironment(),
       });
     const after = sourceIdentity(root);
     if (!sameSource(before, after))

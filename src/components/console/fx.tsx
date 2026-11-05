@@ -37,18 +37,18 @@ export function Intro({
       return onDone();
     }
     if (count < lines.length) {
-      const timer = setTimeout(() => setCount(count + 1), count === 0 ? 1500 : 240);
+      const timer = setTimeout(() => setCount(count + 1), count === 0 ? 800 : 130);
       return () => clearTimeout(timer);
     }
     const timer = setTimeout(() => {
       onReveal();
       const open = box.current?.animate(
         [{ clipPath: "inset(0 0 0 0)" }, { clipPath: "inset(50% 0 50% 0)" }],
-        { duration: 760, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
+        { duration: 520, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
       );
       if (open) open.onfinish = onDone;
       else onDone();
-    }, 620);
+    }, 320);
     return () => clearTimeout(timer);
   }, [count, lines.length, onDone, onReveal]);
   useEffect(() => {
@@ -120,9 +120,9 @@ export function Chapter({ stage }: { stage: Stage }) {
             opacity: 0.25,
           },
         ],
-        { duration: 560, easing: "cubic-bezier(.7,0,.15,1)", fill: "forwards" },
+        { duration: 420, easing: "cubic-bezier(.7,0,.15,1)", fill: "forwards" },
       );
-    }, 520);
+    }, 360);
     return () => clearTimeout(timer);
   }, []);
   return (
@@ -150,7 +150,7 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
         { clipPath: `circle(0px at ${x}px ${y}px)` },
         { clipPath: `circle(150vmax at ${x}px ${y}px)` },
       ],
-      { duration: 850, delay: 650, easing: "cubic-bezier(.7,0,.2,1)", fill: "both" },
+      { duration: 600, delay: 350, easing: "cubic-bezier(.7,0,.2,1)", fill: "both" },
     );
     let closing: Animation | undefined;
     const close = () => {
@@ -169,13 +169,15 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
       );
       closing.onfinish = onDone;
     };
-    const timer = setTimeout(close, 3800);
+    const timer = setTimeout(close, 2500);
     addEventListener("keydown", close);
     return () => {
       clearTimeout(timer);
       removeEventListener("keydown", close);
     };
-  }, [verdict, onDone]);
+    // Runs once: a poll that refreshes the record must not restart the verdict's timing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <div className="c-film" ref={box} aria-hidden="true">
       <Dust embers={EMBERS(verdict.preferred)} />
@@ -183,16 +185,16 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
         <Chars
           text={verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
           active
-          delay={350}
+          delay={520}
         />
       </small>
       <div className="head">
-        <Chars text={verdict.headline} active delay={1150} />
+        <Chars text={verdict.headline} active delay={650} />
       </div>
       <ul>
         {verdict.conditions.slice(0, 2).map((line, i) => (
           <li key={line}>
-            <Decode text={line} active delay={1750 + i * 220} />
+            <Decode text={line} active delay={1000 + i * 150} />
           </li>
         ))}
       </ul>
@@ -393,15 +395,15 @@ export function ChainDeck({
     front.current.animate(
       [
         {
-          translate: "240px 30px",
-          rotate: "y -34deg",
-          scale: "1.1",
+          translate: "90px 12px",
+          rotate: "y -12deg",
+          scale: "1.02",
           opacity: 0,
-          filter: "blur(10px)",
+          filter: "blur(3px)",
         },
         { translate: "0 0", rotate: "y 0deg", scale: "1", opacity: 1, filter: "blur(0)" },
       ],
-      { duration: 760, delay: lead + 60, easing: "cubic-bezier(.16,1.25,.3,1)", fill: "backwards" },
+      { duration: 520, delay: lead + 40, easing: "cubic-bezier(.16,1.05,.3,1)", fill: "backwards" },
     );
     // Only a new step brings a card in.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -23,7 +23,7 @@ const METRIC_STATE: Record<string, string> = {
 };
 
 /** How long each kind of step holds the screen during a film. */
-const SHOT_MS = { propose: 2300, attack: 2700, verify: 2500, revise: 2000, judge: 5600 };
+const SHOT_MS = { propose: 1600, attack: 1900, verify: 1800, revise: 1400, judge: 3900 };
 
 const OUTCOME = {
   recommendation: "当前条件下的建议",
@@ -104,7 +104,7 @@ export function ArenaConsole({
   const stage = current?.stage;
   // The first step of a stage waits for its word to land, so the two never collide.
   const firstOfStage = !!stage && stage !== "judge" && beats[index - 1]?.stage !== stage;
-  const lead = playing && firstOfStage ? 760 / speed : 0;
+  const lead = playing && firstOfStage ? 560 / speed : 0;
   useEffect(() => {
     if (!playing || !stage) return;
     // A game that finished with much left to show goes straight to its result; nobody waits on a replay.
@@ -198,9 +198,9 @@ export function ArenaConsole({
   const rollDelay = !directed
     ? 0
     : stage === "attack"
-      ? lead + 1380 / speed
+      ? lead + 980 / speed
       : stage === "verify"
-        ? lead + 1720 / speed
+        ? lead + 1280 / speed
         : 0;
   const metrics: [string, number, string][] = [
     ["质疑", attacks.length, ""],

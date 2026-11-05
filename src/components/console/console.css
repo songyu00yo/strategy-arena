@@ -552,15 +552,15 @@
 .c-stamp {
   position: absolute;
   z-index: 7;
-  padding: 2px 18px;
-  border: 5px solid currentColor;
+  padding: 1px 12px;
+  border: 3px solid currentColor;
   background: rgb(255 255 255 / 0.9);
-  font-size: clamp(34px, 3.6vw, 62px);
+  font-size: clamp(20px, 1.9vw, 32px);
   font-weight: 900;
   letter-spacing: -0.03em;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 0 60px currentColor;
+  box-shadow: 0 0 18px rgb(11 13 16 / 0.18);
 }
 .c-tear {
   position: absolute;
@@ -1369,19 +1369,19 @@
 .c-root.theater .c-board.target {
   box-shadow:
     0 0 0 1px rgb(var(--route)),
-    0 0 26px 2px rgb(var(--route) / 0.55),
-    0 22px 70px 8px rgb(var(--route) / 0.3);
+    0 0 12px 0 rgb(var(--route) / 0.35),
+    0 14px 40px 0 rgb(var(--route) / 0.16);
 }
 .c-root.theater .c-board.dim {
-  opacity: 0.62;
+  opacity: 0.74;
 }
 .c-root.theater .c-thread {
   filter: drop-shadow(0 0 3px rgb(var(--route) / 0.6));
 }
 .c-root.theater .c-thread.on {
-  stroke-width: 3.2;
+  stroke-width: 2.4;
   stroke: rgb(var(--route));
-  filter: drop-shadow(0 0 8px rgb(var(--route)));
+  filter: drop-shadow(0 0 3px rgb(var(--route) / 0.7));
 }
 .c-root.theater .c-time .ticks .cur {
   box-shadow:
@@ -1462,11 +1462,11 @@
   z-index: 8;
   top: 50%;
   left: 50%;
-  font-size: min(82vh, 760px);
+  font-size: min(44vh, 400px);
   line-height: 0.8;
   font-weight: 900;
   letter-spacing: -0.06em;
-  text-shadow: 0 0 90px currentColor;
+  text-shadow: 0 0 30px currentColor;
   pointer-events: none;
   will-change: transform, opacity;
 }
@@ -1482,7 +1482,7 @@
   pointer-events: none;
 }
 .c-chapter b {
-  font-size: min(46vh, 36vw);
+  font-size: min(22vh, 18vw);
   line-height: 1;
   font-weight: 900;
   letter-spacing: -0.04em;
@@ -1491,7 +1491,7 @@
 .c-thread-flow {
   fill: none;
   stroke: rgb(var(--route));
-  stroke-width: 3;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-dasharray: 0.018 0.11;
   opacity: 0;
@@ -1557,7 +1557,7 @@
   background: #fff;
   box-shadow:
     0 22px 64px rgb(11 13 16 / 0.26),
-    0 0 34px rgb(var(--route) / 0.3);
+    0 0 16px rgb(var(--route) / 0.18);
 }
 .c-deck-card .tb {
   flex: none;
@@ -1601,7 +1601,7 @@
   background: rgb(40 120 255);
   box-shadow:
     0 0 12px 3px rgb(40 120 255 / 0.8),
-    0 34px 60px 26px rgb(40 120 255 / 0.16);
+    0 16px 30px 10px rgb(40 120 255 / 0.08);
   pointer-events: none;
 }
 .c-flash {
@@ -1620,11 +1620,11 @@
   background: rgb(var(--route));
   padding: 2px 10px;
   font-size: 14px;
-  box-shadow: 0 0 26px 5px rgb(var(--route));
+  box-shadow: 0 0 10px 1px rgb(var(--route) / 0.6);
 }
 .c-char {
   display: inline-block;
-  animation: c-char 0.74s cubic-bezier(0.2, 1, 0.3, 1) backwards;
+  animation: c-char 0.46s cubic-bezier(0.2, 1, 0.3, 1) backwards;
   will-change: transform, opacity;
 }
 .c-dust {
@@ -1740,15 +1740,15 @@
   background: linear-gradient(
     105deg,
     transparent 35%,
-    rgb(255 255 255 / 0.55) 50%,
+    rgb(255 255 255 / 0.22) 50%,
     transparent 65%
   );
   animation: c-button-sheen 3.2s ease-in-out infinite;
   pointer-events: none;
 }
 .console-shell .primary-button:not(:disabled):hover {
-  transform: translateY(-3px) scale(1.03);
-  box-shadow: 0 16px 34px rgb(11 13 16 / 0.42);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgb(11 13 16 / 0.28);
 }
 .console-shell .field textarea,
 .console-shell .field input,
@@ -1889,15 +1889,15 @@
 @keyframes c-rowin {
   from {
     opacity: 0;
-    transform: translate3d(0, 34px, -130px) rotateX(-62deg);
-    filter: blur(7px);
+    transform: translate3d(0, 14px, -40px) rotateX(-24deg);
+    filter: blur(2px);
   }
 }
 @keyframes c-char {
   from {
     opacity: 0;
-    transform: translateY(0.7em) rotateX(-90deg) scale(0.6);
-    filter: blur(6px);
+    transform: translateY(0.35em) rotateX(-40deg);
+    filter: blur(2px);
   }
 }
 @keyframes c-chapter-out {
@@ -1951,21 +1951,21 @@
 @keyframes c-drop {
   from {
     opacity: 0;
-    transform: translateY(-22px);
-    filter: blur(5px);
+    transform: translateY(-8px);
+    filter: blur(1px);
   }
 }
 @keyframes c-logline {
   from {
     opacity: 0;
-    transform: translateX(44px);
+    transform: translateX(14px);
   }
 }
 @keyframes c-rowslide {
   from {
     opacity: 0;
-    transform: translateX(26px);
-    filter: blur(4px);
+    transform: translateX(10px);
+    filter: blur(1px);
   }
 }
 @keyframes c-bar {
@@ -1979,14 +1979,14 @@
     box-shadow: 0 0 0 0 rgb(var(--route));
   }
   18% {
-    transform: scale(1.05) translateX(-5px);
-    box-shadow: 0 0 34px 8px rgb(var(--route));
+    transform: scale(1.015) translateX(-2px);
+    box-shadow: 0 0 14px 2px rgb(var(--route) / 0.7);
   }
   34% {
-    transform: scale(1.05) translateX(5px);
+    transform: scale(1.015) translateX(2px);
   }
   50% {
-    transform: scale(1.03) translateX(-3px);
+    transform: scale(1.005) translateX(-1px);
   }
   100% {
     transform: none;
@@ -2010,21 +2010,21 @@
 @keyframes c-drawer {
   from {
     opacity: 0.2;
-    transform: translateX(100%) skewX(-3deg);
+    transform: translateX(60px);
   }
 }
 @keyframes c-modal {
   from {
     opacity: 0;
-    transform: translateY(46px) scale(0.92) rotateX(10deg);
-    filter: blur(8px);
+    transform: translateY(16px) scale(0.98);
+    filter: blur(2px);
   }
 }
 @keyframes c-formin {
   from {
     opacity: 0;
-    transform: translateY(46px) scale(0.97);
-    filter: blur(8px);
+    transform: translateY(16px);
+    filter: blur(2px);
   }
 }
 @keyframes c-sheen {

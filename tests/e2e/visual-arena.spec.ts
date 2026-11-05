@@ -502,6 +502,67 @@ test.describe("explicit UI fixture: desktop 1440x900", () => {
     await expect(page.locator(".strategy-B .revision-diff summary")).toContainText("行动内容未变");
   });
 
+  test("an active-version refresh preserves historical drawer focus and scroll", async ({
+    page,
+  }) => {
+    const v1 = version(1, { status: "superseded" });
+    const v2 = version(2, { status: "running", parentVersionId: v1.id });
+    const incoming = snapshotOf([
+      v1,
+      { ...v2, status: "superseded" },
+      version(3, { parentVersionId: v2.id }),
+    ]);
+    const advanceStarted = Promise.withResolvers<void>();
+    const releaseAdvance = Promise.withResolvers<void>();
+    await mountFixture(page, snapshotOf([v1, v2]));
+    await page.route("**/api/arenas/*/advance", async (request) => {
+      advanceStarted.resolve();
+      await releaseAdvance.promise;
+      await request.fulfill({ json: incoming });
+    });
+    await openArena(page);
+    await advanceStarted.promise;
+    await page.getByRole("combobox", { name: "选择推演版本" }).selectOption(v1.id);
+    const open = disputes(page).getByRole("button", { name: /样片 2 小时没有算上录制后的返工/ });
+    await open.click();
+    const close = page.getByRole("button", { name: "关闭证据详情" });
+    await expect(close).toBeFocused();
+    const scroll = await page.evaluate(() => window.scrollY);
+    releaseAdvance.resolve();
+    // The new option proves the delayed snapshot reached the UI before asserting retained focus.
+    await expect(page.locator('select[aria-label="选择推演版本"] option')).toHaveCount(3);
+    await expect(close).toBeFocused();
+    expect(await page.evaluate(() => window.scrollY)).toBe(scroll);
+    await page.keyboard.press("Escape");
+    await expect(open).toBeFocused();
+  });
+
+  test("closing an ordinary dialog preserves its opener while a successful rematch focuses the new goal", async ({
+    page,
+  }) => {
+    const v1 = version(1);
+    const v2 = version(2, { parentVersionId: v1.id, changeReason: "测试：补充限制" });
+    await mountFixture(page, snapshotOf([v1]));
+    await page.route("**/api/arenas/*/versions", (request) =>
+      request.fulfill({
+        json: snapshotOf([{ ...v1, status: "superseded" }, v2]),
+      }),
+    );
+    await openArena(page);
+    const edit = page.getByRole("button", { name: "修改条件再开局" });
+    await edit.click();
+    await page.keyboard.press("Escape");
+    await expect(edit).toBeFocused();
+    await edit.click();
+    const dialog = page.getByRole("dialog", { name: "修改条件，重新开局" });
+    await dialog.getByLabel("这次为什么修改？", { exact: false }).fill("测试：补充限制");
+    await dialog.getByRole("button", { name: "按新条件重新推演" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("combobox", { name: "选择推演版本" })).toHaveValue(v2.id);
+    await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  });
+
   test("condition versions show what changed and history stays readable", async ({
     page,
   }, testInfo) => {
@@ -720,6 +781,28 @@ test.describe("explicit UI fixture: states", () => {
       await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior),
     ).toBe("auto");
     await capture(page, testInfo, "desktop-running", false);
+  });
+
+  test("a successful protocol repair completes its stage without a stale failure", async ({
+    page,
+  }) => {
+    const snapshot = completed();
+    const currentVersionId = snapshot.activeVersionId;
+    snapshot.steps = [
+      { ...step(currentVersionId, "propose", "failed"), id: "fixture-propose-original", role: "A" },
+      {
+        ...step(currentVersionId, "propose", "completed"),
+        id: "fixture-propose-repair",
+        role: "A:repair",
+      },
+      ...snapshot.steps.filter((item) => item.stage !== "propose"),
+    ];
+    await mountFixture(page, snapshot);
+    await openArena(page);
+    const propose = page.locator(".stage").filter({ hasText: "独立提案" });
+    await expect(propose).toHaveClass(/done/);
+    await expect(propose).not.toHaveClass(/failed/);
+    await expect(propose).not.toContainText("失败");
   });
 
   test("uncertain and paused runs say what is safe to do next", async ({ page }, testInfo) => {

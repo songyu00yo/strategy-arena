@@ -4,6 +4,17 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 export const reducedMotion = () =>
   typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+/**
+ * While a card is out of the chain, the page behind it stops drawing, so nothing competes with the
+ * card for the frame. Continuous loops check this; the one continuously repainted line pauses in CSS.
+ */
+let held = false;
+export const motionHeld = () => held;
+export function holdMotion(on: boolean) {
+  held = on;
+  document.querySelector(".c-root")?.classList.toggle("held", on);
+}
+
 export const STATE_COLOR = {
   attack: "255,255,255",
   pending: "120,190,255",
@@ -404,7 +415,7 @@ export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string
     let last = performance.now();
     const tick = (now: number) => {
       // Ambient motion needs no more than half the frame rate.
-      if (now - last < 30) {
+      if (now - last < 30 || held) {
         frame = requestAnimationFrame(tick);
         return;
       }
@@ -433,7 +444,7 @@ const CLICKABLE = "button, a[href], select, summary, label, [role='button']";
 export function leaveAs(
   el: HTMLElement | null,
   frames: Keyframe[],
-  options: { duration?: number; backdrop?: string; easing?: string; display?: string } = {},
+  options: { duration?: number; backdrop?: string; inner?: string; innerFrames?: Keyframe[] } = {},
 ) {
   if (!el || reducedMotion()) return;
   const host = el.closest(".console-shell") ?? document.querySelector(".console-shell");
@@ -447,13 +458,11 @@ export function leaveAs(
   ghost.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
   ghost.querySelectorAll("[role]").forEach((node) => node.removeAttribute("role"));
   const duration = options.duration ?? 240;
-  ghost.style.cssText = `position:fixed;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px;margin:0;max-width:none;max-height:none;z-index:200;pointer-events:none;display:${options.display ?? "block"};animation:none;overflow:hidden`;
-  const route = el.style.getPropertyValue("--route");
-  if (route) ghost.style.setProperty("--route", route);
+  ghost.style.cssText = `position:fixed;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px;margin:0;max-width:none;max-height:none;z-index:200;pointer-events:none;display:block;animation:none;overflow:hidden`;
   host.appendChild(ghost);
   ghost.animate(frames, {
     duration,
-    easing: options.easing ?? "cubic-bezier(.4,0,.8,.3)",
+    easing: "cubic-bezier(.4,0,.8,.3)",
     fill: "forwards",
   }).onfinish = () => ghost.remove();
   if (options.backdrop) {

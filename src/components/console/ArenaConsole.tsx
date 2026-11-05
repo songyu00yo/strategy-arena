@@ -12,12 +12,12 @@ import {
 } from "@/lib/contracts";
 import { attackMeta, comparisonMeta } from "@/components/status";
 import { Chars, Roll } from "./effects";
-import { RecordWall } from "./fx";
+import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteStage } from "./RouteStage";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
 
-/** How long each kind of step stays on screen during a replay. */
-const SHOT_MS = { propose: 1200, attack: 2000, verify: 1800, revise: 1600, judge: 2000 };
+/** How long each kind of step holds the screen during a film. */
+const SHOT_MS = { propose: 3400, attack: 3700, verify: 3300, revise: 2900, judge: 6400 };
 
 const OUTCOME = {
   recommendation: "当前条件下的建议",
@@ -58,11 +58,46 @@ export function ArenaConsole({
   const [cursor, setCursor] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [intro, setIntro] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   const [motion, setMotion] = useState(false);
+  const [filmDone, setFilmDone] = useState(false);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
   const seen = new Set(shown.map((b) => b.id));
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      try {
+        if (!sessionStorage.getItem("arena-intro")) setIntro(true);
+      } catch {
+        // Without session storage the opening simply does not play.
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  // The film starts as the shutter opens, so the result is never shown before its first step.
+  const reveal = useCallback(() => {
+    setRevealed((done) => {
+      if (!done && last >= 1) {
+        setMotion(true);
+        setFilmDone(false);
+        setCursor(0);
+        setPlaying(true);
+      }
+      return true;
+    });
+  }, [last]);
+  const endFilm = useCallback(() => setFilmDone(true), []);
+  const endIntro = useCallback(() => {
+    setIntro(false);
+    try {
+      sessionStorage.setItem("arena-intro", "1");
+    } catch {
+      // Nothing to remember it in.
+    }
+  }, []);
 
   const stage = current?.stage;
   useEffect(() => {
@@ -78,6 +113,7 @@ export function ArenaConsole({
     (i: number) => {
       setPlaying(false);
       setMotion(i === index + 1);
+      setFilmDone(false);
       setCursor(i >= last ? null : Math.max(i, 0));
     },
     [last, index],
@@ -85,6 +121,7 @@ export function ArenaConsole({
   const replay = () => {
     if (playing) return setPlaying(false);
     setMotion(true);
+    setFilmDone(false);
     if (index >= last) setCursor(0);
     setPlaying(true);
   };
@@ -110,6 +147,7 @@ export function ArenaConsole({
         setPlaying((p) => {
           if (!p) {
             setMotion(true);
+            setFilmDone(false);
             if (cursor === null) setCursor(0);
           }
           return !p;
@@ -143,7 +181,9 @@ export function ArenaConsole({
   ];
 
   return (
-    <div className="c-root">
+    <div
+      className={`c-root ${playing ? "theater" : ""} ${playing && current?.stage !== "judge" ? "aside" : ""}`}
+    >
       <RecordWall version={version} events={logged} />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
@@ -199,7 +239,8 @@ export function ArenaConsole({
             index={index}
             speed={speed}
             directed={directed}
-            focused={cursor !== null || playing}
+            camera={cursor !== null || playing}
+            entering={intro && !revealed}
             readOnly={historical || busy}
             onClaim={onClaim}
           />
@@ -224,7 +265,11 @@ export function ArenaConsole({
                 </span>
               </div>
               <div className="big">
-                <Chars text={current ? current.title : "等待第一步"} active={directed} />
+                <Chars
+                  text={current ? current.title : "等待第一步"}
+                  active={directed}
+                  delay={180}
+                />
               </div>
               <p>{current ? current.plain : "同一模型分成五个角色，替你比较三条路线。"}</p>
               <div className="c-ctrl">
@@ -346,6 +391,25 @@ export function ArenaConsole({
           </section>
         </div>
       </div>
+      {playing && current && current.stage !== "judge" && (
+        <Chapter
+          key={current.stage}
+          stage={current.stage}
+          number={STAGES.indexOf(current.stage) + 1}
+        />
+      )}
+      {verdict && directed && !filmDone && current?.id === "judge" && (
+        <VerdictFilm verdict={verdict} onDone={endFilm} />
+      )}
+      {intro && (
+        <Intro
+          version={version}
+          events={events}
+          model={model}
+          onReveal={reveal}
+          onDone={endIntro}
+        />
+      )}
     </div>
   );
 }

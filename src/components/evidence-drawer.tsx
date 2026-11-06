@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { leaveAs } from "@/components/console/effects";
 import {
   ArrowRight,
   FileSearch,
@@ -65,6 +66,14 @@ export function EvidenceDrawer({
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = dialogRef.current;
+    return () =>
+      leaveAs(el, [{ transform: "none" }, { transform: "translateX(102%)" }], {
+        duration: 280,
+        backdrop: "rgb(11 13 16 / 0.34)",
+      });
+  }, [dialogRef]);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();

@@ -87,6 +87,8 @@ test("real unconfigured homepage explains missing key and prevents starting a pa
 test("explicit UI fixture: five stages, evidence, condition rematch and preserved history", async ({
   page,
 }, testInfo) => {
+  // This suite checks data flow; the console also supports immediate reduced-motion viewing.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   const snapshot = fixtureSnapshot();
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -126,6 +128,23 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
     path: testInfo.outputPath("explicit-ui-fixture-arena.png"),
     fullPage: true,
   });
+  // A child's Space activation opens its card without triggering the global playback shortcut.
+  await page.getByRole("button", { name: "查看第 1 步", exact: true }).focus();
+  await page.keyboard.press("Space");
+  const step = page.getByRole("dialog", { name: "第 1 步 · 提案" });
+  await expect(step).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(step).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
+  // Early replay opens the visible proposal, not a future revision of that route.
+  await page.getByRole("button", { name: "第 1 步", exact: true }).click();
+  await page.getByRole("button", { name: "查看路线 A 的详情" }).click();
+  await expect(step).toBeVisible();
+  await expect(step).toContainText("写一份测试大纲。");
+  await page.keyboard.press("Escape");
+  await expect(step).not.toBeVisible();
+  await page.keyboard.press("End");
+  await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
   await page.getByRole("button", { name: /测试质疑：尚未核算总投入/ }).click();
   const evidence = page.getByRole("dialog", { name: "这一条，站得住吗？" });
   await expect(evidence.getByRole("heading", { name: "测试计算证据" })).toBeVisible();
@@ -157,6 +176,8 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
 test("explicit UI fixture: a delayed old advance cannot replace a new condition version", async ({
   page,
 }) => {
+  // This suite checks data flow; the console also supports immediate reduced-motion viewing.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   const snapshot = fixtureSnapshot();
   let releaseOld!: () => void;
   let oldStarted!: () => void;

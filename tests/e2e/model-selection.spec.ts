@@ -68,6 +68,10 @@ test("explicit UI fixture: choose model, see auto reason and preserve model on r
         modelId: selection.provider === "openai" ? "gpt-6.1-terra" : "deepseek-flash",
         currency: selection.provider === "openai" ? "USD" : "CNY",
       };
+      next.costCny = selection.provider === "deepseek" ? 0.12 : 0;
+      next.reservedCny = selection.provider === "deepseek" ? 0.03 : 0;
+      next.costUsd = selection.provider === "openai" ? 0.24 : 0;
+      next.reservedUsd = selection.provider === "openai" ? 0.06 : 0;
       if (path.endsWith("/versions")) snapshot.versions.push(next);
       snapshot.activeVersionId = next.id;
     }
@@ -83,6 +87,8 @@ test("explicit UI fixture: choose model, see auto reason and preserve model on r
   await page.getByRole("radio", { name: "DeepSeek 手动指定" }).check();
   await page.getByRole("button", { name: "让方案上场" }).click();
   expect(requests[0].modelMode).toBe("deepseek");
+  await expect(page.locator(".arena-cost")).toContainText("¥0.12");
+  await expect(page.locator(".arena-cost")).toContainText("¥0.03");
   await page.getByRole("button", { name: "修改条件再开局" }).click();
   const dialog = page.getByRole("dialog", { name: "修改条件，重新开局" });
   await expect(dialog.getByRole("radio", { name: "DeepSeek 手动指定" })).toBeChecked();
@@ -96,11 +102,22 @@ test("explicit UI fixture: choose model, see auto reason and preserve model on r
     "fixture-version-2",
   );
   await expect(page.getByText("gpt-6.1-terra", { exact: false }).first()).toBeVisible();
+  await expect(page.locator(".arena-cost")).toContainText("$0.24");
+  await expect(page.locator(".arena-cost")).toContainText("$0.06");
   await page.getByRole("combobox", { name: "选择推演版本" }).selectOption("fixture-version-1");
   await expect(page.getByRole("combobox", { name: "选择推演版本" })).toHaveValue(
     "fixture-version-1",
   );
   await expect(page.getByText("deepseek-flash", { exact: false }).first()).toBeVisible();
+  await expect(page.locator(".arena-cost")).toContainText("¥0.12");
+  await expect(page.locator(".arena-cost")).not.toContainText("$0.24");
+  await expect(page.getByRole("combobox", { name: "选择推演版本" })).toBeFocused();
+  await page.getByRole("button", { name: "模型与版本", exact: true }).click();
+  const information = page.getByRole("dialog", { name: "模型与运行信息" });
+  await expect(information).toContainText("deepseek-flash");
+  await expect(information).not.toContainText("gpt-6.1-terra");
+  await page.keyboard.press("Escape");
+  await expect(information).not.toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "修改条件再开局" }).click();
   await page.screenshot({

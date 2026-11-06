@@ -112,7 +112,7 @@ test("explicit UI fixture: choose model, see auto reason and preserve model on r
   await expect(page.locator(".arena-cost")).toContainText("¥0.12");
   await expect(page.locator(".arena-cost")).not.toContainText("$0.24");
   await expect(page.getByRole("combobox", { name: "选择推演版本" })).toBeFocused();
-  await page.getByRole("button", { name: "模型与版本", exact: true }).click();
+  await page.getByRole("button", { name: "真实模型推演", exact: true }).click();
   const information = page.getByRole("dialog", { name: "模型与运行信息" });
   await expect(information).toContainText("deepseek-flash");
   await expect(information).not.toContainText("gpt-6.1-terra");

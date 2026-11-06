@@ -97,11 +97,13 @@ function response(
     usage?: unknown;
     headers?: Record<string, string>;
     model?: string;
+    metadata?: Record<string, unknown>;
   } = {},
 ) {
   return Response.json(
     {
       model: options.model ?? "gpt-6-luna",
+      ...options.metadata,
       answers: options.answers ?? answers(),
       usage: options.usage ?? {
         input_tokens: 1000,
@@ -150,6 +152,9 @@ describe("optional Decisions review with separate billing and immutable primary 
       responseIdSource: "x-request-id",
       usage: {
         cacheWriteInputTokens: 100,
+        cacheWrite30mInputTokens: 100,
+        cacheWrite12hInputTokens: 0,
+        serviceTier: "default",
         estimatedUsd: 0.000085,
         estimatedCny: 0,
         outputTokens: 80,
@@ -160,7 +165,11 @@ describe("optional Decisions review with separate billing and immutable primary 
       body = JSON.parse(init.body);
     expect(url).toBe("https://api.openai.com/v1/decisions");
     expect(init.redirect).toBe("error");
-    expect(body).toMatchObject({ model: "gpt-6-luna", prompt_cache_options: { mode: "explicit" } });
+    expect(body).toMatchObject({
+      model: "gpt-6-luna",
+      prompt_cache_options: { mode: "explicit", ttl: "30m" },
+    });
+    expect(body).not.toHaveProperty("service_tier");
     expect(body.prompt_cache_options).not.toHaveProperty("breakpoints");
     expect(body.questions.map((question: { name: string }) => question.name)).toEqual([
       "route_a",
@@ -174,11 +183,28 @@ describe("optional Decisions review with separate billing and immutable primary 
     );
     expect(billing.settleBilling).toHaveBeenCalledWith(
       review.id,
-      expect.objectContaining({ amount: 85, outputTokens: 80, cachedInputTokens: 200 }),
+      expect.objectContaining({
+        amount: 85,
+        outputTokens: 80,
+        cachedInputTokens: 200,
+        cacheWriteInputTokens: 100,
+        cacheWrite30mInputTokens: 100,
+        cacheWrite12hInputTokens: 0,
+        serviceTier: "default",
+        model: "gpt-6-luna",
+      }),
     );
     expect(getVersion(ids.versionId)).toEqual(before);
     expect(JSON.stringify(review)).not.toContain("SYNTHETIC_KEY_NOT_FOR_OUTPUT");
-    expect(getDecisionReview(ids.arenaId, ids.versionId, owner)?.id).toBe(review.id);
+    expect(getDecisionReview(ids.arenaId, ids.versionId, owner)).toMatchObject({
+      id: review.id,
+      usage: {
+        cacheWriteInputTokens: 100,
+        cacheWrite30mInputTokens: 100,
+        cacheWrite12hInputTokens: 0,
+        serviceTier: "default",
+      },
+    });
     expect(review.usage?.cacheWriteInputTokens).toBe(100);
     const reservation = billing.reserveBilling.mock.calls[0][0];
     expect(reservation.maxTokens).toBe(
@@ -311,7 +337,14 @@ describe("optional Decisions review with separate billing and immutable primary 
     expect(billing.settleBilling).not.toHaveBeenCalled();
     const other = primary("other-owner");
     fetch.mockResolvedValueOnce(
-      response({ usage: { input_tokens: 1000000, output_tokens: 0, total_tokens: 1000000 } }),
+      response({
+        usage: {
+          input_tokens: 1000000,
+          output_tokens: 0,
+          total_tokens: 1000000,
+          input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        },
+      }),
     );
     const overrun = await runDecisionReview(
       other.arenaId,
@@ -419,6 +452,153 @@ describe("optional Decisions review with separate billing and immutable primary 
       usage: { inputTokens: 1000, cacheWriteInputTokens: 100, estimatedUsd: 0.000085 },
     });
     expect(review.reservedUsd).toBeGreaterThan(0);
+  });
+  it("validates optional 30m write breakdown and charges writes once", async () => {
+    const ids = primary();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response({
+          metadata: { service_tier: "default", prompt_cache_options: { ttl: "30m" } },
+          usage: {
+            input_tokens: 1000,
+            input_tokens_details: {
+              cached_tokens: 200,
+              cache_write_tokens: 100,
+              cache_write_tokens_details: { ttl_30m_tokens: 100, ttl_12h_tokens: 0 },
+            },
+            output_tokens: 80,
+            total_tokens: 1080,
+          },
+        }),
+      ),
+    );
+    const review = await runDecisionReview(ids.arenaId, ids.versionId, owner, randomUUID());
+    expect(review).toMatchObject({ status: "completed", usage: { estimatedUsd: 0.000085 } });
+    expect(billing.settleBilling).toHaveBeenCalledWith(
+      review.id,
+      expect.objectContaining({ amount: 85, cacheWrite30mInputTokens: 100 }),
+    );
+    expect(billing.holdBilling).not.toHaveBeenCalled();
+  });
+  it.each([
+    [272000, 34000],
+    [272001, 68001],
+  ])("uses the long-context boundary for %i written tokens", async (input, amount) => {
+    const ids = primary();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response({
+          usage: {
+            input_tokens: input,
+            output_tokens: 0,
+            total_tokens: input,
+            input_tokens_details: { cached_tokens: 0, cache_write_tokens: input },
+          },
+        }),
+      ),
+    );
+    const review = await runDecisionReview(ids.arenaId, ids.versionId, owner, randomUUID());
+    expect(review).toMatchObject({
+      status: "failed",
+      errorCode: "DECISIONS_RESERVATION_EXCEEDED",
+      canRetry: false,
+      usage: {
+        estimatedUsd: amount / 1e6,
+        cacheWrite30mInputTokens: input,
+        cacheWrite12hInputTokens: 0,
+      },
+    });
+    expect(billing.settleBilling).toHaveBeenCalledWith(
+      review.id,
+      expect.objectContaining({ amount, cacheWrite30mInputTokens: input }),
+    );
+  });
+  it("keeps archived usage without tier or lifetime metadata unchanged on read", async () => {
+    const ids = primary();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response()));
+    const review = await runDecisionReview(ids.arenaId, ids.versionId, owner, randomUUID());
+    delete review.usage!.serviceTier;
+    delete review.usage!.cacheWrite30mInputTokens;
+    delete review.usage!.cacheWrite12hInputTokens;
+    review.configurationHash = "historical-protocol-hash";
+    const body = JSON.stringify(review);
+    db().prepare("UPDATE decision_reviews SET body=? WHERE id=?").run(body, review.id);
+    const archived = getDecisionReview(ids.arenaId, ids.versionId, owner)!;
+    expect(archived.stale).toBe(true);
+    expect(archived.usage).toEqual(review.usage);
+    expect(archived.usage).not.toHaveProperty("serviceTier");
+    expect(archived.usage).not.toHaveProperty("cacheWrite30mInputTokens");
+    expect(archived.usage).not.toHaveProperty("cacheWrite12hInputTokens");
+    expect(db().prepare("SELECT body FROM decision_reviews WHERE id=?").get(review.id)).toEqual({
+      body,
+    });
+  });
+  it.each([
+    { service_tier: "fast" },
+    { service_tier: "auto" },
+    { service_tier: null },
+    { prompt_cache_options: { ttl: "12h" } },
+    { prompt_cache_options: { ttl: "future-ttl" } },
+    { prompt_cache_options: { ttl: null } },
+  ])("holds unpriceable returned billing metadata %j without retrying", async (metadata) => {
+    const ids = primary(),
+      fetch = vi.fn().mockResolvedValue(response({ metadata }));
+    vi.stubGlobal("fetch", fetch);
+    const review = await runDecisionReview(ids.arenaId, ids.versionId, owner, randomUUID());
+    expect(review).toMatchObject({ status: "uncertain", canRetry: false, usage: null });
+    expect(review.reservedUsd).toBeGreaterThan(0);
+    expect(billing.holdBilling).toHaveBeenCalledWith(review.id);
+    expect(billing.settleBilling).not.toHaveBeenCalled();
+    expect((await runDecisionReview(ids.arenaId, ids.versionId, owner, randomUUID())).id).toBe(
+      review.id,
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    undefined,
+    { cached_tokens: 200 },
+    { cache_write_tokens: 100 },
+    {
+      cached_tokens: 200,
+      cache_write_tokens: 100,
+      cache_write_tokens_details: { ttl_30m_tokens: 99, ttl_12h_tokens: 0 },
+    },
+    {
+      cached_tokens: 200,
+      cache_write_tokens: 100,
+      cache_write_tokens_details: { ttl_30m_tokens: 0, ttl_12h_tokens: 100 },
+    },
+    {
+      cached_tokens: 200,
+      cache_write_tokens: 100,
+      cache_write_tokens_details: { ttl_30m_tokens: 100 },
+    },
+    {
+      cached_tokens: 200,
+      cache_write_tokens: 100,
+      cache_write_tokens_details: { ttl_30m_tokens: 100, ttl_12h_tokens: 0, ttl_future_tokens: 0 },
+    },
+  ])("holds absent cache counts or contradictory/unknown lifetime counts %j", async (details) => {
+    const ids = primary();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response({
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 80,
+            total_tokens: 1080,
+            input_tokens_details: details,
+          },
+        }),
+      ),
+    );
+    const review = await runDecisionReview(ids.arenaId, ids.versionId, owner, randomUUID());
+    expect(review).toMatchObject({ status: "uncertain", canRetry: false, usage: null });
+    expect(billing.holdBilling).toHaveBeenCalledWith(review.id);
+    expect(billing.settleBilling).not.toHaveBeenCalled();
   });
   it("labels stale archived results without changing their source hash or the primary version", async () => {
     const ids = primary();

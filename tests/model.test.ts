@@ -232,6 +232,7 @@ describe("provider isolation and native billing with explicit test doubles", () 
     Response.json({
       id: "gpt-fixture",
       model: "gpt-6.1-terra",
+      service_tier: "default",
       status: "completed",
       output: [
         { type: "function_call", name: "submit_propose", arguments: content, status: "completed" },
@@ -239,7 +240,7 @@ describe("provider isolation and native billing with explicit test doubles", () 
       usage: {
         input_tokens: 1000,
         output_tokens: 500,
-        input_tokens_details: { cached_tokens: 200 },
+        input_tokens_details: { cached_tokens: 200, cache_write_tokens: 0 },
         output_tokens_details: { reasoning_tokens: 300 },
       },
     });
@@ -263,6 +264,8 @@ describe("provider isolation and native billing with explicit test doubles", () 
     const body = buildRequestBody("propose", input, StrategySchema, gpt);
     expect(body).toMatchObject({
       max_output_tokens: 2200,
+      service_tier: "default",
+      prompt_cache_options: { mode: "explicit", ttl: "30m" },
       reasoning: { effort: "low" },
       store: false,
       parallel_tool_calls: false,
@@ -303,7 +306,7 @@ describe("provider isolation and native billing with explicit test doubles", () 
       outputTokens: 500,
       cachedInputTokens: 200,
       estimatedCny: 0,
-      estimatedUsd: 0.0035,
+      estimatedUsd: 0.00331,
       currency: "USD",
       provider: "openai",
       billingAttemptId: "gpt-attempt-fixture",
@@ -316,11 +319,16 @@ describe("provider isolation and native billing with explicit test doubles", () 
       maxTokens: estimateCallTokens(input, gpt),
     });
     expect(billing.settleBilling).toHaveBeenCalledWith("gpt-attempt-fixture", {
-      amount: 3500,
+      amount: 3310,
       inputTokens: 1000,
       outputTokens: 500,
       cachedInputTokens: 200,
       responseId: "gpt-fixture",
+      model: "gpt-6.1-terra",
+      serviceTier: "default",
+      cacheWriteInputTokens: 0,
+      cacheWrite30mInputTokens: 0,
+      cacheWrite12hInputTokens: 0,
     });
     expect(billing.reserveBilling.mock.invocationCallOrder[0]).toBeLessThan(
       fn.mock.invocationCallOrder[0],
@@ -419,10 +427,13 @@ describe("provider isolation and native billing with explicit test doubles", () 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(gptResponse("invalid JSON")));
     await expect(
       generateStrategy(input, getModelConfig("openai"), "invalid-gpt"),
-    ).rejects.toMatchObject({ uncertain: false, usage: { estimatedUsd: 0.0035, estimatedCny: 0 } });
+    ).rejects.toMatchObject({
+      uncertain: false,
+      usage: { estimatedUsd: 0.00331, estimatedCny: 0 },
+    });
     expect(billing.settleBilling).toHaveBeenCalledWith(
       "invalid-gpt",
-      expect.objectContaining({ amount: 3500 }),
+      expect.objectContaining({ amount: 3310 }),
     );
     expect(billing.holdBilling).not.toHaveBeenCalled();
   });

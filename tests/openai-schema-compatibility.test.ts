@@ -109,7 +109,7 @@ describe("OpenAI finite-enum schema compatibility", () => {
     expect((parameters.properties as Record<string, unknown>).reason).toHaveProperty("pattern");
     expect(bound).toEqual(original);
     expect(body).toMatchObject({ max_output_tokens: 2200, reasoning: { effort: "low" } });
-    expect(getModelConfig("openai").configurationVersion).toBe("openai-1.2.0");
+    expect(getModelConfig("openai").configurationVersion).toBe("openai-standard-no-cache-1.3.0");
   });
   it("leaves the complete DeepSeek chat request and its existing enum patterns unchanged", () => {
     const config = getModelConfig("deepseek");

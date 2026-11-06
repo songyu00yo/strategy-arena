@@ -19,6 +19,7 @@ import type { ModelMode } from "../contracts";
 import defaults from "../../../config/model.json";
 import { BillingError, reserveBilling, settleBilling, holdBilling } from "./billing";
 import { PROMPT_VERSION, SYSTEM, STAGE_PROMPTS } from "../../../prompts/protocol";
+import { priceOpenAIResponse, reserveOpenAIAmount } from "./openai-billing";
 import {
   bindStrictReferences,
   jsonRepairFeedback,
@@ -108,7 +109,7 @@ export function getModelConfig(
       ? `OPENAI_${id.replace(/[^a-z0-9]/gi, "_").toUpperCase()}`
       : prefix;
   return {
-    configurationVersion: openai ? "openai-1.2.0" : defaults.configVersion,
+    configurationVersion: openai ? "openai-standard-no-cache-1.3.0" : defaults.configVersion,
     parserVersion: "json-single-trailing-brace-1.0.0",
     provider,
     currency: openai ? "USD" : "CNY",
@@ -214,6 +215,8 @@ export function estimateCallCost(
   input: StageInput,
   config: ModelConfig = getModelConfig(),
 ): number {
+  if (config.provider === "openai")
+    return reserveOpenAIAmount(maxInputTokens(input, config), config.maxOutputTokens, config) / 1e6;
   return (
     Math.ceil(
       (maxInputTokens(input, config) * config.inputPrice +
@@ -303,6 +306,8 @@ export function buildRequestBody(
   if (config.provider === "openai")
     return {
       model: config.id,
+      service_tier: "default",
+      prompt_cache_options: { mode: "explicit", ttl: "30m" },
       input: messages,
       max_output_tokens: config.maxOutputTokens,
       reasoning: { effort: config.reasoningEffort },
@@ -404,7 +409,9 @@ export function estimateStructuredCall<T>(request: StructuredRequest<T>): {
   return {
     tokens: inputTokens + c.maxOutputTokens,
     amount:
-      Math.ceil((inputTokens * c.inputPrice + c.maxOutputTokens * c.outputPrice) / 100) / 10000,
+      c.provider === "openai"
+        ? reserveOpenAIAmount(inputTokens, c.maxOutputTokens, c) / 1e6
+        : Math.ceil((inputTokens * c.inputPrice + c.maxOutputTokens * c.outputPrice) / 100) / 10000,
     currency: c.currency,
   };
 }
@@ -435,6 +442,8 @@ export async function generateStructured<T>(
     c.provider === "openai"
       ? {
           model: c.id,
+          service_tier: "default",
+          prompt_cache_options: { mode: "explicit", ttl: "30m" },
           input: [
             textMessages[0],
             {
@@ -596,6 +605,14 @@ async function executeStructured<T>({
     outputTokens = 0,
     cachedInputTokens = 0,
     responseId?: string,
+    billingDetails?: Pick<
+      ModelUsage,
+      | "model"
+      | "serviceTier"
+      | "cacheWriteInputTokens"
+      | "cacheWrite30mInputTokens"
+      | "cacheWrite12hInputTokens"
+    >,
   ) => {
     try {
       settleBilling(attemptId, {
@@ -604,6 +621,7 @@ async function executeStructured<T>({
         outputTokens,
         cachedInputTokens,
         responseId,
+        ...billingDetails,
       });
     } catch {
       throw unknown("本次模型费用未能确认入账，保留预留额度并停止。");
@@ -651,6 +669,7 @@ async function executeStructured<T>({
   let raw: {
     id?: string;
     model?: string;
+    service_tier?: unknown;
     status?: string;
     incomplete_details?: { reason?: string };
     error?: unknown;
@@ -710,7 +729,25 @@ async function executeStructured<T>({
   if (c.provider === "openai" && ["queued", "in_progress"].includes(raw.status ?? ""))
     throw unknown("模型响应仍在处理中，最终用量未知，保留预留额度并停止。");
   // Both APIs' reported output total already includes reasoning; do not add it again.
-  const amount = Math.ceil(inputTokens! * c.inputPrice + outputTokens! * c.outputPrice);
+  let openaiBilling: ReturnType<typeof priceOpenAIResponse> | undefined;
+  if (c.provider === "openai") {
+    try {
+      openaiBilling = priceOpenAIResponse(raw, c);
+    } catch {
+      throw unknown("模型身份、服务档位或缓存写入期限无法核对，保留本次预留额度并停止。");
+    }
+  }
+  const amount =
+    openaiBilling?.amount ?? Math.ceil(inputTokens! * c.inputPrice + outputTokens! * c.outputPrice);
+  const billingDetails = openaiBilling
+    ? {
+        model: openaiBilling.model,
+        serviceTier: openaiBilling.serviceTier,
+        cacheWriteInputTokens: openaiBilling.cacheWriteInputTokens,
+        cacheWrite30mInputTokens: openaiBilling.cacheWrite30mInputTokens,
+        cacheWrite12hInputTokens: openaiBilling.cacheWrite12hInputTokens,
+      }
+    : undefined;
   const usage: ModelUsage = {
     inputTokens: inputTokens!,
     outputTokens: outputTokens!,
@@ -723,12 +760,28 @@ async function executeStructured<T>({
     model: typeof raw.model === "string" ? raw.model : c.id,
     responseId: typeof raw.id === "string" ? raw.id : "not-returned",
     durationMs: Date.now() - started,
+    ...billingDetails,
   };
-  settle(amount, usage.inputTokens, usage.outputTokens, cachedInputTokens, usage.responseId);
+  settle(
+    amount,
+    usage.inputTokens,
+    usage.outputTokens,
+    cachedInputTokens,
+    usage.responseId,
+    billingDetails,
+  );
   if (
-    !allowRepair &&
-    (usage.inputTokens + usage.outputTokens > estimatedTokens ||
-      amount > Math.ceil(estimatedCost * 1e6))
+    openaiBilling &&
+    (openaiBilling.serviceTier !== "default" || openaiBilling.cacheWriteInputTokens > 0)
+  )
+    throw new ModelCallError(
+      "实际服务档位或缓存写入与请求策略不一致；已按可核对的实际用量入账并停止。",
+      false,
+      usage,
+    );
+  if (
+    usage.inputTokens + usage.outputTokens > estimatedTokens ||
+    amount > Math.ceil(estimatedCost * 1e6)
   )
     throw new ModelCallError(
       "模型报告用量超出本次预留上界；已按实际用量入账并停止，需检查图片计费规则后再继续。",

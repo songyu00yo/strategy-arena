@@ -236,6 +236,10 @@ export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  serviceTier?: string;
+  cacheWriteInputTokens?: number;
+  cacheWrite30mInputTokens?: number;
+  cacheWrite12hInputTokens?: number;
   estimatedCny: number;
   estimatedUsd?: number;
   currency?: Currency;

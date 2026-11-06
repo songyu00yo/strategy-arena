@@ -32,14 +32,20 @@ function response(
   provider: "openai" | "deepseek",
   output = '{"answer":"先试听"}',
   inputTokens = 100,
+  model = "gpt-6.1-terra",
 ) {
   return Response.json(
     provider === "openai"
       ? {
           id: "response-fixture",
           status: "completed",
-          model: "fixture-snapshot",
-          usage: { input_tokens: inputTokens, output_tokens: 10 },
+          model,
+          service_tier: "default",
+          usage: {
+            input_tokens: inputTokens,
+            output_tokens: 10,
+            input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+          },
           output: [
             {
               type: "function_call",
@@ -111,7 +117,7 @@ describe("five model structured generation and shared billing", () => {
   it.each(MODEL_CATALOG)(
     "uses $id consistently with native currency and one shared settlement",
     async (model) => {
-      const fetch = vi.fn().mockResolvedValue(response(model.provider));
+      const fetch = vi.fn().mockResolvedValue(response(model.provider, undefined, 100, model.id));
       vi.stubGlobal("fetch", fetch);
       const result = await generateStructured({ ...request, modelId: model.id });
       expect(result.value).toEqual({ answer: "先试听" });
@@ -138,6 +144,13 @@ describe("five model structured generation and shared billing", () => {
       );
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(JSON.parse(fetch.mock.calls[0][1].body).model).toBe(model.id);
+      if (model.provider === "openai") {
+        expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({
+          service_tier: "default",
+          prompt_cache_options: { mode: "explicit", ttl: "30m" },
+        });
+        expect(fetch.mock.calls[0][1].body).not.toContain("prompt_cache_breakpoint");
+      }
     },
   );
   it.each(["openai", "deepseek"] as const)(
@@ -256,7 +269,9 @@ describe("five model structured generation and shared billing", () => {
   it("uses frozen config and never forwards malformed output in a repair payload", async () => {
     const config = resolveModelConfig("gpt-6.1-sol");
     vi.stubEnv("OPENAI_MODEL_ID", "unpriced");
-    const fetch = vi.fn().mockResolvedValue(response("openai", "PRIVATE_DOCUMENT_BODY"));
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(response("openai", "PRIVATE_DOCUMENT_BODY", 100, config.id));
     vi.stubGlobal("fetch", fetch);
     await expect(generateStructured({ ...request, config })).rejects.toMatchObject({
       usage: { provider: "openai" },

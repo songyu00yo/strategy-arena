@@ -28,9 +28,15 @@ const strategy = {
   estimatedCost: null,
   estimatedHours: 8,
 };
-function response(content = JSON.stringify(strategy), id = "fixture-response") {
+function response(
+  content = JSON.stringify(strategy),
+  id = "fixture-response",
+  patch: Record<string, unknown> = {},
+) {
   return Response.json({
     id,
+    model: "gpt-6.1-terra",
+    service_tier: "default",
     status: "completed",
     output: [
       {
@@ -43,8 +49,9 @@ function response(content = JSON.stringify(strategy), id = "fixture-response") {
     usage: {
       input_tokens: 1000,
       output_tokens: 500,
-      input_tokens_details: { cached_tokens: 200 },
+      input_tokens_details: { cached_tokens: 200, cache_write_tokens: 0 },
     },
+    ...patch,
   });
 }
 let directory: string;
@@ -73,6 +80,85 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 describe("adapter and real shared ledger integration", () => {
+  it.each([
+    { model: "gpt-6-astra" },
+    { model: "gpt-6.1-terra-2099-01-01" },
+    { service_tier: undefined },
+    { service_tier: "ultrafast" },
+    {
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 500,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 500 },
+      },
+    },
+    {
+      usage: { input_tokens: 1000, output_tokens: 500, input_tokens_details: { cached_tokens: 0 } },
+    },
+  ])("holds unverifiable billing without settlement or redispatch %#", async (patch) => {
+    const fetchDouble = vi.fn().mockResolvedValue(response(undefined, undefined, patch));
+    vi.stubGlobal("fetch", fetchDouble);
+    const config = getModelConfig("openai");
+    await expect(generateStrategy(input, config, "unknown-billing")).rejects.toMatchObject({
+      uncertain: true,
+    });
+    expect(getBillingAttempt("unknown-billing")).toMatchObject({
+      state: "held",
+      amount_micros: null,
+    });
+    await expect(generateStrategy(input, config, "unknown-billing")).rejects.toMatchObject({
+      uncertain: true,
+    });
+    expect(fetchDouble).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ["fast", 0, 0, 7000],
+    ["priority", 0, 0, 7000],
+    ["default", 400, 0, 3600],
+    ["default", 0, 400, 4100],
+  ] as const)(
+    "settles actual %s writes %s/%s and stops without repair",
+    async (tier, short, long, amount) => {
+      const fetchDouble = vi.fn().mockResolvedValue(
+        response(undefined, undefined, {
+          service_tier: tier,
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 500,
+            input_tokens_details: {
+              cached_tokens: 0,
+              cache_write_tokens: short + long,
+              cache_write_tokens_details: { ttl_30m_tokens: short, ttl_12h_tokens: long },
+            },
+          },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchDouble);
+      await expect(
+        generateStrategy(input, getModelConfig("openai"), "billing-policy-deviation"),
+      ).rejects.toMatchObject({
+        uncertain: false,
+        repair: undefined,
+        usage: { serviceTier: tier, estimatedUsd: amount / 1e6 },
+      });
+      expect(getBillingAttempt("billing-policy-deviation")).toMatchObject({
+        state: "settled",
+        amount_micros: amount,
+        model: "gpt-6.1-terra",
+        service_tier: tier,
+        cache_write_input_tokens: short + long,
+        cache_write_30m_input_tokens: short,
+        cache_write_12h_input_tokens: long,
+      });
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(fetchDouble.mock.calls[0][1].body);
+      expect(body).toMatchObject({
+        service_tier: "default",
+        prompt_cache_options: { mode: "explicit", ttl: "30m" },
+      });
+      expect(JSON.stringify(body)).not.toContain("prompt_cache_breakpoint");
+    },
+  );
   it("blocks dispatch when the required shared ledger is unconfigured", async () => {
     vi.stubEnv("ARENA_BILLING_DATABASE_PATH", "");
     const fetchDouble = vi.fn();
@@ -97,19 +183,24 @@ describe("adapter and real shared ledger integration", () => {
       else
         await expect(call).rejects.toMatchObject({
           uncertain: false,
-          usage: { estimatedUsd: 0.0035 },
+          usage: { estimatedUsd: 0.00331 },
         });
       expect(getBillingAttempt("known-usage")).toMatchObject({
         state: "settled",
         currency: "USD",
-        amount_micros: 3500,
+        amount_micros: 3310,
         input_tokens: 1000,
         output_tokens: 500,
         cached_input_tokens: 200,
+        service_tier: "default",
+        model: "gpt-6.1-terra",
+        cache_write_input_tokens: 0,
+        cache_write_30m_input_tokens: 0,
+        cache_write_12h_input_tokens: 0,
       });
       expect(getBillingSummary()).toMatchObject({
         requests: 1,
-        settledNativeUsdMicros: 3500,
+        settledNativeUsdMicros: 3310,
         reservedUsdMicros: 0,
         tokens: 1500,
       });

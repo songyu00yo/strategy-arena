@@ -14,7 +14,7 @@ import { ArenaError, assertOwner, atomic, db, event, id, now } from "./db";
 import { expireLeases } from "./runtime";
 import { BillingError, holdBilling, reserveBilling, settleBilling } from "./billing";
 
-const PROTOCOL_VERSION = "decisions-review-1.0.0";
+const PROTOCOL_VERSION = "decisions-review-1.1.0";
 const OUTPUT_TOKEN_RESERVATION = 4096;
 // Application bounds, not an advertised limit of the Decisions API. Never truncate hard constraints.
 const INPUT_BYTE_LIMIT = 200000;
@@ -90,7 +90,7 @@ function configuration() {
     inputByteLimit: INPUT_BYTE_LIMIT,
     reservationInputRate: RESERVATION_INPUT_RATE,
     outputTokenReservation: OUTPUT_TOKEN_RESERVATION,
-    promptCacheOptions: { mode: "explicit" },
+    promptCacheOptions: { mode: "explicit", ttl: "30m" },
     questions: DECISION_REVIEW_QUESTIONS,
   };
   return { ...config, hash: hash(config) };
@@ -295,6 +295,7 @@ async function requestReview(
     outputTokens = 0,
     cachedInputTokens = 0,
     responseId?: string,
+    cacheWriteInputTokens = 0,
   ) => {
     try {
       settleBilling(review.id, {
@@ -302,6 +303,11 @@ async function requestReview(
         inputTokens,
         outputTokens,
         cachedInputTokens,
+        cacheWriteInputTokens,
+        cacheWrite30mInputTokens: cacheWriteInputTokens,
+        cacheWrite12hInputTokens: 0,
+        serviceTier: "default",
+        model: DECISION_REVIEW_MODEL,
         responseId,
       });
     } catch {
@@ -352,24 +358,47 @@ async function requestReview(
     total_tokens: z.number().int().nonnegative(),
     input_tokens_details: z
       .object({
-        cached_tokens: z.number().int().nonnegative().optional(),
-        cache_write_tokens: z.number().int().nonnegative().optional(),
+        cached_tokens: z.number().int().nonnegative(),
+        cache_write_tokens: z.number().int().nonnegative(),
+        cache_write_tokens_details: z
+          .object({
+            ttl_30m_tokens: z.number().int().nonnegative(),
+            ttl_12h_tokens: z.number().int().nonnegative(),
+          })
+          .strict()
+          .optional(),
       })
-      .optional(),
+      .strict(),
   });
   const envelope = z
-    .object({ model: z.literal(DECISION_REVIEW_MODEL), usage: Usage, answers: z.unknown() })
+    .object({
+      model: z.literal(DECISION_REVIEW_MODEL),
+      usage: Usage,
+      answers: z.unknown(),
+      // Decisions exposes no service-tier request control and currently supports only 30m.
+      // If a response supplies contrary billing metadata, never price it as standard/30m.
+      service_tier: z.literal("default").optional(),
+      prompt_cache_options: z
+        .object({ ttl: z.literal("30m").optional(), mode: z.literal("explicit").optional() })
+        .strict()
+        .optional(),
+    })
     .safeParse(raw);
   if (!envelope.success) throw hold("快速复核未返回可核对的模型身份或用量，保留预留额度并停止。");
   const u = envelope.data.usage,
-    cached = u.input_tokens_details?.cached_tokens ?? 0,
-    written = u.input_tokens_details?.cache_write_tokens ?? 0;
+    cached = u.input_tokens_details.cached_tokens,
+    written = u.input_tokens_details.cache_write_tokens,
+    writeDetails = u.input_tokens_details.cache_write_tokens_details;
   if (
     ![u.input_tokens, u.output_tokens, u.total_tokens, cached, written].every(
       Number.isSafeInteger,
     ) ||
     cached + written > u.input_tokens ||
-    u.input_tokens + u.output_tokens !== u.total_tokens
+    u.input_tokens + u.output_tokens !== u.total_tokens ||
+    (writeDetails &&
+      (!Number.isSafeInteger(writeDetails.ttl_30m_tokens) ||
+        writeDetails.ttl_30m_tokens !== written ||
+        writeDetails.ttl_12h_tokens !== 0))
   )
     throw hold("快速复核用量或缓存分项不一致，保留预留额度并停止。");
   const headerId = response.headers.get("x-request-id");
@@ -393,12 +422,15 @@ async function requestReview(
     outputTokens: u.output_tokens,
     cachedInputTokens: cached,
     cacheWriteInputTokens: written,
+    cacheWrite30mInputTokens: written,
+    cacheWrite12hInputTokens: 0,
+    serviceTier: "default",
     responseId,
     billingAttemptId: review.id,
     durationMs: Date.now() - started,
   };
   try {
-    settle(amount, usage.inputTokens, usage.outputTokens, cached, responseId);
+    settle(amount, usage.inputTokens, usage.outputTokens, cached, responseId, written);
   } catch (error) {
     const failure = error as ReviewFailure;
     throw new ReviewFailure(failure.message, failure.code, true, usage, responseIdSource, false);
@@ -490,7 +522,7 @@ export async function runDecisionReview(
       model: DECISION_REVIEW_MODEL,
       input: JSON.stringify({ instructions: COMMON, data: input.data }),
       questions: DECISION_REVIEW_QUESTIONS,
-      prompt_cache_options: { mode: "explicit" },
+      prompt_cache_options: config.promptCacheOptions,
     };
     const serializedBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
     if (serializedBytes > INPUT_BYTE_LIMIT)

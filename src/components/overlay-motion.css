@@ -1,0 +1,24 @@
+/* These overlays retain their actual DOM until exit; there is no detached exit clone. */
+.console-shell .modal.overlay-motion[open],
+.console-shell .modal.overlay-motion[open]::backdrop,
+.console-shell .drawer-backdrop.overlay-motion,
+.console-shell .drawer-backdrop.overlay-motion .evidence-drawer,
+.console-shell .drawer-backdrop.overlay-motion .evidence-section {
+  animation: none;
+}
+
+.drawer-backdrop.overlay-motion {
+  background: transparent;
+}
+
+.drawer-backdrop.overlay-motion::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(11 13 16 / 0.34);
+  pointer-events: none;
+}
+
+.drawer-backdrop.overlay-motion .evidence-drawer {
+  position: relative;
+}

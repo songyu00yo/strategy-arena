@@ -3,8 +3,10 @@ import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
-import { Chars, motionHeld, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
+import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
 import type { Beat } from "./beats";
+import { createMotionLoop, createMotionScope, motionNow, motionPaused } from "./motion-runtime";
+import "./stage-motion.css";
 
 const CLAIM = { user: "用户给定", estimate: "估算", unknown: "待核", supported: "有据" };
 const WORD: Record<Attack["status"], string> = {
@@ -16,8 +18,6 @@ const WORD: Record<Attack["status"], string> = {
 /** CSS custom colours use the space-separated form so they can take an alpha. */
 const spaced = (rgb: string) => rgb.replaceAll(",", " ");
 const centre = (box: DOMRect) => ({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
-
-const EMPTY_RECT = { left: 0, top: 0, width: 0, height: 0 } as DOMRect;
 
 type Flight = {
   attack: Attack;
@@ -45,6 +45,7 @@ export function RouteStage({
   speed,
   directed,
   camera,
+  seeking = false,
   lead,
   located,
   reviewing,
@@ -61,6 +62,7 @@ export function RouteStage({
   speed: number;
   directed: boolean;
   camera: boolean;
+  seeking?: boolean;
   /** Pause before a step acts, leaving room for its stage word. */ lead: number;
   /** A challenge the viewer asked to find on the boards. */ located?: string;
   /** Looking back over a finished game: each step can show how it turned out. */
@@ -71,6 +73,7 @@ export function RouteStage({
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
 }) {
+  const motionSpeed = seeking ? 1.25 : speed;
   const shown = beats.slice(0, index + 1);
   const current = beats[index] ?? null;
   const seen = new Set(shown.map((b) => b.id));
@@ -91,7 +94,10 @@ export function RouteStage({
   const flows = useRef(new Map<string, SVGPathElement>());
   const dots = useRef(new Map<string, SVGCircleElement>());
   const flight = useRef<Flight | null>(null);
-  const kick = useRef(60);
+  const kick = useRef(2);
+  const wake = useRef<() => void>(() => {});
+  const stepMotion = useRef<ReturnType<typeof createMotionScope> | null>(null);
+  const directedRef = useRef(directed);
   const live = useRef(attacks);
   const filming = useRef(camera);
   const shot = useRef({ x: 0, y: 0, s: 1, r: 0 });
@@ -103,7 +109,9 @@ export function RouteStage({
   useEffect(() => {
     live.current = attacks;
     filming.current = camera;
+    directedRef.current = directed;
     if (!camera && rig.current) rig.current.style.transform = "none";
+    wake.current();
   });
 
   const push = (id: string, x: number, y: number, z: number, r: number) => {
@@ -113,6 +121,7 @@ export function RouteStage({
     body.y.v += y;
     body.z.v += z;
     body.r.v += r;
+    wake.current();
   };
   /** A blow travels through the room: every board is shoved away from the point, the nearest hardest. */
   const shockwave = (x: number, y: number, power: number) => {
@@ -133,6 +142,22 @@ export function RouteStage({
     cam.current.x.v += (Math.random() - 0.5) * 56 * power;
   };
 
+  // Every asynchronous decoration belongs to the selected step, even after it has started.
+  useLayoutEffect(() => {
+    const scope = createMotionScope();
+    stepMotion.current = scope;
+    fx.current?.clear();
+    if (!directed) {
+      for (const body of Object.values(bodies.current)) {
+        for (const axis of [body.x, body.y, body.z, body.r]) axis.v = 0;
+      }
+    }
+    return () => {
+      scope.dispose();
+      if (stepMotion.current === scope) stepMotion.current = null;
+    };
+  }, [beatId, directed]);
+
   const isDirected = () => directed && !reducedMotion();
 
   // Each step launches one flight along its thread.
@@ -146,44 +171,45 @@ export function RouteStage({
     flight.current = {
       attack: activeAttack,
       kind: current.stage,
-      began: performance.now(),
-      wait: animate ? lead + (current.stage === "attack" ? 260 : 560) / speed : 0,
-      duration: animate ? 720 / speed : 0,
+      began: motionNow(),
+      wait: animate ? lead + (current.stage === "attack" ? 260 : 560) / motionSpeed : 0,
+      duration: animate ? 720 / motionSpeed : 0,
       landed: !animate,
     };
     if (animate && current.stage === "verify" && host) {
       // A scanning beam reads the board before the result lands.
-      const timer = setTimeout(() => {
+      const scope = stepMotion.current!;
+      scope.later(lead, () => {
         const box = host.querySelector(`[data-board="${current.to}"]`)?.getBoundingClientRect();
         const origin = host.getBoundingClientRect();
         if (!box) return;
-        const beam = document.createElement("div");
+        const beam = scope.own(document.createElement("div"));
         beam.className = "c-beam";
         beam.style.cssText = `left:${box.left - origin.left - 18}px;top:${box.top - origin.top}px;width:${box.width + 36}px`;
         host.appendChild(beam);
         const reach = Math.min(box.height, 340);
-        beam.animate(
+        scope.animate(
+          beam,
           [
             { transform: "translateY(0)", opacity: 0 },
             { transform: `translateY(${reach * 0.5}px)`, opacity: 1, offset: 0.25 },
             { transform: `translateY(${reach}px)`, opacity: 1, offset: 0.7 },
             { transform: "translateY(0)", opacity: 0 },
           ],
-          { duration: 620 / speed, easing: "cubic-bezier(.5,0,.5,1)" },
+          { duration: 620 / motionSpeed, easing: "cubic-bezier(.5,0,.5,1)" },
         ).onfinish = () => beam.remove();
-      }, lead);
-      return () => clearTimeout(timer);
+      });
     }
     // Only a new step launches a flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beatId]);
+  }, [beatId, directed]);
 
   // Energy hands the story on: timeline to board, then each step's own choreography.
   useEffect(() => {
     const host = stage.current;
     if (!host || !current || !isDirected()) return;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const later = (ms: number, run: () => void) => timers.push(setTimeout(run, lead + ms / speed));
+    const scope = stepMotion.current!;
+    const later = (ms: number, run: () => void) => scope.later(lead + ms / motionSpeed, run);
     const node = host.querySelector<HTMLElement>(`[data-board="${current.agent}"]`);
     const color = ROUTE_COLOR[current.agent] ?? STATE_COLOR.pending;
 
@@ -198,14 +224,14 @@ export function RouteStage({
           box.left + box.width / 2,
           box.top + 8,
           color,
-          480 / speed,
+          480 / motionSpeed,
         );
       }
     });
 
     if (current.stage === "propose" && node) {
       later(120, () => {
-        const giant = document.createElement("div");
+        const giant = scope.own(document.createElement("div"));
         giant.className = "c-giant";
         giant.textContent = current.agent;
         giant.style.color = `rgb(${color})`;
@@ -214,7 +240,8 @@ export function RouteStage({
         const box = node.getBoundingClientRect();
         const tx = box.left + 18 - (origin.left + origin.width / 2);
         const ty = box.top + 18 - (origin.top + origin.height / 2);
-        giant.animate(
+        scope.animate(
+          giant,
           [
             {
               transform: "translate(-50%,-50%) scale(1.3)",
@@ -237,7 +264,7 @@ export function RouteStage({
               offset: 1,
             },
           ],
-          { duration: 820 / speed, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
+          { duration: 820 / motionSpeed, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
         ).onfinish = () => giant.remove();
       });
       later(880, () => {
@@ -256,7 +283,7 @@ export function RouteStage({
             to.x,
             card.top,
             color,
-            520 / speed,
+            520 / motionSpeed,
           );
         }
       });
@@ -273,15 +300,8 @@ export function RouteStage({
           const box = line.getBoundingClientRect();
           fx.current?.burn(box.left, box.top, box.width, color);
         });
-        node.animate(
-          [
-            { rotate: "y 0deg", scale: "1" },
-            { rotate: "y 16deg", scale: "0.97", offset: 0.5 },
-            { rotate: "y -3deg", scale: "1.005", offset: 0.82 },
-            { rotate: "y 0deg", scale: "1" },
-          ],
-          { duration: 720 / speed, easing: "cubic-bezier(.4,0,.2,1)" },
-        );
+        push(current.agent, 0, 18, 210, 66);
+        later(340, () => push(current.agent, 0, -8, 60, -42));
       });
     }
     if (current.stage === "judge") {
@@ -299,16 +319,16 @@ export function RouteStage({
             if (target) {
               const a = centre(box);
               const b = centre(target);
-              fx.current?.stream(a.x, a.y, b.x, b.y, ROUTE_COLOR[id], 620 / speed);
+              fx.current?.stream(a.x, a.y, b.x, b.y, ROUTE_COLOR[id], 620 / motionSpeed);
             }
           }
         }
       });
     }
-    return () => timers.forEach(clearTimeout);
+
     // A step's choreography plays once, when that step arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beatId]);
+  }, [beatId, directed]);
 
   // One loop runs everything, so every moving part stays in phase.
   useEffect(() => {
@@ -317,7 +337,7 @@ export function RouteStage({
     const surface = canvas.current;
     const el = world.current;
     if (!host || !dot || !surface || !el) return;
-    const sparks = new Sparks(surface);
+    const sparks = new Sparks(surface, () => wake.current());
     fx.current = sparks;
     const reduce = reducedMotion();
     const fitSparks = () => sparks.fit(innerWidth, innerHeight);
@@ -325,13 +345,16 @@ export function RouteStage({
     addEventListener("resize", fitSparks);
 
     const stamp = (x: number, y: number, attack: Attack) => {
-      const mark = document.createElement("div");
+      const scope = stepMotion.current;
+      if (!scope) return;
+      const mark = scope.own(document.createElement("div"));
       mark.className = `c-stamp is-${attack.status}`;
       mark.textContent = attackMeta[attack.status].label;
       mark.style.left = `${x}px`;
       mark.style.top = `${y}px`;
       host.appendChild(mark);
-      mark.animate(
+      scope.animate(
+        mark,
         [
           {
             transform: "translate(-50%,-50%) scale(1.9) rotate(-9deg)",
@@ -349,13 +372,13 @@ export function RouteStage({
         ],
         { duration: 1400, easing: "cubic-bezier(.2,.9,.2,1)", fill: "forwards" },
       ).onfinish = () => mark.remove();
-      const flash = document.createElement("div");
+      const flash = scope.own(document.createElement("div"));
       flash.className = "c-flash";
       flash.style.setProperty("--flash", spaced(STATE_COLOR[attack.status]));
       flash.style.setProperty("--x", `${x}px`);
       flash.style.setProperty("--y", `${y}px`);
       host.appendChild(flash);
-      flash.animate([{ opacity: 0.32 }, { opacity: 0 }], {
+      scope.animate(flash, [{ opacity: 0.32 }, { opacity: 0 }], {
         duration: 800,
         easing: "ease-out",
       }).onfinish = () => flash.remove();
@@ -371,12 +394,15 @@ export function RouteStage({
       const origin = host.getBoundingClientRect();
       const from = claim.getBoundingClientRect();
       const to = row.getBoundingClientRect();
-      const piece = document.createElement("div");
+      const scope = stepMotion.current;
+      if (!scope) return;
+      const piece = scope.own(document.createElement("div"));
       piece.className = "c-tear";
       piece.textContent = attack.claimQuote;
       piece.style.cssText = `left:${from.left - origin.left}px;top:${from.top - origin.top}px;width:${from.width}px`;
       host.appendChild(piece);
-      piece.animate(
+      scope.animate(
+        piece,
         [
           { transform: "none", opacity: 1 },
           { transform: "translateY(-18px) scale(1.08) rotate(-2deg)", opacity: 1, offset: 0.28 },
@@ -389,50 +415,60 @@ export function RouteStage({
       ).onfinish = () => piece.remove();
     };
 
-    let frame = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      const dt = Math.min(0.033, (now - last) / 1000);
-      last = now;
-      if (motionHeld()) {
-        frame = requestAnimationFrame(tick);
-        return;
+    const loop = createMotionLoop((now, dt) => {
+      // Read all HTML geometry before writing transforms or SVG attributes.
+      const measuring = kick.current > 0 || (!!flight.current && !flight.current.landed);
+      const origin = measuring ? host.getBoundingClientRect() : null;
+      const rects = new Map<string, DOMRect>();
+      const claims = new Map<string, DOMRect>();
+      if (measuring) {
+        for (const id of ["A", "B", "C"]) {
+          const node = host.querySelector(`[data-board="${id}"]`);
+          if (node) rects.set(id, node.getBoundingClientRect());
+        }
+        for (const attack of live.current) {
+          const id = `${attack.targetStrategyId}:${attack.targetClaimId}`;
+          const node = host.querySelector(`[data-claim="${id}"]`);
+          if (node && !claims.has(id)) claims.set(id, node.getBoundingClientRect());
+        }
       }
-      const origin =
-        (flight.current && !flight.current.landed) || kick.current > 0
-          ? host.getBoundingClientRect()
-          : EMPTY_RECT;
+      const rect = (id: string) => rects.get(id);
 
       // Camera: sprung, with a slow drift so a held shot never goes dead.
       const c = cam.current;
       const on = filming.current && !reduce;
       const aim = on ? shot.current : { x: 0, y: 0, s: 1, r: 0 };
-      spring(c.x, aim.x, 30, 9.5, dt);
-      spring(c.y, aim.y, 30, 9.5, dt);
-      spring(c.s, aim.s, 30, 9.5, dt);
-      spring(c.r, aim.r, 30, 9.5, dt);
+      const stiffness = directedRef.current ? 30 : 180;
+      const damping = directedRef.current ? 9.5 : 27;
+      spring(c.x, aim.x, stiffness, damping, dt);
+      spring(c.y, aim.y, stiffness, damping, dt);
+      spring(c.s, aim.s, stiffness, damping, dt);
+      spring(c.r, aim.r, stiffness, damping, dt);
       const moving =
         Math.abs(c.x.v) + Math.abs(c.y.v) + Math.abs(c.r.v) > 0.04 ||
         Math.abs(c.s.v) > 0.0004 ||
         Math.abs(c.x.p - aim.x) + Math.abs(c.y.p - aim.y) + Math.abs(c.r.p - aim.r) > 0.04 ||
         Math.abs(c.s.p - aim.s) > 0.0004;
       if (moving) {
-        kick.current = 20;
+        kick.current = 2;
         el.style.transform = `translate3d(${c.x.p}px,${c.y.p}px,0) scale(${c.s.p}) rotateY(${c.r.p}deg)`;
       } else if (!on && el.style.transform !== "none") {
         el.style.transform = "none";
       }
 
       // Boards: each on its own spring, so a blow rings through them and settles.
+      let bodyMoving = false;
       for (const id of ["A", "B", "C"]) {
         const b = bodies.current[id];
         if (b.rest && !b.x.v && !b.y.v && !b.z.v && !b.r.v) continue;
         const node = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
         if (!node) continue;
-        spring(b.x, 0, 70, 9, dt);
-        spring(b.y, 0, 70, 9, dt);
-        spring(b.z, 0, 55, 8, dt);
-        spring(b.r, 0, 60, 8, dt);
+        const k = directedRef.current ? 70 : 220;
+        const damping = directedRef.current ? 9 : 30;
+        spring(b.x, 0, k, damping, dt);
+        spring(b.y, 0, k, damping, dt);
+        spring(b.z, 0, k, damping, dt);
+        spring(b.r, 0, k, damping, dt);
         const quiet =
           Math.abs(b.x.p) + Math.abs(b.y.p) + Math.abs(b.z.p) + Math.abs(b.r.p) < 0.05 &&
           Math.abs(b.x.v) + Math.abs(b.z.v) < 0.5;
@@ -443,7 +479,8 @@ export function RouteStage({
           node.style.rotate = "";
         } else {
           b.rest = false;
-          kick.current = 20;
+          bodyMoving = true;
+          kick.current = 2;
           node.style.translate = `${b.x.p}px ${b.y.p}px ${b.z.p}px`;
           node.style.rotate = `y ${b.r.p}deg`;
         }
@@ -459,24 +496,15 @@ export function RouteStage({
       const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
 
       // Threads are re-measured only while something moves: reading layout every frame is what cost time.
-      const measuring = kick.current > 0 || (!!flying && !flying.landed);
       if (kick.current > 0) kick.current -= 1;
-      const rects = new Map<string, DOMRect | undefined>();
-      const rect = (id: string) => {
-        if (!rects.has(id))
-          rects.set(id, host.querySelector(`[data-board="${id}"]`)?.getBoundingClientRect());
-        return rects.get(id);
-      };
       const middle = measuring ? rect("B") : undefined;
-      (measuring ? live.current : []).forEach((a, i) => {
+      (origin ? live.current : []).forEach((a, i) => {
         const path = paths.current.get(a.id);
         const flow = flows.current.get(a.id);
         const from = rect(a.from);
         const box = rect(a.targetStrategyId);
-        if (!path || !from || !box) return;
-        const claim = host
-          .querySelector(`[data-claim="${a.targetStrategyId}:${a.targetClaimId}"]`)
-          ?.getBoundingClientRect();
+        if (!path || !from || !box || !origin) return;
+        const claim = claims.get(`${a.targetStrategyId}:${a.targetClaimId}`);
         const rightward = from.left < box.left;
         const y = claim
           ? Math.min(box.bottom - 8, Math.max(box.top + 8, claim.top + claim.height / 2))
@@ -511,7 +539,7 @@ export function RouteStage({
 
       if (!flying || (flying.landed && flying.duration > 0)) dot.style.opacity = "0";
       const path = flying && paths.current.get(flying.attack.id);
-      if (flying && measuring && path?.getAttribute("d")) {
+      if (flying && origin && path?.getAttribute("d")) {
         const color =
           flying.kind === "verify"
             ? STATE_COLOR[flying.attack.status]
@@ -560,11 +588,16 @@ export function RouteStage({
         }
       }
       sparks.tick(dt);
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
+      return (
+        moving || bodyMoving || kick.current > 0 || !!(flying && !flying.landed) || sparks.active
+      );
+    });
+    wake.current = loop.wake;
     return () => {
-      cancelAnimationFrame(frame);
+      loop.dispose();
+      wake.current = () => {};
+      sparks.clear();
+      fx.current = null;
       removeEventListener("resize", fitSparks);
     };
     // The loop reads current state through refs and lives as long as the stage.
@@ -635,21 +668,23 @@ export function RouteStage({
 
   // A new step or thread can shift things, so it asks for a fresh measure. Refreshed data alone does not.
   useEffect(() => {
-    kick.current = Math.max(kick.current, 40);
+    kick.current = Math.max(kick.current, 2);
+    wake.current();
   }, [beatId, signature, hot, camera]);
   useEffect(() => {
     const host = stage.current;
     if (!host) return;
-    const wake = () => {
-      kick.current = Math.max(kick.current, 6);
+    const measure = () => {
+      kick.current = Math.max(kick.current, 2);
+      wake.current();
     };
-    const observer = new ResizeObserver(wake);
+    const observer = new ResizeObserver(measure);
     observer.observe(host);
     host.querySelectorAll("[data-board]").forEach((node) => observer.observe(node));
-    host.addEventListener("scroll", wake, true);
+    host.addEventListener("scroll", measure, true);
     return () => {
       observer.disconnect();
-      host.removeEventListener("scroll", wake, true);
+      host.removeEventListener("scroll", measure, true);
     };
   }, []);
 
@@ -661,29 +696,33 @@ export function RouteStage({
     if (claim && body) body.scrollTop = Math.max(0, claim.offsetTop - 28);
   }, [hot]);
 
-  // Boards fly out of the depth as the shutter opens.
+  // Only an actual opening sequence raises the boards; history and seeks stay readable.
   useEffect(() => {
-    if (entering || reducedMotion()) return;
-    const kick = setTimeout(() => {
-      push("A", -50, 44, 900, 18);
-      push("B", 0, 50, 1000, 0);
-      push("C", 50, 44, 900, -18);
-    }, 80);
+    if (entering || !directed || reducedMotion()) return;
+    const scope = createMotionScope();
+    scope.later(80, () => {
+      push("A", -25, 22, 300, 8);
+      push("B", 0, 25, 340, 0);
+      push("C", 25, 22, 300, -8);
+    });
     stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
-      node.animate([{ opacity: 0 }, { opacity: 1 }], {
-        duration: 620,
-        delay: 80 + i * 90,
+      scope.animate(node, [{ opacity: 0 }, { opacity: 1 }], {
+        duration: 420,
+        delay: 80 + i * 60,
         easing: "ease-out",
         fill: "backwards",
       });
     });
-    return () => clearTimeout(kick);
+    return () => scope.dispose();
+    // Start only when the opening shutter changes, not when playback resumes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entering]);
 
   // The room leans toward the pointer during a replay; at rest the boards hold still for clicking.
   useEffect(() => {
     if (reducedMotion()) return;
     const onMove = (e: MouseEvent) => {
+      if (motionPaused()) return;
       const nx = e.clientX / innerWidth - 0.5;
       const ny = e.clientY / innerHeight - 0.5;
       if (rig.current)
@@ -745,8 +784,8 @@ export function RouteStage({
     const pick = seen.has("judge") && version.verdict?.preferred === id;
     const speaking = current?.agent === id;
     const target = !speaking && current?.to === id;
-    const enter = directed && current?.id === `p:${id}`;
-    const rewriting = directed && current?.id === `r:${id}`;
+    const enter = directed && !seeking && current?.id === `p:${id}`;
+    const rewriting = directed && !seeking && current?.id === `r:${id}`;
     return (
       <section
         key={id}
@@ -891,6 +930,7 @@ export function RouteStage({
         beats={beats}
         index={index}
         directed={directed}
+        seeking={seeking}
         lead={lead}
         reviewing={reviewing}
         onStep={onStep}
@@ -900,6 +940,7 @@ export function RouteStage({
         beat={current}
         index={index}
         directed={directed}
+        seeking={seeking}
         lead={lead}
         onEvidence={onEvidence}
       />

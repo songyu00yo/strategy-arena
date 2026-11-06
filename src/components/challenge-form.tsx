@@ -77,6 +77,7 @@ function runFill(
 ) {
   const began = performance.now();
   const lit = new Set<string>();
+  const lights: (() => void)[] = [];
   const finishAt = plan[plan.length - 1].end;
   let previous = button.getBoundingClientRect();
   let frame = 0;
@@ -98,7 +99,7 @@ function runFill(
         // The page follows the writing, so the field in progress is always on screen.
         target.scrollIntoView({ block: "nearest", behavior: "smooth" });
         const box = target.getBoundingClientRect();
-        flyLight(previous, box, step.color, 300);
+        lights.push(flyLight(previous, box, step.color, 300));
         previous = box;
       }
       on.light(step.key, step.color);
@@ -108,7 +109,7 @@ function runFill(
       const submit = form?.querySelector(".primary-button");
       if (submit) {
         submit.scrollIntoView({ block: "center", behavior: "smooth" });
-        flyLight(previous, submit.getBoundingClientRect(), "11,13,16", 340);
+        lights.push(flyLight(previous, submit.getBoundingClientRect(), "11,13,16", 340));
         arrival = setTimeout(on.arrive, 300);
       }
       return;
@@ -128,6 +129,7 @@ function runFill(
   return () => {
     cancelAnimationFrame(frame);
     clearTimeout(arrival);
+    lights.forEach((dispose) => dispose());
   };
 }
 
@@ -224,7 +226,7 @@ export function ChallengeForm({
       light: (key, color) => setActive({ key, color }),
       type: setTyped,
       done: () => {
-        stopFill.current = null;
+        // Keep the disposer until the last light and arrival callback have also finished.
         setTyped(null);
         setActive(null);
       },

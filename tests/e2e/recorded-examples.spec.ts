@@ -51,7 +51,8 @@ for (const example of RECORDED_EXAMPLES) {
     await expect(
       page.getByRole("heading", { name: version.verdict!.headline, exact: true }),
     ).toBeVisible();
-    await expect(page.getByText("只读回看", { exact: true })).toBeVisible();
+    // The compact mobile header omits the secondary badge; the full replay notice stays visible.
+    await expect(page.getByText("真实生成记录 · 回看不调用模型", { exact: true })).toBeVisible();
     await noHorizontalOverflow(page);
 
     const sourceButton = page.getByRole("button", { name: "原题与记录", exact: true });
@@ -86,6 +87,12 @@ for (const example of RECORDED_EXAMPLES) {
       await expect(page.getByText(`原记录 V${version.number}`, { exact: true })).toBeVisible();
     }
 
+    // Narrow screens show the current card; choose its step before opening its details.
+    await page.getByRole("button", { name: "第 1 步", exact: true }).click();
+    await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
     const cardButton = page.getByRole("button", { name: "查看第 1 步", exact: true });
     await cardButton.focus();
     await page.keyboard.press("Space");
@@ -95,6 +102,8 @@ for (const example of RECORDED_EXAMPLES) {
     await noHorizontalOverflow(page);
     await page.keyboard.press("Escape");
     await expect(card).toBeHidden();
+    await expect(cardButton).toBeFocused();
+    await page.keyboard.press("End");
 
     const evidenceButton = page
       .getByRole("region", { name: "全部质疑", exact: true })

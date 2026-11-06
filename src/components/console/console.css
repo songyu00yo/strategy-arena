@@ -3405,6 +3405,39 @@
   }
 }
 /* ------ The chain can be picked up: any past step opens on a click. ------ */
+.c-deck-open {
+  flex: none;
+  pointer-events: auto;
+  padding: 3px 7px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    transform 320ms cubic-bezier(0.18, 1.2, 0.3, 1);
+}
+.c-deck-now .tb {
+  align-items: center;
+}
+.c-deck-open:hover {
+  background: rgb(255 255 255 / 0.16);
+  transform: translateY(-1px);
+}
+.c-deck-open:active {
+  transform: scale(0.94);
+}
+.c-deck-open:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .c-deck-open {
+    transition: none;
+  }
+}
 .c-deck-card:not(.c-deck-now) {
   cursor: pointer;
   pointer-events: auto;

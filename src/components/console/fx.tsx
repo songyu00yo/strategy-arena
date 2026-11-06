@@ -669,6 +669,16 @@ export function ChainDeck({
                     ? attackMeta[beat.attack!.status].label
                     : STAGE_LABELS[beat.stage]}
               </span>
+              {isFront && (
+                <button
+                  type="button"
+                  className="c-deck-open"
+                  aria-label={`查看第 ${i + 1} 步`}
+                  onClick={() => onStep(i)}
+                >
+                  展开详情
+                </button>
+              )}
             </div>
             {dispute ? (
               <div className="body">

@@ -11,7 +11,8 @@ import {
   FixtureSchema,
   planCases,
   resumeDecision,
-  unresolvedBilling,
+  heldAcknowledgement,
+  assertBillingAttemptsReviewed,
   sha256,
 } from "../scripts/live-acceptance-plan";
 
@@ -124,10 +125,44 @@ describe("safe paid-attempt resumption", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
-  it("stops the entire batch for any held or reserved central billing attempt", () => {
-    expect(unresolvedBilling({ heldRequests: 0, reservedUsdMicros: 0 })).toBe(false);
-    expect(unresolvedBilling({ heldRequests: 1, reservedUsdMicros: 0 })).toBe(true);
-    expect(unresolvedBilling({ heldRequests: 0, reservedUsdMicros: 1 })).toBe(true);
+  it("requires an exact reviewed held-ID startup set and a recorded reason", () => {
+    const held = { attemptId: "previous-call", state: "held" as const, reservedUsdMicros: 22700 };
+    const acknowledgement = heldAcknowledgement(
+      [held.attemptId],
+      "Operator reviewed connect timeout; independent new run only",
+    );
+    expect(() => assertBillingAttemptsReviewed([], undefined, true)).not.toThrow();
+    expect(() => assertBillingAttemptsReviewed([held], undefined, true)).toThrow();
+    expect(() => assertBillingAttemptsReviewed([held], acknowledgement, true)).not.toThrow();
+    expect(() => assertBillingAttemptsReviewed([], acknowledgement, true)).toThrow();
+    expect(() => heldAcknowledgement([held.attemptId])).toThrow();
+    expect(() => heldAcknowledgement([held.attemptId], " ")).toThrow();
+    expect(() => heldAcknowledgement([held.attemptId, held.attemptId], "reviewed")).toThrow();
+  });
+  it("allows reviewed old holds to settle but stops on new identities even when counts match", () => {
+    const oldHold = { attemptId: "old-held", state: "held" as const, reservedUsdMicros: 22700 };
+    const newHold = { attemptId: "new-held", state: "held" as const, reservedUsdMicros: 22700 };
+    const acknowledgement = heldAcknowledgement([oldHold.attemptId], "Reviewed prior failure");
+    expect(() => assertBillingAttemptsReviewed([oldHold], acknowledgement)).not.toThrow();
+    expect(() => assertBillingAttemptsReviewed([], acknowledgement)).not.toThrow();
+    expect(() => assertBillingAttemptsReviewed([newHold], acknowledgement)).toThrow();
+    expect(() => assertBillingAttemptsReviewed([oldHold, newHold], acknowledgement)).toThrow();
+    expect(oldHold).toEqual({ attemptId: "old-held", state: "held", reservedUsdMicros: 22700 });
+  });
+  it("never acknowledges reserved attempts, even with the same approved ID", () => {
+    const acknowledgement = heldAcknowledgement(["old-held"], "Reviewed prior failure");
+    expect(() =>
+      assertBillingAttemptsReviewed(
+        [{ attemptId: "old-held", state: "reserved", reservedUsdMicros: 22700 }],
+        acknowledgement,
+      ),
+    ).toThrow();
+    expect(() =>
+      assertBillingAttemptsReviewed(
+        [{ attemptId: "active-request", state: "reserved", reservedUsdMicros: 100 }],
+        acknowledgement,
+      ),
+    ).toThrow();
   });
   it("advances only resumable ready versions and never reruns running, uncertain or terminal attempts", () => {
     expect(resumeDecision("ready", ["completed", "pending"])).toBe("advance");

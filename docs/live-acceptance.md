@@ -15,11 +15,13 @@ pnpm exec tsx scripts/billing-admin.ts status --database /绝对路径/billing.s
 pnpm exec tsx scripts/billing-admin.ts --help
 ```
 
-阶段调整前停止收费进程。使用 `set-limits` 明确提供旧限额、修订号、新累计限额、阶段限额及理由。工具在同一事务中核对旧状态、保留消费记录并追加审计记录。阶段上限为 10 美元、300 次请求、500 万 Token；累计开发上限为 120 美元，保留最终评审的 80 美元。
+阶段调整前停止收费进程。使用 `set-limits` 明确提供旧限额、修订号、新累计限额、阶段限额及理由。工具在同一事务中核对旧状态、保留消费记录并追加审计记录。单个新增阶段最多 10 美元、300 次请求、500 万 Token。2026 年 11 月 6 日，用户将本轮累计请求上限从 300 次提高到 400 次；累计费用仍限 10 美元，Token 仍限 500 万。项目的累计开发上限为 120 美元，另保留最终评审的 80 美元。
 
 阶段限额按调整后的请求计算；需要把预检也计入本轮时，将累计限额设为本轮开始前的已用量加上本轮授权额度。累计限额与阶段限额同时生效。已结算金额、未结预留和失败请求均保留。工具不能证明服务商账单，也不负责核销未知请求。
 
-运行进程的 `ARENA_BILLING_*` 限额必须与审计后的累计限额一致。修改环境变量不能扩大账本额度。未知请求须先核实，不得删库、换路径或手改记录后继续调用。
+运行进程的 `ARENA_BILLING_*` 限额必须与审计后的累计限额一致。修改环境变量不能扩大账本额度。未知请求继续保留预留，不得删库、换路径或手改记录来释放额度。
+
+新批次默认拒绝任何未结请求。独立新任务经授权后，可用 `--acknowledge-held` 明确列出启动前已知的全部 held 请求，并用 `--acknowledgement-reason` 保存原因。这只允许新任务运行，不核销、不重试旧请求。reserved 请求不能豁免；批次中出现新的 held 或 reserved 请求时立即停止。
 
 ## 冻结案例与恢复
 
@@ -30,6 +32,10 @@ pnpm exec tsx scripts/live-acceptance.ts --exclude creation
 ```
 
 实际运行前，由本机进程加载私有配置，并明确设置独立的 `ARENA_DATABASE_PATH` 和共享的 `ARENA_BILLING_DATABASE_PATH`。密钥不得打印、写进命令参数或复制到验收文件。
+
+本机需要代理时，使用 Node.js 24 的 `--use-env-proxy`，让模型请求使用已有的 `HTTPS_PROXY` 或 `HTTP_PROXY`。预览启动器仅传递这些代理变量，并将回环地址加入 `NO_PROXY`。启动器不继承 `NODE_OPTIONS` 或外层进程的模型密钥，应用子进程从指定私有配置文件加载密钥。
+
+OpenAI 使用 `/v1/responses`，保留 `low` 推理档位、严格函数工具和 `store: false`。DeepSeek 继续使用 Chat Completions。OpenAI 配置版本为 `openai-1.1.0`；历史版本仍显示原配置，不在新版适配器下续跑旧步骤。
 
 ```sh
 pnpm exec tsx scripts/live-acceptance.ts --run --exclude creation --out artifacts/planned.json
@@ -47,7 +53,7 @@ pnpm exec tsx scripts/live-acceptance.ts --run --resume artifacts/planned.json
 node scripts/capture-live-promo.mjs --help
 ```
 
-录制要求实际服务报告干净构建和完整提交 SHA。工具拒绝预设演示服务。`live` 模式明确选择 DeepSeek，经由界面创建主案例和一次条件重赛。每次写操作先保存意图，再发送请求。已有录制目录只允许 `read-only` 接续，不能自动重复收费。
+录制要求实际服务报告干净构建和完整提交 SHA。工具拒绝预设演示服务。`live` 模式经由界面创建主案例和一次条件重赛。`--model-mode auto|deepseek|gpt` 控制两次提交的模式，默认为 DeepSeek；本轮主片使用 `auto`，启动前检查两家模型均已配置。实际供应商由现有选择规则决定，并随版本保存。每次写操作先保存意图，再发送请求。已有录制目录只允许 `read-only` 接续，不能自动重复收费。
 
 回看模式在页面加载前阻止所有写请求。原始录像保留等待与正常速度动效。片段清单记录时间、任务和版本；浏览器身份放在独立私有目录，不进入交付包。其他领域的结果镜头必须来自已完成的真实记录，试填表单不能冒充结果。
 

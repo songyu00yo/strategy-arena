@@ -7,9 +7,12 @@ import { chromium } from "@playwright/test";
 import {
   acceptSnapshot,
   acquireCaptureLock,
+  assertLiveModelProviders,
   beginAction,
+  captureModelMode,
   loadManifest,
   newManifest,
+  modelRequestMatches,
   privateWrite,
   validatePickup,
 } from "./promo/manifest.mjs";
@@ -33,6 +36,7 @@ const values = new Set([
   "--storage-state",
   "--timeout-seconds",
   "--version-id",
+  "--model-mode",
 ]);
 for (let i = 2; i < process.argv.length; i++) {
   const key = process.argv[i];
@@ -46,7 +50,9 @@ if (options["--help"]) {
 node scripts/capture-live-promo.mjs --base-url http://127.0.0.1:PORT --commit FULL_SHA --output-dir work/promo-live --mode live
 Pickup: use the same arguments with --mode read-only; never creates, advances, retries, stops or rematches.
 Existing arena: --mode read-only --arena-id ID --storage-state /absolute/private/browser-storage.json
-Live explicitly selects DeepSeek for both runs. All sample inputs are labelled synthetic; results come only from real API responses.
+Live --model-mode auto|deepseek|gpt defaults to deepseek for compatibility. It selects that mode in both forms.
+Auto requires both DeepSeek and OpenAI configured before starting; the canonical condition change can change provider by the product's transparent rule. This is not a model quality comparison.
+Explicit modes require their selected provider; no silent fallback. All sample inputs are labelled synthetic; results come only from real API responses.
 Any existing manifest forbids a second live attempt. Incomplete/unknown requests require operator inspection.
 Optional --timeout-seconds 1800. Read-only --version-id ID captures only that stored version.
 Read-only captures never fill unrelated sample inputs. Live --skip-samples also omits sample-only shots.
@@ -56,6 +62,7 @@ Raw recordings retain all normal animations and model waiting; manifest.json sup
 }
 const mode = options["--mode"];
 const commit = options["--commit"];
+const requestedModelMode = captureModelMode(options["--model-mode"]);
 if (!["live", "read-only"].includes(mode))
   throw new Error("--mode must explicitly be live or read-only");
 if (mode === "live" && options["--version-id"])
@@ -82,13 +89,17 @@ const releaseLockAtExit = () => captureLock.release();
 process.once("exit", releaseLockAtExit);
 const manifestFile = resolve(output, "manifest.json");
 const prior = existsSync(manifestFile) ? loadManifest(manifestFile) : null;
+const modelMode =
+  mode === "read-only" && options["--model-mode"] === undefined
+    ? captureModelMode(prior?.modelMode)
+    : requestedModelMode;
 validatePickup(prior, { baseUrl, commit, mode, arenaId: options["--arena-id"] });
 if (mode === "read-only" && !prior?.arenaId && !options["--arena-id"])
   throw new Error("Read-only capture requires a persisted arena or --arena-id");
 const timeoutSeconds = Number(options["--timeout-seconds"] ?? 1800);
 if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 30 || timeoutSeconds > 7200)
   throw new Error("--timeout-seconds must be between 30 and 7200");
-const manifest = prior ?? newManifest({ baseUrl, commit });
+const manifest = prior ?? newManifest({ baseUrl, commit, modelMode });
 manifest.arenaId ??= options["--arena-id"] ?? null;
 const privateDirectory = resolve(output, "private");
 for (const path of [
@@ -107,6 +118,7 @@ const sessionId = String(manifest.sessions.length + 1).padStart(3, "0");
 const session = {
   id: sessionId,
   mode,
+  modelMode,
   startedAt: new Date().toISOString(),
   status: "starting",
   source:
@@ -250,9 +262,9 @@ try {
     let permitted = !blockMutations && method === "POST" && url.origin === baseUrl;
     permitted &&= !observerError;
     if (url.pathname === "/api/arenas")
-      permitted &&= allowedOperation === "create" && body?.modelMode === "deepseek";
+      permitted &&= allowedOperation === "create" && modelRequestMatches(body, modelMode);
     else if (url.pathname === `/api/arenas/${manifest.arenaId}/versions`)
-      permitted &&= allowedOperation === "rematch" && body?.modelMode === "deepseek";
+      permitted &&= allowedOperation === "rematch" && modelRequestMatches(body, modelMode);
     else if (url.pathname === `/api/arenas/${manifest.arenaId}/advance`)
       permitted &&=
         ["create", "rematch"].includes(allowedOperation) &&
@@ -338,11 +350,7 @@ try {
     throw new Error(
       "Server requires access. Supply an already authorized browser storage file using --storage-state; no access secrets are exported.",
     );
-  if (
-    mode === "live" &&
-    !health.model?.providers?.some((p) => p.provider === "deepseek" && p.configured)
-  )
-    throw new Error("Real server must report a configured DeepSeek provider");
+  if (mode === "live") assertLiveModelProviders(health, modelMode);
   if (mode === "live" && manifest.arenaId)
     throw new Error("A new live capture cannot attach an existing arena");
   if (manifest.arenaId) {
@@ -373,8 +381,9 @@ try {
   await saveAuth();
   if (mode === "live") {
     await shot("intro", () => wait(9000), { source: "actual home before paid actions" });
-    await shot("input", () => fillVideoSample(page), {
-      source: "existing animated sample fill; manually selected DeepSeek",
+    await shot("input", () => fillVideoSample(page, { modelMode }), {
+      source: `existing animated sample fill; requested mode ${modelMode}`,
+      requestedModelMode: modelMode,
     });
     let first;
     await shot(
@@ -396,7 +405,7 @@ try {
     await shot(
       "rematch-input-and-live-run",
       async () => {
-        const dialog = await openRematch(page);
+        const dialog = await openRematch(page, { modelMode });
         allowedOperation = "rematch";
         await cinematicClick(page, dialog.getByRole("button", { name: "按新条件重新推演" }));
         // Wait for the server's second version identity before checking terminal status.
@@ -407,7 +416,10 @@ try {
         second = await waitCompleted();
         allowedOperation = null;
       },
-      { source: "continuous actual changed-condition run; manual DeepSeek" },
+      {
+        source: `continuous actual changed-condition run; requested mode ${modelMode}`,
+        requestedModelMode: modelMode,
+      },
     );
     blockMutations = true;
     await page.getByRole("combobox", { name: "选择推演版本" }).selectOption(first.id);

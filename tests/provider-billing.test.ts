@@ -31,11 +31,19 @@ const strategy = {
 function response(content = JSON.stringify(strategy), id = "fixture-response") {
   return Response.json({
     id,
-    choices: [{ finish_reason: "stop", message: { content } }],
+    status: "completed",
+    output: [
+      {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: content }],
+      },
+    ],
     usage: {
-      prompt_tokens: 1000,
-      completion_tokens: 500,
-      prompt_tokens_details: { cached_tokens: 200 },
+      input_tokens: 1000,
+      output_tokens: 500,
+      input_tokens_details: { cached_tokens: 200 },
     },
   });
 }

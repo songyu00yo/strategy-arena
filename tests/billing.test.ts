@@ -10,6 +10,7 @@ import {
   readBillingStatus,
   type BillingLimitChange,
   getBillingSummary,
+  getUnresolvedBillingAttempts,
   openBillingLedger,
   reserveBilling,
   type BillingReservation,
@@ -91,6 +92,32 @@ describe("future-only shared paid-request budget", () => {
       reservedUsdMicros: 0,
       settledUsdMicros: 500_000,
     });
+  });
+
+  it("returns stable unresolved IDs and states without changing attempts or their reservations", () => {
+    const ledger = open();
+    ledger.reserve(request("z-reserved", 250000));
+    ledger.reserve(request("a-held", 22700));
+    ledger.hold("a-held");
+    ledger.reserve(request("m-settled", 100000));
+    ledger.settle("m-settled", { ...usage, amount: 100 });
+    const attempts = ["z-reserved", "a-held", "m-settled"].map(ledger.getAttempt);
+    const summary = ledger.summary();
+    vi.stubEnv("ARENA_BILLING_DATABASE_PATH", databasePath);
+    vi.stubEnv("ARENA_BILLING_USD_LIMIT", "2");
+    vi.stubEnv("ARENA_BILLING_REQUEST_LIMIT", "100");
+    vi.stubEnv("ARENA_BILLING_TOKEN_LIMIT", "2000000");
+    const expected = [
+      { attemptId: "a-held", state: "held", reservedUsdMicros: 22700 },
+      { attemptId: "z-reserved", state: "reserved", reservedUsdMicros: 250000 },
+    ];
+    expect(getUnresolvedBillingAttempts()).toEqual(expected);
+    expect(getUnresolvedBillingAttempts()).toEqual(expected);
+    expect(["z-reserved", "a-held", "m-settled"].map(ledger.getAttempt)).toEqual(attempts);
+    expect(ledger.summary()).toEqual(summary);
+    vi.stubEnv("ARENA_BILLING_USD_LIMIT", "3");
+    expect(() => getUnresolvedBillingAttempts()).toThrow(/settings differ/);
+    expect(ledger.getAttempt("a-held")?.state).toBe("held");
   });
 
   it("settles idempotently but rejects any conflicting cost, usage, cache count, or response", () => {

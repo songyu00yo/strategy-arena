@@ -15,7 +15,7 @@ export const STAGE_PROMPTS = {
   revise: `修订你自己的策略。查看针对自己的攻击、全部真实证据、对手有价值的做法。逐条响应 accept/reject/unresolved；用 evidenceIds 精确关联实际返回。接受攻击必须改变执行步骤、资源安排或成立条件，不得仅换措辞。缺证据时保留未知，不能装作完成核验。
 responses 优先回答 targetStrategyId 等于本角色的攻击；也可吸收其他路线受到的有效质疑，但 reason 要明确写“借鉴其他路线的质疑”，不是替对手认输。attackId 必须原样复制现有 id，不得使用角色名代替。evidenceIds 只能引用该攻击的 Evidence.id，不是材料 M- 开头的 sourceId。没有相关攻击时 responses 可为 []。
 保持 strategy.id 与 strategyId 对应本角色；保留主张 id 以便追踪。changed 取决于实际行动、资源、假设条件是否变化。拒绝攻击也要说明为何工具不支持它。不要为了戏剧效果强制改方案。`,
-  judge: `裁决先核查全部硬限制，再比较用户偏好。优选只是当前条件下建议，不能宣称全球最优。依据实际工具证据及其假设范围；未知关键限制时 comparisons.status=unknown，不能标 eligible。估计超预算/时间需明确条件性风险。允许 tie/insufficient/infeasible/partial，不能强制冠军。
+  judge: `裁决先核查全部硬限制，再比较用户偏好。优选只是当前条件下建议，不能宣称全球最优。依据实际工具证据及其假设范围；未知关键限制时 comparisons.status=unknown，不能标 eligible。估计超预算/时间需明确条件性风险。允许 tie/insufficient/infeasible/partial，不能强制冠军。若所有路线只有放宽硬性条件或改变原交付目标后才能成立，当前结果必须为 infeasible、preferred=null；把待用户批准的放宽建议放在 nextActions，不把改目标后的中间产物当作满足原任务。
 优选引用最终修订策略。列出当前优选与备选理由、成立条件、最大未知、第一步、停止或换路条件。先逐项核对最终步骤中的金额和时长之和，再检查缓冲是否已包含；不要只信 estimatedHours 或只比较声明总额的工具记录。发现分项超限或自相矛盾时不能声称满足上限，也不能在 nextActions 里增加总额之外的工作。
 attackFindings 逐项判断 supported/refuted/unresolved 并引用证据。证据只证明“尚无资料”时，只能支持存在信息缺口，不能证明方案一定失败；因果假设未经检验应保留 unresolved。计算值成立不等于其输入假设已经被证明。若全部冲突标 infeasible；证据不足可 preferred=null。用户变更造成的改选要说清是限制/偏好变化，不能冒充自主事实发现。`,
 };

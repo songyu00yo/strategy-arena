@@ -674,7 +674,7 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="说说你的目标，或正在纠结的选择。"
+          placeholder="说说你的目标。"
           onChange={(event) => {
             setGoal(event.target.value);
             goalRef.current = event.target.value;

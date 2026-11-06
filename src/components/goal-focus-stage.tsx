@@ -65,8 +65,13 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       const x = a.x + (b.x - a.x) * mix;
       const y = a.y + (b.y - a.y) * mix;
       const gap = 16 + rail * 15 - tight * 8;
+      const sideRoom = Math.max(0, Math.min(p.x, f.width - p.x - p.width) - 3);
+      // Keep the innermost rail beyond the mask, then compress the remaining rail spacing equally.
+      const gutter = Math.min(4.5, sideRoom);
+      const horizontalScale = Math.min(1, (sideRoom - gutter) / (46 - tight * 8 - gutter));
+      const horizontalGap = gutter + (gap - gutter) * horizontalScale;
       return {
-        x: p.x + p.width / 2 + x * (p.width / 2 + gap),
+        x: p.x + p.width / 2 + x * (p.width / 2 + horizontalGap),
         y: p.y + p.height / 2 + y * (p.height / 2 + gap * 0.65) + x * (rail - 1) * 8,
       };
     };
@@ -212,7 +217,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       input.current.energy = Math.max(0, input.current.energy - dt * 0.65);
       input.current.pulses = input.current.pulses.filter((pulse) => age - pulse.at < 1.3);
       if (
-        age - lastPaint <
+        age - lastPaint + 0.001 <
         1 / (input.current.focused || input.current.energy > 0.05 || age < 3 ? 60 : 30)
       )
         return true;
@@ -245,8 +250,10 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
         1.75,
         Math.sqrt(2_000_000 / Math.max(1, width * height)),
       );
-      surface.width = Math.round(width * dpr);
-      surface.height = Math.round(height * dpr);
+      const pixelWidth = Math.round(width * dpr);
+      const pixelHeight = Math.round(height * dpr);
+      if (surface.width !== pixelWidth) surface.width = pixelWidth;
+      if (surface.height !== pixelHeight) surface.height = pixelHeight;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       visible = bounds.bottom > 0 && bounds.top < innerHeight && box.width > 0;
       draw(preference.matches);

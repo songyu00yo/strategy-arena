@@ -132,7 +132,7 @@ test("explicit UI fixture: explicit arena takes priority and forbidden or missin
   for (const id of ["fixture-forbidden", "fixture-missing"]) {
     calls = [];
     await page.goto(`/?arena=${id}`);
-    await expect(page.getByRole("alert")).toContainText("未恢复之前的任务");
+    await expect(page.locator(".global-error")).toContainText("未恢复之前的任务");
     await expect(
       page.getByRole("heading", { name: target.versions[0].challenge.goal, exact: true }),
     ).toHaveCount(0);
@@ -184,7 +184,7 @@ test("explicit UI fixture: explicit arena restores normally when optional storag
   await expect(
     page.getByRole("heading", { name: target.versions[0].challenge.goal, exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator(".global-error")).toHaveCount(0);
   await page.waitForLoadState("networkidle");
   expect(calls).toContain(`GET /api/arenas/${target.id}`);
   expect(

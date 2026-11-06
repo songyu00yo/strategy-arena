@@ -292,7 +292,70 @@ export function validateRevision(revision: Revision, input: StageInput): Revisio
   );
   return { ...revision, changed, responses, strategy: { ...revision.strategy, claims } };
 }
+/** Bounded text checks, not fact verification: only numeric equations and direct yuan
+ * excess statements with three explicit amounts. Quotes, unsupported syntax, dates,
+ * ranges and implicit Chinese calculations are deliberately not interpreted. */
+export function assertExplicitArithmetic(text: string): void {
+  const ownText = text.replace(
+    /“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"\n]*"|'[^'\n]*'/g,
+    (quoted) => " ".repeat(quoted.length),
+  );
+  const mismatch = (statement: string, expected: number) => {
+    throw new Error(
+      `明确算术不一致：${statement}；正确计算结果为 ${expected}。请修正该式或差额，并使该字段内使用同一口径的差额在全文保持一致；不要改写输入金额或伪造依据。`,
+    );
+  };
+  const equations = /([\d.()+*/\-×÷− \t]+)=\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))/g;
+  for (const match of ownText.matchAll(equations)) {
+    const expression = match[1]
+      .trim()
+      .replaceAll("×", "*")
+      .replaceAll("÷", "/")
+      .replaceAll("−", "-");
+    const before = ownText.slice(0, match.index).trimEnd().at(-1) ?? "";
+    const after = ownText.slice(match.index! + match[0].length).trimStart();
+    if (
+      !/[\d)]\s*[+*/-]/.test(expression) ||
+      /[A-Za-z0-9_.$,%^]/.test(before) ||
+      /^[\d.eE+*/%=^-]/.test(after) ||
+      /^\d{4}-\d{1,2}-\d{1,2}$/.test(expression)
+    )
+      continue;
+    let actual: number;
+    try {
+      actual = calculate(expression);
+    } catch {
+      continue;
+    } // Unsupported/ambiguous arithmetic is not promoted to a factual claim.
+    if (Math.abs(actual - Number(match[2])) > 1e-8) mismatch(match[0].trim(), actual);
+  }
+  const amount = "(\\d+(?:\\.\\d+)?)\\s*元";
+  const excess = new RegExp(
+    `${amount}\\s*(?:已\\s*)?(?:超出|超过|超|高出)\\s*(?:(?:预算|上限|限额)\\s*)?${amount}\\s*(?:的\\s*)?(?:预算|上限|限额)?\\s*(?:[，,：:]\\s*(?:差额|超额|超出金额)(?:为|是)?\\s*|(?:达|了|为|差额(?:为|是)?)?\\s*)${amount}`,
+    "g",
+  );
+  for (const match of ownText.matchAll(excess)) {
+    const before = ownText.slice(0, match.index).trimEnd().at(-1) ?? "";
+    if (/[\d.,+\-eE]/.test(before)) continue; // Do not parse tails of ranges or grouped amounts.
+    let actual: number;
+    try {
+      actual = calculate(`${match[1]}-${match[2]}`);
+    } catch {
+      continue;
+    }
+    if (Math.abs(actual - Number(match[3])) > 1e-8) mismatch(match[0], actual);
+  }
+}
 export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
+  for (const field of [
+    verdict.headline,
+    verdict.rationale,
+    ...verdict.comparisons.map((comparison) => comparison.reason),
+    ...verdict.nextActions,
+    ...verdict.conditions,
+    verdict.exitCondition,
+  ])
+    assertExplicitArithmetic(field);
   const strategies = input.strategies.map(
     (s) => input.revisions.find((r) => r.strategyId === s.id)?.strategy || s,
   );

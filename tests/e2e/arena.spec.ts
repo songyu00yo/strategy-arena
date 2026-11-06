@@ -136,6 +136,9 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
   await page.keyboard.press("Escape");
   await expect(step).not.toBeVisible();
   await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
+  await page.getByRole("button", { name: "从头放映", exact: true }).click();
+  await expect(page.locator(".c-chapter")).toBeHidden();
+  await page.getByRole("button", { name: "暂停放映", exact: true }).click();
   // Early replay opens the visible proposal, not a future revision of that route.
   await page.getByRole("button", { name: "第 1 步", exact: true }).click();
   await page.getByRole("button", { name: "查看路线 A 的详情" }).click();

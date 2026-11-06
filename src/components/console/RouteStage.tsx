@@ -39,6 +39,7 @@ const bodyOf = () => ({ x: axis(), y: axis(), z: axis(), r: axis(), rest: true }
 /** Three boards in real 3D space. A sprung camera and sprung boards keep every step flowing into the next. */
 export function RouteStage({
   version,
+  demo,
   beats,
   index,
   speed,
@@ -54,6 +55,7 @@ export function RouteStage({
   onClaim,
 }: {
   version: ArenaVersion;
+  demo: boolean;
   beats: Beat[];
   index: number;
   speed: number;
@@ -824,7 +826,9 @@ export function RouteStage({
             </div>
           </div>
         ) : (
-          <div className="c-board-body quiet">只显示真实生成的结果。</div>
+          <div className="c-board-body quiet">
+            {demo ? "等待演示步骤，内容为预设。" : "只显示真实生成的结果。"}
+          </div>
         )}
       </section>
     );

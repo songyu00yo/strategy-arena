@@ -18,6 +18,7 @@ import { PROMPT_VERSION, SYSTEM, STAGE_PROMPTS } from "../../../prompts/protocol
 import {
   bindStrictReferences,
   jsonRepairFeedback,
+  normalizeOpenAISchema,
   referenceInstructions,
   restoreStrictNulls,
   toStrictToolSchema,
@@ -89,7 +90,7 @@ export function getModelConfig(provider: ModelProvider = "deepseek"): ModelConfi
     throw new Error("OPENAI_REASONING_EFFORT 仅支持 low");
   const prefix = openai ? "OPENAI" : "MODEL";
   return {
-    configurationVersion: openai ? "openai-1.1.0" : defaults.configVersion,
+    configurationVersion: openai ? "openai-1.1.1" : defaults.configVersion,
     provider,
     currency: openai ? "USD" : "CNY",
     reasoningEffort: openai ? "low" : null,
@@ -170,11 +171,21 @@ export function estimateCallCost(
     ) / 10000
   );
 }
+function strictOutputSchema(
+  kind: Kind,
+  input: StageInput,
+  schema: z.ZodType,
+  provider: ModelProvider,
+) {
+  const bound = bindStrictReferences(toStrictToolSchema(z.toJSONSchema(schema)), kind, input);
+  return provider === "openai" ? normalizeOpenAISchema(bound) : bound;
+}
 export function buildMessages(
   kind: Kind,
   input: StageInput,
   schema: z.ZodType,
   structuredOutput = getModelConfig().structuredOutput,
+  provider: ModelProvider = "deepseek",
 ) {
   // Independent proposals receive only their own history, never opponents.
   const single = input.evaluationMode === "strong-single";
@@ -204,7 +215,7 @@ export function buildMessages(
     kind === "propose" ? input.challenge.options[["A", "B", "C"].indexOf(input.role)] : undefined;
   const strict = structuredOutput === "strict-tool";
   const outputSchema = strict
-    ? bindStrictReferences(toStrictToolSchema(z.toJSONSchema(schema)), kind, input)
+    ? strictOutputSchema(kind, input, schema, provider)
     : z.toJSONSchema(schema);
   const outputRule = strict
     ? `只调用一次 submit_${kind} 函数提交结构化结果，不输出其他工具或自然语言。在 estimatedCost、estimatedHours、preferred 这三个可空字段中用字符串 \"unknown\" 表示未知，严格模式不要输出 null；其他字段的 unknown 仍保留原含义。`
@@ -233,9 +244,9 @@ export function buildRequestBody(
     name: functionName,
     description: "structured protocol output",
     strict: true,
-    parameters: bindStrictReferences(toStrictToolSchema(z.toJSONSchema(schema)), kind, input),
+    parameters: strictOutputSchema(kind, input, schema, config.provider),
   };
-  const messages = buildMessages(kind, input, schema, config.structuredOutput);
+  const messages = buildMessages(kind, input, schema, config.structuredOutput, config.provider);
   if (config.provider === "openai")
     return {
       model: config.id,
@@ -397,6 +408,7 @@ async function generate<T>(
     id?: string;
     model?: string;
     status?: string;
+    incomplete_details?: { reason?: string };
     error?: unknown;
     output?: {
       type?: string;
@@ -471,6 +483,12 @@ async function generate<T>(
   settle(amount, usage.inputTokens, usage.outputTokens, cachedInputTokens, usage.responseId);
   let output: string;
   if (c.provider === "openai") {
+    if (raw.status === "incomplete" && raw.incomplete_details?.reason === "max_output_tokens")
+      throw new ModelCallError(
+        "模型响应未完成（服务商代码 max_output_tokens）；已记录服务商报告用量，不会自动补写。该代码本身不能区分长度限制与结构化协议兼容问题。",
+        false,
+        usage,
+      );
     if (raw.status !== "completed" || raw.error)
       throw new ModelCallError(
         "模型输出被截断、未完成或失败；已记录实际用量，不会自动补写。",

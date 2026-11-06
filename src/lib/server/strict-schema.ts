@@ -47,6 +47,36 @@ export function toStrictToolSchema(value: unknown, field?: string): Schema {
   return result;
 }
 
+/** OpenAI's constrained decoder can fail on enum/pattern intersections. Remove only
+ * redundant patterns after checking every finite string value; public Zod checks stay intact. */
+export function normalizeOpenAISchema(schema: Schema): Schema {
+  const result = structuredClone(schema);
+  function visit(value: unknown): void {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const node = value as Schema;
+    if (
+      typeof node.pattern === "string" &&
+      Array.isArray(node.enum) &&
+      node.enum.length > 0 &&
+      node.enum.every((item) => typeof item === "string")
+    ) {
+      try {
+        const pattern = new RegExp(node.pattern);
+        if (node.enum.every((item) => pattern.test(item as string))) delete node.pattern;
+      } catch {
+        /* Unsupported patterns remain unchanged rather than weakening the schema. */
+      }
+    }
+    Object.values(node).forEach(visit);
+  }
+  visit(result);
+  return result;
+}
+
 function atPath(schema: Schema, path: string[]): Schema | undefined {
   let current: unknown = schema;
   for (const key of path) {

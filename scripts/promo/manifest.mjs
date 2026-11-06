@@ -99,7 +99,36 @@ export function validatePickup(prior, { baseUrl, commit, mode, arenaId }) {
     );
 }
 
-export function newManifest({ baseUrl, commit }) {
+export function captureModelMode(mode = "deepseek") {
+  if (!["auto", "deepseek", "gpt"].includes(mode))
+    throw new Error("--model-mode must be auto, deepseek or gpt");
+  return mode;
+}
+
+/** The browser may not silently substitute an explicit provider for the requested auto mode. */
+export function modelRequestMatches(body, requestedMode) {
+  return body?.modelMode === captureModelMode(requestedMode);
+}
+
+export function assertLiveModelProviders(health, requestedMode) {
+  const mode = captureModelMode(requestedMode);
+  // The canonical condition change crosses the automatic rule's threshold in the second version.
+  const required =
+    mode === "auto" ? ["deepseek", "openai"] : [mode === "gpt" ? "openai" : "deepseek"];
+  const missing = required.filter(
+    (provider) =>
+      !health.model?.providers?.some(
+        (entry) => entry.provider === provider && entry.configured === true,
+      ),
+  );
+  if (missing.length)
+    throw new Error(
+      `Model mode ${mode} requires configured providers before capture: ${missing.join(", ")}. No provider fallback is permitted.`,
+    );
+}
+
+export function newManifest({ baseUrl, commit, modelMode = "deepseek" }) {
+  modelMode = captureModelMode(modelMode);
   return {
     schemaVersion: 1,
     baseUrl,
@@ -107,8 +136,11 @@ export function newManifest({ baseUrl, commit }) {
     createdAt: new Date().toISOString(),
     source: "actual-product-ui-real-api",
     inputSource: "repository videoChallenge / explicitly labelled synthetic test materials",
-    modelMode: "deepseek",
-    modelSelection: "manual; no GPT comparison",
+    modelMode,
+    modelSelection:
+      modelMode === "auto"
+        ? "automatic transparent input rule; provider changes do not establish a quality comparison"
+        : `manual ${modelMode}; no model quality comparison`,
     scenePlan: SCENES,
     arenaId: null,
     versionIds: [],

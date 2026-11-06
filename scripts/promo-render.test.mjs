@@ -122,3 +122,54 @@ test("classifies sample inputs, actual live calls and replay from manifest rathe
   save();
   assert.throws(() => validateScene(spec, scene, base), /unsupported footage kind/);
 });
+
+test("mixed-provider labels come from each recorded version and reject an invented attribution", (t) => {
+  const { base, spec, scene, capture, save } = fixture(t);
+  capture.clips[0].versionId = "v1";
+  capture.snapshots = [
+    {
+      versions: [
+        {
+          id: "v1",
+          modelSelection: { provider: "deepseek", modelId: "deepseek-chat", requestedMode: "auto" },
+        },
+        {
+          id: "v2",
+          modelSelection: { provider: "openai", modelId: "gpt-6.1-terra", requestedMode: "auto" },
+        },
+      ],
+    },
+  ];
+  save();
+  assert.equal(validateScene(spec, scene, base).providerLabel, "DeepSeek");
+  assert.throws(() => validateScene(spec, { ...scene, provider: "GPT" }, base), /provider/);
+  capture.clips[0].versionId = "v2";
+  save();
+  const verified = validateScene(spec, { ...scene, provider: "GPT" }, base);
+  assert.equal(verified.providerLabel, "GPT");
+  assert.equal(verified.models[0].modelId, "gpt-6.1-terra");
+  assert.throws(() => validateScene({ ...spec, provider: "DeepSeek" }, scene, base), /provider/);
+});
+
+test("legacy clips retain a generic footer and unversioned live footage uses its time range", (t) => {
+  const { base, spec, scene, capture, save } = fixture(t);
+  assert.equal(validateScene(spec, scene, base).providerLabel, "");
+  assert.throws(() => validateScene(spec, { ...scene, provider: "DeepSeek" }, base), /provider/);
+  capture.clips[0].id = "initial-live-run";
+  capture.snapshots = [
+    {
+      sessionId: "001",
+      elapsedSeconds: 15,
+      activeVersionId: "v1",
+      versions: [{ id: "v1", modelSelection: { provider: "deepseek", modelId: "deepseek-chat" } }],
+    },
+    {
+      sessionId: "001",
+      elapsedSeconds: 30,
+      activeVersionId: "v2",
+      versions: [{ id: "v2", modelSelection: { provider: "openai", modelId: "gpt-6.1-terra" } }],
+    },
+  ];
+  save();
+  assert.equal(validateScene(spec, scene, base).providerLabel, "DeepSeek");
+});

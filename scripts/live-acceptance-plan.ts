@@ -89,8 +89,49 @@ export function resumeDecision(status: string, stepStatuses: string[]) {
   return "terminal";
 }
 
-export function unresolvedBilling(summary: { heldRequests: number; reservedUsdMicros: number }) {
-  return summary.heldRequests > 0 || summary.reservedUsdMicros > 0;
+const HeldAcknowledgementSchema = z
+  .object({
+    attemptIds: z.array(z.string().regex(/^[A-Za-z0-9_.:-]{1,200}$/)).min(1),
+    reason: z.string().trim().min(1).max(2000),
+  })
+  .refine(
+    (value) => new Set(value.attemptIds).size === value.attemptIds.length,
+    "Duplicate held IDs",
+  );
+export type HeldAcknowledgement = z.infer<typeof HeldAcknowledgementSchema>;
+export interface UnresolvedBillingAttempt {
+  attemptId: string;
+  state: "reserved" | "held";
+  reservedUsdMicros: number;
+}
+
+export function heldAcknowledgement(
+  attemptIds?: string[],
+  reason?: string,
+): HeldAcknowledgement | undefined {
+  if (attemptIds === undefined && reason === undefined) return undefined;
+  const value = HeldAcknowledgementSchema.parse({ attemptIds, reason });
+  return { ...value, attemptIds: [...value.attemptIds].sort() };
+}
+
+/** New runs require an exact reviewed set; later checks allow old holds to settle.
+ * A new held identity always stops dispatch, even if another hold settled and counts match.
+ * Reserved attempts are never acknowledged, released, settled or retried here. */
+export function assertBillingAttemptsReviewed(
+  attempts: UnresolvedBillingAttempt[],
+  acknowledgement?: HeldAcknowledgement,
+  exactStartupSet = false,
+) {
+  const approved = new Set(acknowledgement?.attemptIds ?? []);
+  const actual = new Set(attempts.map((attempt) => attempt.attemptId));
+  if (
+    attempts.some((attempt) => attempt.state !== "held" || !approved.has(attempt.attemptId)) ||
+    (exactStartupSet &&
+      (approved.size !== actual.size || [...approved].some((id) => !actual.has(id))))
+  )
+    throw Object.assign(new Error("Unreviewed or reserved billing attempt; batch stopped"), {
+      code: "UNRESOLVED_BILLING_STOP",
+    });
 }
 
 export function assertResumeIdentity(

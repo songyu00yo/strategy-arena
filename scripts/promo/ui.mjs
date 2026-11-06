@@ -1,5 +1,16 @@
 /** These helpers operate existing controls and preserve the product's normal animation settings. */
+import { captureModelMode } from "./manifest.mjs";
+
 export const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+
+export async function selectCaptureModel(page, scope, requestedMode) {
+  const mode = captureModelMode(requestedMode);
+  const name = { auto: /^自动/, deepseek: /DeepSeek/, gpt: /^GPT/ }[mode];
+  const radio = scope.getByRole("radio", { name });
+  await cinematicClick(page, radio);
+  if (!(await radio.isChecked()))
+    throw new Error(`The run must select requested model mode ${mode}.`);
+}
 
 export async function cinematicClick(page, locator) {
   await locator.scrollIntoViewIfNeeded();
@@ -9,21 +20,17 @@ export async function cinematicClick(page, locator) {
   await locator.click();
 }
 
-export async function fillVideoSample(page, { demo = false } = {}) {
+export async function fillVideoSample(page, { demo = false, modelMode = "deepseek" } = {}) {
   await cinematicClick(page, page.getByRole("button", { name: "试填一个视频任务" }));
   // Sample typing, light trails and its existing auto-scroll play at their original speed.
   await wait(6500);
   await page.getByRole("textbox", { name: "你的目标、备选方案或想法" }).waitFor();
-  if (!demo) {
-    await cinematicClick(page, page.getByRole("radio", { name: /DeepSeek/ }));
-    if (!(await page.getByRole("radio", { name: /DeepSeek/ }).isChecked()))
-      throw new Error("The initial run must explicitly select DeepSeek.");
-  }
+  if (!demo) await selectCaptureModel(page, page, modelMode);
   await page.getByRole("button", { name: "让方案上场", exact: true }).scrollIntoViewIfNeeded();
   await wait(2200);
 }
 
-export async function openRematch(page, { demo = false } = {}) {
+export async function openRematch(page, { demo = false, modelMode = "deepseek" } = {}) {
   await cinematicClick(page, page.getByRole("button", { name: "修改条件再开局" }));
   const dialog = page.getByRole("dialog", { name: "修改条件，重新开局" });
   await dialog.waitFor();
@@ -36,11 +43,7 @@ export async function openRematch(page, { demo = false } = {}) {
     .fill(
       "新增真实画面限制：所有画面必须来自真实记录，禁止生成虚构画面。检查三条路线能否遵守新条件。",
     );
-  if (!demo) {
-    await cinematicClick(page, dialog.getByRole("radio", { name: /DeepSeek/ }));
-    if (!(await dialog.getByRole("radio", { name: /DeepSeek/ }).isChecked()))
-      throw new Error("The changed-condition run must explicitly select DeepSeek.");
-  }
+  if (!demo) await selectCaptureModel(page, dialog, modelMode);
   await dialog.getByRole("button", { name: "按新条件重新推演" }).scrollIntoViewIfNeeded();
   await wait(3000);
   return dialog;

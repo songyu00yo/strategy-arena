@@ -13,7 +13,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { assertPortFree, prepareLivePreview } from "./start-live-preview.mjs";
+import { assertPortFree, prepareLivePreview, proxyEnvironment } from "./start-live-preview.mjs";
 
 // Only temporary synthetic release/ledger files; no models or real credentials.
 const billingFixture = {
@@ -89,6 +89,67 @@ test("check validates identities and runtime caps without creating data or readi
   assert.equal(existsSync(options.database), false);
   assert.equal(existsSync(config.sessionFile), false);
   assert.deepEqual(readFileSync(options.envFile), envBefore);
+});
+
+test("passes only trusted proxy variables and appends loopback bypasses for both cases", async (t) => {
+  const { options, deps } = fixture(t);
+  const inheritedEnv = {
+    PATH: "/fixture/bin",
+    HTTPS_PROXY: "http://upper-proxy.fixture:8080",
+    HTTP_PROXY: "http://upper-http.fixture:8080",
+    https_proxy: "http://lower-proxy.fixture:8081",
+    http_proxy: "http://lower-http.fixture:8081",
+    NO_PROXY: "internal.fixture, localhost",
+    no_proxy: "other.fixture,127.0.0.1",
+    NODE_OPTIONS: "--import /fixture/untrusted-preload.mjs",
+    OPENAI_API_KEY: "synthetic-must-not-cross-wrapper",
+    MODEL_API_KEY: "synthetic-must-not-cross-wrapper",
+    ALL_PROXY: "http://unrelated.fixture:8080",
+  };
+  const config = await prepareLivePreview(options, { ...deps, inheritedEnv });
+  for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"])
+    assert.equal(config.env[key], inheritedEnv[key]);
+  const bypasses = config.env.NO_PROXY.split(",");
+  for (const host of ["internal.fixture", "other.fixture", "127.0.0.1", "localhost", "::1"])
+    assert.ok(bypasses.includes(host));
+  assert.equal(config.env.no_proxy, config.env.NO_PROXY);
+  for (const key of ["NODE_OPTIONS", "OPENAI_API_KEY", "MODEL_API_KEY", "ALL_PROXY"])
+    assert.equal(config.env[key], undefined);
+  assert.equal(config.args[0], "--use-env-proxy");
+  assert.equal(config.args[1], `--env-file=${options.envFile}`);
+  assert.equal(config.args.at(-1), join(options.release, "server.js"));
+  assert.deepEqual(proxyEnvironment({}), {
+    NO_PROXY: "127.0.0.1,localhost,::1",
+    no_proxy: "127.0.0.1,localhost,::1",
+  });
+});
+
+test("uses the existing audited 400-request cap without adjusting the ledger or other ceilings", async (t) => {
+  const { directory, options, deps } = fixture(t);
+  let reads = 0;
+  const summary = { ...billingFixture, requestLimit: 400, requests: 243 };
+  const before = structuredClone(summary);
+  const config = await prepareLivePreview(options, {
+    ...deps,
+    readBillingStatus: () => {
+      reads++;
+      return summary;
+    },
+  });
+  assert.equal(reads, 1);
+  assert.equal(config.env.ARENA_BILLING_REQUEST_LIMIT, "400");
+  assert.equal(config.env.ARENA_BILLING_USD_LIMIT, "10");
+  assert.equal(config.env.ARENA_BILLING_TOKEN_LIMIT, "5000000");
+  assert.deepEqual(summary, before);
+  assert.equal(existsSync(join(directory, "data")), false);
+  for (const requestLimit of [299, 401, 300.5])
+    await assert.rejects(
+      prepareLivePreview(options, {
+        ...deps,
+        readBillingStatus: () => ({ ...summary, requestLimit }),
+      }),
+      /already have audited/,
+    );
 });
 
 test("sessions are persistent, private and never overwrite an existing unsafe file", async (t) => {

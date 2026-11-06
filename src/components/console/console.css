@@ -3881,3 +3881,28 @@
     transition: none !important;
   }
 }
+
+.c-claim em .c-claim-challenge {
+  float: right;
+  margin-left: 12px;
+  padding: 1px 5px;
+  border: 1px solid rgb(var(--route) / 0.28);
+  border-radius: 3px;
+  color: rgb(var(--route));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  transition:
+    background-color 260ms ease,
+    color 260ms ease;
+}
+.c-claim:hover .c-claim-challenge,
+.c-claim:focus-visible .c-claim-challenge {
+  background: rgb(var(--route));
+  color: #fff;
+}
+@media (prefers-reduced-motion: reduce) {
+  .c-claim em .c-claim-challenge {
+    transition: none;
+  }
+}

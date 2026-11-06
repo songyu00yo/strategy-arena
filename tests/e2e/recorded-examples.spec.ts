@@ -43,7 +43,7 @@ for (const example of RECORDED_EXAMPLES) {
   }) => {
     const payload = recording(example.slug);
     const version = payload.arena.versions.at(-1)!;
-    const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin);
+    const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin, true);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(`/examples/${example.slug}`);
@@ -158,7 +158,8 @@ for (const example of RECORDED_EXAMPLES) {
     expect(requests.apiReads).toEqual([]);
     expect(requests.forbidden).toEqual([]);
     await page.getByRole("link", { name: "返回示例", exact: true }).click();
-    await expect(page).toHaveURL(/\/examples$/);
+    await expect(page).toHaveURL(/\/\?examples=open$/);
+    await expect(page.getByRole("dialog", { name: "先看一场真实推演", exact: true })).toBeVisible();
     await expect(
       page.getByRole("link", {
         name: `播放${example.direction}案例：${example.title}`,
@@ -166,7 +167,7 @@ for (const example of RECORDED_EXAMPLES) {
       }),
     ).toBeVisible();
     await page.waitForLoadState("networkidle");
-    expect(requests.apiReads).toEqual([]);
+    expect(requests.apiReads.every((item) => item === "GET /api/health")).toBe(true);
     expect(requests.forbidden).toEqual([]);
   });
 }

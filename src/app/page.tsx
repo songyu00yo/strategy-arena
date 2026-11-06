@@ -29,12 +29,13 @@ import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
 import { GuidedIntake } from "@/components/guided-intake";
 import { RecordedExamples } from "@/components/recorded-examples";
+import { GoalFocusStage } from "@/components/goal-focus-stage";
 import { IntakeContext } from "@/components/intake-context";
 import { DecisionReviewPanel } from "@/components/decision-review-panel";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
-import { Chars, ClickFx, Dust, Leaving, reducedMotion } from "@/components/console/effects";
-import { HomeFlow } from "@/components/console/HomeFlow";
+import { ClickFx, Leaving } from "@/components/console/effects";
+import "@/components/focused-home.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import type { OverlayMotionHandle } from "@/components/overlay-motion";
@@ -244,7 +245,7 @@ export default function Page() {
   const parentChanges =
     parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
   return (
-    <div className={`site-shell console-shell ${arena.snapshot ? "" : "home"}`}>
+    <div className={`site-shell console-shell ${arena.snapshot ? "" : "home focus-home"}`}>
       <ClickFx />
       <a href="#main" className="skip-link">
         跳转到主要内容
@@ -310,100 +311,95 @@ export default function Page() {
         )}
         {!arena.snapshot ? (
           <>
-            <div className="h-grid">
-              <Dust />
-              <section className="h-lead" aria-label="开始一次方案推演">
-                <h1>
-                  <Chars text="先让三个方案互相挑错，再决定。" active />
-                </h1>
-                <p>
-                  写下你想解决的问题。三条路线分别提案、互相质疑，再根据证据修改，给出建议和适用条件。
-                </p>
-                <div className="h-form">
-                  {accessRequired && (
-                    <form
-                      className="access-panel"
-                      onSubmit={async (e) => {
-                        e.preventDefault();
-                        if (await arena.unlock(accessCode)) setAccessCode("");
-                      }}
-                    >
-                      <div>
-                        <span className="eyebrow">受邀预览</span>
-                        <h2>凭访问码入场</h2>
-                        <p>输入运行者提供的访问码后，就可以开始推演。</p>
+            <div className="goal-landing">
+              <section className="goal-landing-center" aria-label="开始一次方案推演">
+                <h1 className="sr-only">方案擂台，开始推演</h1>
+                <GoalFocusStage>
+                  <div className="h-form">
+                    {accessRequired && (
+                      <form
+                        className="access-panel"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (await arena.unlock(accessCode)) setAccessCode("");
+                        }}
+                      >
+                        <div>
+                          <span className="eyebrow">受邀预览</span>
+                          <h2>凭访问码入场</h2>
+                          <p>输入运行者提供的访问码后，就可以开始推演。</p>
+                        </div>
+                        <label className="sr-only" htmlFor="access-code">
+                          访问码
+                        </label>
+                        <div className="access-input-row">
+                          <input
+                            id="access-code"
+                            type="password"
+                            autoComplete="off"
+                            placeholder="输入访问码"
+                            value={accessCode}
+                            onChange={(e) => setAccessCode(e.target.value)}
+                            required
+                          />
+                          <button type="submit" className="primary-button" disabled={arena.busy}>
+                            {arena.busy ? "验证中…" : "验证访问码"}
+                            <ArrowRight size={15} />
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                    {arena.restoring ? (
+                      <div className="restoring-state">
+                        <LoaderCircle className="spin" size={24} />
+                        <p>正在恢复上一次的推演…</p>
                       </div>
-                      <label className="sr-only" htmlFor="access-code">
-                        访问码
-                      </label>
-                      <div className="access-input-row">
-                        <input
-                          id="access-code"
-                          type="password"
-                          autoComplete="off"
-                          placeholder="输入访问码"
-                          value={accessCode}
-                          onChange={(e) => setAccessCode(e.target.value)}
-                          required
-                        />
-                        <button type="submit" className="primary-button" disabled={arena.busy}>
-                          {arena.busy ? "验证中…" : "验证访问码"}
-                          <ArrowRight size={15} />
-                        </button>
+                    ) : demo ? (
+                      <ChallengeForm
+                        demo={demo}
+                        modelProviders={arena.health?.model.providers}
+                        pending={arena.busy}
+                        disabled={configured === false || !arena.health || accessRequired}
+                        onSubmit={async (challenge, _reason, modelMode) => {
+                          if (await arena.create(challenge, modelMode)) chooseVersion(null);
+                        }}
+                      />
+                    ) : (
+                      <GuidedIntake
+                        modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
+                        pending={arena.busy}
+                        disabled={!arena.health || accessRequired}
+                        onCreated={(snapshot) => {
+                          arena.adopt(snapshot);
+                          chooseVersion(null);
+                        }}
+                      />
+                    )}
+                    {(configured === false || arena.healthError) && (
+                      <div className="configuration-notice">
+                        <CircleHelp size={16} />
+                        <div>
+                          <strong>{arena.healthError || "配置模型后就能开始"}</strong>
+                          <p>
+                            {arena.healthError
+                              ? "连接恢复后刷新页面即可继续。"
+                              : "你可以先看已有示例。配置完成前，新的推演不会发起收费调用。"}
+                          </p>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => setModelOpen(true)}
+                          >
+                            查看连接信息
+                            <ArrowUpRight size={13} />
+                          </button>
+                        </div>
                       </div>
-                    </form>
-                  )}
-                  {arena.restoring ? (
-                    <div className="restoring-state">
-                      <LoaderCircle className="spin" size={24} />
-                      <p>正在恢复上一次的推演…</p>
-                    </div>
-                  ) : demo ? (
-                    <ChallengeForm
-                      demo={demo}
-                      modelProviders={arena.health?.model.providers}
-                      pending={arena.busy}
-                      disabled={configured === false || !arena.health || accessRequired}
-                      onSubmit={async (challenge, _reason, modelMode) => {
-                        if (await arena.create(challenge, modelMode)) chooseVersion(null);
-                      }}
-                    />
-                  ) : (
-                    <GuidedIntake
-                      modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
-                      pending={arena.busy}
-                      disabled={!arena.health || accessRequired}
-                      onCreated={(snapshot) => {
-                        arena.adopt(snapshot);
-                        chooseVersion(null);
-                      }}
-                    />
-                  )}
-                  {(configured === false || arena.healthError) && (
-                    <div className="configuration-notice">
-                      <CircleHelp size={16} />
-                      <div>
-                        <strong>{arena.healthError || "配置模型后就能开始"}</strong>
-                        <p>
-                          {arena.healthError
-                            ? "连接恢复后刷新页面即可继续。"
-                            : "你可以先看已有示例。配置完成前，新的推演不会发起收费调用。"}
-                        </p>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => setModelOpen(true)}
-                        >
-                          查看连接信息
-                          <ArrowUpRight size={13} />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {!demo && <RecordedExamples launcher />}
+                    )}
+                  </div>
+                </GoalFocusStage>
+                {!demo && <RecordedExamples />}
               </section>
-              <HomeFlow />
             </div>
           </>
         ) : (
@@ -695,16 +691,18 @@ export default function Page() {
           )
         )}
       </main>
-      <footer className="site-footer">
-        <div>
-          <span className="footer-brand">方案擂台</span>
-          <span>让好策略，经得起挑战。</span>
-        </div>
-        <button type="button" className="text-button" onClick={() => setModelOpen(true)}>
-          模型与版本
-          <ArrowUpRight size={12} />
-        </button>
-      </footer>
+      {arena.snapshot && (
+        <footer className="site-footer">
+          <div>
+            <span className="footer-brand">方案擂台</span>
+            <span>让好策略，经得起挑战。</span>
+          </div>
+          <button type="button" className="text-button" onClick={() => setModelOpen(true)}>
+            模型与版本
+            <ArrowUpRight size={12} />
+          </button>
+        </footer>
+      )}
       {modelOpen && (
         <Modal title="模型与运行信息" onClose={() => setModelOpen(false)}>
           <div className="model-information">
@@ -871,9 +869,7 @@ export default function Page() {
                   placeholder="指出有问题的前提、缺失的条件，或提供反证。"
                 />
               </label>
-              <p className="muted">
-                你的质疑会进入真实推演。必要时会创建新版本，并产生新的模型调用费用。
-              </p>
+              <p className="muted">提交后会创建新版本并重新推演，产生新的模型调用费用。</p>
               <button
                 className="primary-button"
                 type="submit"

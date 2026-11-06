@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { RECORDED_EXAMPLES } from "@/lib/recorded-examples";
 import { MODEL_CATALOG } from "@/lib/model-catalog";
+import { examplePickerRequested } from "@/lib/example-navigation";
 import { Modal } from "./modal";
 import "./recorded-examples.css";
 
@@ -22,7 +23,7 @@ const ICONS: Record<string, typeof BookOpen> = {
   "course-site": Code2,
 };
 
-function ExampleGallery({ inDialog = false }: { inDialog?: boolean }) {
+function ExampleGallery() {
   const section = useRef<HTMLElement>(null);
   useEffect(() => {
     const element = section.current;
@@ -72,14 +73,9 @@ function ExampleGallery({ inDialog = false }: { inDialog?: boolean }) {
     };
   }, []);
   return (
-    <section
-      ref={section}
-      className={`recorded-examples ${inDialog ? "in-dialog" : ""}`}
-      aria-label="选择真实案例"
-    >
+    <section ref={section} className="recorded-examples in-dialog" aria-label="选择真实案例">
       <header className="recorded-examples-heading">
         <div>
-          {!inDialog && <h1>先看一场真实推演</h1>}
           <p>从填写目标开始，看三条路线如何提案、质疑和修订。</p>
         </div>
         <p>已保存的真实记录 · 回放新增用量为 0</p>
@@ -117,22 +113,29 @@ function ExampleGallery({ inDialog = false }: { inDialog?: boolean }) {
   );
 }
 
-export function RecordedExamples({ launcher = false }: { launcher?: boolean }) {
+export function RecordedExamples() {
   const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
-  if (!launcher) return <ExampleGallery />;
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!examplePickerRequested()) return;
+    const frame = requestAnimationFrame(() => setTrigger(button.current));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   return (
     <>
       <button
+        ref={button}
         type="button"
         className="text-button h-examples-link"
         aria-haspopup="dialog"
+        aria-expanded={!!trigger}
         onClick={(event) => setTrigger(event.currentTarget)}
       >
         先看真实案例 <ArrowRight size={14} />
       </button>
       {trigger && (
         <Modal title="先看一场真实推演" trigger={trigger} onClose={() => setTrigger(null)} wide>
-          <ExampleGallery inDialog />
+          <ExampleGallery />
         </Modal>
       )}
     </>

@@ -3,13 +3,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, FileText, History, Pause, Play } from "lucide-react";
-import type { Attack, ArenaVersion } from "@/lib/contracts";
+import type { Attack, ArenaVersion, Strategy } from "@/lib/contracts";
 import type { RecordedExamplePayload } from "@/lib/recorded-examples";
 import { MODEL_CATALOG } from "@/lib/model-catalog";
 import { ArenaConsole } from "./console/ArenaConsole";
 import { EvidenceDrawer } from "./evidence-drawer";
 import { Modal } from "./modal";
 import { ClickFx, reducedMotion } from "./console/effects";
+import { readMotionOrigin } from "./motion-origin";
+import { RecordedChallenge } from "./recorded-challenge";
 import "./console/console.css";
 import "./recorded-example-viewer.css";
 
@@ -84,7 +86,7 @@ function RecordedExampleEntry({
     <div className="console-shell home recorded-entry-shell">
       <ClickFx />
       <header className="site-header">
-        <Link href="/examples" className="text-button">
+        <Link href="/?examples=open" className="text-button">
           <ArrowLeft size={16} /> 返回案例
         </Link>
         <span>真实案例回放 · 新增用量为 0</span>
@@ -159,6 +161,12 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
   const [details, setDetails] = useState<HTMLButtonElement | null>(null);
   const [located, setLocated] = useState<string>();
   const [started, setStarted] = useState(false);
+  const [claimTarget, setClaimTarget] = useState<{
+    versionId: string;
+    strategy: Strategy;
+    claimId: string;
+    trigger: HTMLElement | null;
+  } | null>(null);
   const replayRoot = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     if (started) replayRoot.current?.focus({ preventScroll: true });
@@ -229,13 +237,23 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           demo={false}
           historical
           startFromBeginning
+          allowRecordedChallenges
           busy={false}
           selectedAttack={located}
           onEvidence={openEvidence}
-          onClaim={() => {}}
+          onClaim={(strategy, claimId) =>
+            setClaimTarget({
+              versionId: version.id,
+              strategy,
+              claimId,
+              trigger:
+                readMotionOrigin()?.element ??
+                (document.activeElement instanceof HTMLElement ? document.activeElement : null),
+            })
+          }
           slate={
             <>
-              <Link className="recorded-back" href="/examples" aria-label="返回示例">
+              <Link className="recorded-back" href="/?examples=open" aria-label="返回示例">
                 <ArrowLeft size={17} />
               </Link>
               <h1>{metadata.title}</h1>
@@ -266,6 +284,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
                       setVersionId(event.target.value);
                       setLocated(undefined);
                       setEvidence(null);
+                      setClaimTarget(null);
                     }}
                   >
                     {arena.versions.map((item) => (
@@ -284,11 +303,19 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           }
           notices={
             <p className="recorded-replay-notice">
-              正在回放已保存的真实推演 · 新增模型调用与 Token 均为 0。
+              回放新增用量为 0。点击判断旁的“挑战”，可以提出自己的质疑。
             </p>
           }
         />
       </main>
+      {claimTarget?.versionId === version.id && (
+        <RecordedChallenge
+          metadata={metadata}
+          version={version}
+          target={claimTarget}
+          onClose={() => setClaimTarget(null)}
+        />
+      )}
       {activeEvidence && (
         <EvidenceDrawer
           attack={activeEvidence.attack}

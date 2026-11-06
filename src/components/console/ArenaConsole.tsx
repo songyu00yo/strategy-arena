@@ -64,6 +64,7 @@ export function ArenaConsole({
   selectedAttack,
   historical,
   startFromBeginning = false,
+  allowRecordedChallenges = false,
   busy,
   onEvidence,
   onClaim,
@@ -78,6 +79,7 @@ export function ArenaConsole({
   selectedAttack?: string;
   historical: boolean;
   startFromBeginning?: boolean;
+  allowRecordedChallenges?: boolean;
   busy: boolean;
   onEvidence: (attack: Attack) => void;
   onClaim: (strategy: Strategy, claimId: string) => void;
@@ -468,7 +470,7 @@ export function ArenaConsole({
             onStep={setOpenStep}
             onEvidence={onEvidence}
             entering={intro && !revealed}
-            readOnly={historical || busy}
+            readOnly={(historical && !allowRecordedChallenges) || busy}
             onClaim={onClaim}
           />
           <div className="c-rail">

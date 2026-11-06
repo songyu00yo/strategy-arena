@@ -25,6 +25,7 @@ import type {
   MaterialSource,
 } from "@/lib/intake-contracts";
 import { DEFAULT_MODEL_ID } from "@/lib/model-catalog";
+import { clearExamplePickerRequest, examplePickerRequested } from "@/lib/example-navigation";
 import { routeModel } from "@/lib/model-routing";
 import { DisclosureMotion } from "./disclosure-motion";
 import { ModelSelector } from "./model-selector";
@@ -210,6 +211,7 @@ export function GuidedIntake({
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [materialsOpen, setMaterialsOpen] = useState(false);
   const [recoveryDetailsOpen, setRecoveryDetailsOpen] = useState(false);
   const [source, setSource] = useState<MaterialSource | null>(null);
   const [pageInputs, setPageInputs] = useState<Record<string, string>>({});
@@ -347,7 +349,10 @@ export function GuidedIntake({
     const epoch = ++generation.current;
     let saved: string | null = null;
     try {
-      saved = localStorage.getItem(STORAGE_KEY);
+      // Opening free examples must not restore a submitted or running model task.
+      // Keep its pointer intact so ordinary navigation can still restore it later.
+      const explicitArena = new URL(window.location.href).searchParams.has("arena");
+      if (!examplePickerRequested() && !explicitArena) saved = localStorage.getItem(STORAGE_KEY);
     } catch {
       /* Storage is optional. */
     }
@@ -546,6 +551,7 @@ export function GuidedIntake({
     void operate(async (epoch) => {
       if (unavailable) throw new Error("所选模型尚未配置，请先选择可用模型。");
       if (goalRef.current.trim().length < 2) throw new Error("请用至少 2 个字描述你的目标。");
+      clearExamplePickerRequest();
       let saved = await ensureDraft();
       if (saved.status === "questions") {
         const outgoing = answers.map((answer) =>
@@ -614,6 +620,7 @@ export function GuidedIntake({
     setAnalysisPending(false);
     setRestoring(false);
     setSource(null);
+    setMaterialsOpen(false);
     setRecoveryDetailsOpen(false);
     try {
       localStorage.removeItem(STORAGE_KEY);
@@ -623,6 +630,30 @@ export function GuidedIntake({
   return (
     <section
       className="guided-intake"
+      data-phase={
+        uncertain
+          ? "paused"
+          : summaryVisible
+            ? "summary"
+            : questionsVisible
+              ? "questions"
+              : analyzing
+                ? "analyzing"
+                : "compose"
+      }
+      data-expanded={
+        materialsOpen ||
+        analyzing ||
+        reading ||
+        !!summary.conflict ||
+        (unavailable && !pending && !restoring) ||
+        !!draft?.attachments.length ||
+        questionsVisible ||
+        summaryVisible ||
+        uncertain ||
+        !!error ||
+        !!draft?.error
+      }
       aria-label="准备一场推演"
       aria-busy={busy || analyzing || restoring}
     >
@@ -643,7 +674,7 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="比如：还有两个月毕业，我该先找工作，还是集中准备考研？"
+          placeholder="说说你的目标，或正在纠结的选择。"
           onChange={(event) => {
             setGoal(event.target.value);
             goalRef.current = event.target.value;
@@ -679,9 +710,11 @@ export function GuidedIntake({
               type="button"
               className="gi-tool"
               aria-label="上传参考材料"
-              title="上传参考材料"
+              title="添加参考材料"
+              aria-expanded={materialsOpen}
+              aria-controls={`${id}-materials-picker`}
               disabled={blocked || uncertain}
-              onClick={() => fileInput.current?.click()}
+              onClick={() => setMaterialsOpen(!materialsOpen)}
             >
               <Paperclip size={18} />
               <span>添加材料</span>
@@ -750,10 +783,26 @@ export function GuidedIntake({
           {provider?.error ?? "所选模型尚未配置，请在模型列表中选择已配置的模型。"}
         </p>
       )}
-      <p className="gi-hint">
-        先说目标，再回答最多两轮补充问题。也可以上传 PDF、Word、表格、文本或图片；最多 5 个，每个 10
-        MiB，总计 30 MiB。
-      </p>
+      <DisclosureMotion
+        open={materialsOpen}
+        id={`${id}-materials-picker`}
+        className="gi-materials-picker"
+      >
+        <div>
+          <p id={`${id}-materials-limits`}>
+            支持 PDF、Word、表格、文本和图片。最多 5 个文件，单个不超过 10 MiB，总计不超过 30 MiB。
+          </p>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={blocked || uncertain}
+            aria-describedby={`${id}-materials-limits`}
+            onClick={() => fileInput.current?.click()}
+          >
+            <Paperclip size={15} /> 选择文件
+          </button>
+        </div>
+      </DisclosureMotion>
       <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
         <ul>
           {draft?.attachments.map((file) => (

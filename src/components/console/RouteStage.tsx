@@ -864,6 +864,7 @@ export function RouteStage({
                 >
                   <em>
                     {claimId} {CLAIM[claim.status]}
+                    {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
                     {!after && " · 已撤回"}
                     {!before && " · 新增"}
                     {hits.map((a) => (

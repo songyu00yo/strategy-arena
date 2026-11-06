@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArenaSnapshot, Challenge, ModelMode } from "@/lib/contracts";
 import type { IntakeDraft } from "@/lib/intake-contracts";
+import { clearExplicitArenaRequest, examplePickerRequested } from "@/lib/example-navigation";
 
 export interface Health {
   status: string;
@@ -75,7 +76,11 @@ export function useArena() {
     if (latest.current && snapshotIsOlder(value, latest.current)) return false;
     latest.current = value;
     setSnapshot(value);
-    localStorage.setItem(storageKey, value.id);
+    try {
+      localStorage.setItem(storageKey, value.id);
+    } catch {
+      // Persistence is optional; an explicit URL must still restore the accepted snapshot.
+    }
     return true;
   }, []);
   const refresh = useCallback(
@@ -91,7 +96,20 @@ export function useArena() {
     const epoch = generation.current;
     let id: string | null = null;
     let restoringPreviousArena = false;
+    let restoringExplicitArena = false;
     try {
+      const parameters = new URL(window.location.href).searchParams;
+      if (parameters.has("arena")) {
+        restoringExplicitArena = true;
+        const requestedId = parameters.get("arena")?.trim();
+        if (!requestedId) throw new ApiError("没有指定要打开的推演。", "INVALID_ARENA");
+        const value = await request<ArenaSnapshot>(
+          `/api/arenas/${encodeURIComponent(requestedId)}`,
+        );
+        accept(value, epoch);
+        return;
+      }
+      if (examplePickerRequested()) return;
       id = localStorage.getItem(storageKey);
       const draftId = localStorage.getItem("strategy-arena:intake-id");
       if (draftId) {
@@ -122,9 +140,13 @@ export function useArena() {
         if (restoringPreviousArena && !(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
           localStorage.removeItem(storageKey);
         setError(
-          e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
-            ? "当前浏览器无法访问上次的擂台，你可以开始新一轮。"
-            : "未能恢复上次的擂台，你可以重新开始。",
+          restoringExplicitArena
+            ? e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
+              ? "当前浏览器无法访问指定的推演。未恢复之前的任务，请检查打开的链接。"
+              : "未能打开指定的推演。未恢复之前的任务，请稍后重试。"
+            : e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
+              ? "当前浏览器无法访问上次的擂台，你可以开始新一轮。"
+              : "未能恢复上次的擂台，你可以重新开始。",
         );
       }
     } finally {
@@ -351,6 +373,7 @@ export function useArena() {
       setDriverRevision((v) => v + 1);
     },
     reset: () => {
+      clearExplicitArenaRequest();
       generation.current++;
       latest.current = null;
       setAuto(false);

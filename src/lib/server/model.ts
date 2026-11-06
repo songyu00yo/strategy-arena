@@ -89,7 +89,7 @@ export function getModelConfig(provider: ModelProvider = "deepseek"): ModelConfi
     throw new Error("OPENAI_REASONING_EFFORT 仅支持 low");
   const prefix = openai ? "OPENAI" : "MODEL";
   return {
-    configurationVersion: openai ? "openai-1.0.0" : defaults.configVersion,
+    configurationVersion: openai ? "openai-1.1.0" : defaults.configVersion,
     provider,
     currency: openai ? "USD" : "CNY",
     reasoningEffort: openai ? "low" : null,
@@ -229,41 +229,41 @@ export function buildRequestBody(
 ) {
   const strict = config.structuredOutput === "strict-tool";
   const functionName = `submit_${kind}`;
-  const outputOptions = strict
-    ? {
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: functionName,
-              description: "structured protocol output",
-              strict: true,
-              parameters: bindStrictReferences(
-                toStrictToolSchema(z.toJSONSchema(schema)),
-                kind,
-                input,
-              ),
-            },
-          },
-        ],
-        tool_choice: { type: "function", function: { name: functionName } },
-      }
-    : { response_format: { type: "json_object" } };
+  const functionDefinition = {
+    name: functionName,
+    description: "structured protocol output",
+    strict: true,
+    parameters: bindStrictReferences(toStrictToolSchema(z.toJSONSchema(schema)), kind, input),
+  };
+  const messages = buildMessages(kind, input, schema, config.structuredOutput);
+  if (config.provider === "openai")
+    return {
+      model: config.id,
+      input: messages,
+      max_output_tokens: config.maxOutputTokens,
+      reasoning: { effort: config.reasoningEffort },
+      store: false,
+      parallel_tool_calls: false,
+      ...(strict
+        ? {
+            tools: [{ type: "function", ...functionDefinition }],
+            tool_choice: { type: "function", name: functionName },
+          }
+        : { text: { format: { type: "json_object" } } }),
+      stream: false,
+    };
   return {
     model: config.id,
-    messages: buildMessages(kind, input, schema, config.structuredOutput),
-    ...(config.provider === "openai"
+    messages,
+    temperature: config.temperature,
+    max_tokens: config.maxOutputTokens,
+    thinking: { type: "disabled" },
+    ...(strict
       ? {
-          max_completion_tokens: config.maxOutputTokens,
-          reasoning_effort: config.reasoningEffort,
-          ...(strict ? { parallel_tool_calls: false } : {}),
+          tools: [{ type: "function", function: functionDefinition }],
+          tool_choice: { type: "function", function: { name: functionName } },
         }
-      : {
-          temperature: config.temperature,
-          max_tokens: config.maxOutputTokens,
-          thinking: { type: "disabled" },
-        }),
-    ...outputOptions,
+      : { response_format: { type: "json_object" } }),
     stream: false,
   };
 }
@@ -359,16 +359,19 @@ async function generate<T>(
   const timer = setTimeout(() => controller.abort(), c.timeoutMs);
   let response: Response;
   try {
-    response = await fetch(`${base.toString().replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey(c.provider)}`,
+    response = await fetch(
+      `${base.toString().replace(/\/$/, "")}/${c.provider === "openai" ? "responses" : "chat/completions"}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey(c.provider)}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+        redirect: "error",
       },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-      redirect: "error",
-    });
+    );
   } catch {
     clearTimeout(timer);
     throw unknown("模型连接中断或超时，服务端是否完成未知。本步骤不会自动重试，预留额度暂不释放。");
@@ -393,7 +396,19 @@ async function generate<T>(
   let raw: {
     id?: string;
     model?: string;
+    status?: string;
+    error?: unknown;
+    output?: {
+      type?: string;
+      name?: string;
+      arguments?: string;
+      status?: string;
+      content?: { type?: string; text?: string; refusal?: string }[];
+    }[];
     usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number };
       prompt_tokens?: number;
       completion_tokens?: number;
       prompt_cache_hit_tokens?: number;
@@ -417,29 +432,32 @@ async function generate<T>(
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     throw unknown("模型返回的响应封装无效，无法确认用量，保留预留额度。");
   const u = raw.usage;
+  const inputTokens = c.provider === "openai" ? u?.input_tokens : u?.prompt_tokens;
+  const outputTokens = c.provider === "openai" ? u?.output_tokens : u?.completion_tokens;
   if (
     !u ||
-    !Number.isSafeInteger(u.prompt_tokens) ||
-    !Number.isSafeInteger(u.completion_tokens) ||
-    u.prompt_tokens! < 0 ||
-    u.completion_tokens! < 0
+    !Number.isSafeInteger(inputTokens) ||
+    !Number.isSafeInteger(outputTokens) ||
+    inputTokens! < 0 ||
+    outputTokens! < 0
   )
     throw unknown("模型未返回可核对的用量，保留本次预留额度并停止。");
   const cachedInputTokens =
-    (c.provider === "openai"
-      ? u.prompt_tokens_details?.cached_tokens
-      : u.prompt_cache_hit_tokens) ?? 0;
+    (c.provider === "openai" ? u.input_tokens_details?.cached_tokens : u.prompt_cache_hit_tokens) ??
+    0;
   if (
     !Number.isSafeInteger(cachedInputTokens) ||
     cachedInputTokens < 0 ||
-    cachedInputTokens > u.prompt_tokens!
+    cachedInputTokens > inputTokens!
   )
     throw unknown("模型缓存用量无效，保留本次预留额度并停止。");
-  // completion_tokens already includes reasoning tokens; never add them a second time.
-  const amount = Math.ceil(u.prompt_tokens! * c.inputPrice + u.completion_tokens! * c.outputPrice);
+  if (c.provider === "openai" && ["queued", "in_progress"].includes(raw.status ?? ""))
+    throw unknown("模型响应仍在处理中，最终用量未知，保留预留额度并停止。");
+  // Both APIs' reported output total already includes reasoning; do not add it again.
+  const amount = Math.ceil(inputTokens! * c.inputPrice + outputTokens! * c.outputPrice);
   const usage: ModelUsage = {
-    inputTokens: u.prompt_tokens!,
-    outputTokens: u.completion_tokens!,
+    inputTokens: inputTokens!,
+    outputTokens: outputTokens!,
     cachedInputTokens,
     estimatedCny: c.currency === "CNY" ? amount / 1e6 : 0,
     ...(c.currency === "USD" ? { estimatedUsd: amount / 1e6 } : {}),
@@ -451,33 +469,96 @@ async function generate<T>(
     durationMs: Date.now() - started,
   };
   settle(amount, usage.inputTokens, usage.outputTokens, cachedInputTokens, usage.responseId);
-  const choice = raw.choices?.[0];
-  if (choice?.finish_reason !== (strict ? "tool_calls" : "stop"))
-    throw new ModelCallError(
-      "模型输出被截断或未正常完成；已记录实际用量，不会自动补写。",
-      false,
-      usage,
-    );
   let output: string;
-  if (strict) {
-    const calls = choice.message?.tool_calls;
-    if (
-      !Array.isArray(calls) ||
-      calls.length !== 1 ||
-      calls[0]?.type !== "function" ||
-      calls[0]?.function?.name !== functionName ||
-      typeof calls[0]?.function?.arguments !== "string"
-    )
+  if (c.provider === "openai") {
+    if (raw.status !== "completed" || raw.error)
       throw new ModelCallError(
-        "模型未返回唯一且匹配的结构化提交函数，已记录实际用量；不会切换输出模式。",
+        "模型输出被截断、未完成或失败；已记录实际用量，不会自动补写。",
         false,
         usage,
       );
-    output = calls[0].function.arguments;
+    if (!Array.isArray(raw.output))
+      throw new ModelCallError("模型响应缺少结构化输出，已记录实际用量。", false, usage);
+    if (
+      raw.output.some(
+        (item) =>
+          item?.type === "message" &&
+          Array.isArray(item.content) &&
+          item.content.some((part) => part?.type === "refusal"),
+      )
+    )
+      throw new ModelCallError(
+        "模型拒绝了本次请求；已记录实际用量，不会自动重试或替换结果。",
+        false,
+        usage,
+      );
+    if (strict) {
+      const calls = raw.output.filter((item) => item?.type === "function_call");
+      if (
+        calls.length !== 1 ||
+        calls[0].name !== functionName ||
+        typeof calls[0].arguments !== "string" ||
+        (calls[0].status !== undefined && calls[0].status !== "completed") ||
+        raw.output.some(
+          (item) => !item || !["reasoning", "function_call"].includes(item.type ?? ""),
+        )
+      )
+        throw new ModelCallError(
+          "模型未返回唯一且匹配的结构化提交函数，已记录实际用量；不会切换输出模式。",
+          false,
+          usage,
+        );
+      output = calls[0].arguments;
+    } else {
+      const messages = raw.output.filter((item) => item?.type === "message");
+      const content = messages[0]?.content;
+      if (
+        messages.length !== 1 ||
+        !Array.isArray(content) ||
+        content.length !== 1 ||
+        content[0]?.type !== "output_text" ||
+        typeof content[0].text !== "string" ||
+        raw.output.some((item) => !item || !["reasoning", "message"].includes(item.type ?? ""))
+      )
+        throw new ModelCallError(
+          "模型响应正文不是唯一文本，已记录实际用量，停止本步骤。",
+          false,
+          usage,
+        );
+      output = content[0].text;
+    }
   } else {
-    if (typeof choice.message?.content !== "string")
-      throw new ModelCallError("模型响应正文不是文本，已记录实际用量，停止本步骤。", false, usage);
-    output = choice.message.content;
+    const choice = raw.choices?.[0];
+    if (choice?.finish_reason !== (strict ? "tool_calls" : "stop"))
+      throw new ModelCallError(
+        "模型输出被截断或未正常完成；已记录实际用量，不会自动补写。",
+        false,
+        usage,
+      );
+    if (strict) {
+      const calls = choice.message?.tool_calls;
+      if (
+        !Array.isArray(calls) ||
+        calls.length !== 1 ||
+        calls[0]?.type !== "function" ||
+        calls[0]?.function?.name !== functionName ||
+        typeof calls[0]?.function?.arguments !== "string"
+      )
+        throw new ModelCallError(
+          "模型未返回唯一且匹配的结构化提交函数，已记录实际用量；不会切换输出模式。",
+          false,
+          usage,
+        );
+      output = calls[0].function.arguments;
+    } else {
+      if (typeof choice.message?.content !== "string")
+        throw new ModelCallError(
+          "模型响应正文不是文本，已记录实际用量，停止本步骤。",
+          false,
+          usage,
+        );
+      output = choice.message.content;
+    }
   }
   let decoded: unknown;
   try {

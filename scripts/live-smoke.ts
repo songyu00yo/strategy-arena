@@ -6,6 +6,11 @@ import { execFileSync } from "node:child_process";
 import { ChallengeSchema, ModelModeSchema } from "../src/lib/contracts";
 import { videoChallenge } from "../src/lib/sample";
 import { createArena, advanceArena, newVersion, stopArena } from "../src/lib/server/runtime";
+import {
+  firstCallShouldPause,
+  smokeHasFailure,
+  firstCallHasUsableProposal,
+} from "./live-smoke-status";
 
 async function main() {
   const modelMode = ModelModeSchema.parse(process.env.ARENA_SMOKE_MODEL_MODE || "deepseek");
@@ -39,7 +44,7 @@ async function main() {
     }
   }
   await run();
-  if (process.argv.includes("--first-call")) {
+  if (process.argv.includes("--first-call") && firstCallShouldPause(snapshot)) {
     snapshot = stopArena(snapshot.id, owner, snapshot.activeVersionId);
   }
   if (process.argv.includes("--rematch") && snapshot.versions.at(-1)?.status === "completed") {
@@ -72,7 +77,10 @@ async function main() {
   const output = `artifacts/live-smoke-${Date.now()}.json`;
   writeFileSync(output, JSON.stringify(record, null, 2), { mode: 0o600 });
   console.log(`Saved ${output}; real calls, synthetic task input; commitDirty=${dirty}`);
-  if (snapshot.versions.some((v) => ["failed", "uncertain"].includes(v.status)))
+  if (
+    smokeHasFailure(snapshot) ||
+    (process.argv.includes("--first-call") && !firstCallHasUsableProposal(snapshot))
+  )
     process.exitCode = 1;
 }
 main().catch(() => {

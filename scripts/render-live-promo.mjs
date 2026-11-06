@@ -13,6 +13,7 @@ const specPath = resolve(input);
 const spec = JSON.parse(readFileSync(specPath, "utf8"));
 const base = dirname(specPath);
 const output = resolve(base, spec.output || "promo.mp4");
+if (!output.endsWith(".mp4")) throw new Error("Promo output must end with .mp4");
 const work = resolve(base, "render");
 mkdirSync(work, { recursive: true });
 const run = (cmd, args) =>
@@ -59,11 +60,12 @@ async function overlay(path, scene, caption = "", opening = false) {
   .hero{position:absolute;left:86px;top:315px;font-size:86px;line-height:1.2;letter-spacing:-3px;font-weight:750;white-space:pre-line}
   .sub{position:absolute;left:92px;top:560px;font-size:27px;line-height:1.8;color:#586375;max-width:560px}
   .line{position:absolute;left:92px;top:690px;width:90px;height:5px;background:#376df7;border-radius:4px}
+  ${caption ? ".top,.brand,.heading,.source,.footer,.intro,.kicker,.hero,.sub,.line{display:none}" : ""}
   </style></head><body>${opening ? `<div class="intro"></div><div class="kicker">STRATEGY ARENA</div><div class="hero">${safe(scene.hero || "让方案上场。")}</div><div class="sub">${safe(scene.sub || "从一个目标，到可检查的下一步。")}</div><div class="line"></div>` : ""}
   <div class="top"></div><div class="brand"><i class="dot"></i>方案擂台</div><div class="heading">${safe(scene.heading || "")}</div>
   <div class="source">${safe(scene.label || "本次记录回看 · 真实模型结果")}</div>
   ${caption ? `<div class="caption"><span>${safe(caption)}</span></div>` : ""}
-  <div class="footer">${scene.footageKind === "input" ? "真实产品录屏 · 示例输入" : `示例任务 · ${safe(spec.provider || "DeepSeek")} 真实模型结果`}${scene.waitCut ? " · 已剪去模型等待" : ""}${scene.outro ? " · 普通话合成旁白" : ""}</div></body></html>`);
+  <div class="footer">${scene.footageKind === "input" ? "真实产品录屏 · 示例输入" : `示例任务 · ${scene.provider ? `${safe(scene.provider)} · ` : ""}真实模型结果`}${scene.waitCut ? " · 已剪去模型等待" : ""}${scene.outro ? " · 普通话合成旁白" : ""}</div></body></html>`);
   await page.screenshot({ path, omitBackground: true });
 }
 
@@ -72,8 +74,10 @@ try {
     const scene = { ...spec.scenes[index] };
     const verified = validateScene(spec, scene, base);
     const source = verified.source;
+    if (source === output) throw new Error("Promo output must not overwrite its original recording");
     scene.footageKind = verified.footageKind;
     scene.label = verified.label;
+    scene.provider = verified.providerLabel;
     if (!existsSync(source) || scene.start < 0 || !(scene.duration > 0))
       throw new Error(`Invalid source in scene ${index}`);
     if (scene.start + scene.duration > seconds(source) + 0.15)
@@ -195,6 +199,11 @@ try {
       outputStart: cursor,
       heading: scene.heading,
       label: scene.label,
+      footageKind: verified.footageKind,
+      sessionId: verified.clip.sessionId,
+      clipIndex: scene.clipIndex,
+      versionId: verified.clip.versionId ?? null,
+      models: verified.models,
     });
     cursor += scene.duration - (index < spec.scenes.length - 1 ? transition : 0);
     console.log(`Rendered scene ${index + 1}/${spec.scenes.length}: ${scene.heading}`);

@@ -13,9 +13,12 @@ import {
   FixtureSchema,
   planCases,
   resumeDecision,
-  unresolvedBilling,
+  heldAcknowledgement,
+  assertBillingAttemptsReviewed,
   sha256,
   type CasePlan,
+  type HeldAcknowledgement,
+  type UnresolvedBillingAttempt,
 } from "./live-acceptance-plan";
 
 interface Options {
@@ -25,6 +28,8 @@ interface Options {
   cases?: string[];
   exclude: string[];
   override?: ModelMode;
+  acknowledgeHeld?: string[];
+  acknowledgementReason?: string;
   help: boolean;
 }
 function options(args: string[]): Options {
@@ -35,7 +40,17 @@ function options(args: string[]): Options {
     else if (arg === "--dry-run") result.run = false;
     else if (arg === "--help") result.help = true;
     else {
-      if (!["--out", "--resume", "--cases", "--exclude", "--model-mode"].includes(arg))
+      if (
+        ![
+          "--out",
+          "--resume",
+          "--cases",
+          "--exclude",
+          "--model-mode",
+          "--acknowledge-held",
+          "--acknowledgement-reason",
+        ].includes(arg)
+      )
         throw new Error(`Unknown option: ${arg}`);
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
@@ -44,6 +59,8 @@ function options(args: string[]): Options {
       if (arg === "--cases") result.cases = value.split(",");
       if (arg === "--exclude") result.exclude = value.split(",");
       if (arg === "--model-mode") result.override = ModelModeSchema.parse(value);
+      if (arg === "--acknowledge-held") result.acknowledgeHeld = value.split(",");
+      if (arg === "--acknowledgement-reason") result.acknowledgementReason = value;
     }
   }
   if (result.out && result.resume)
@@ -70,7 +87,12 @@ interface RecordFile {
   frozenFixture: unknown;
   createdAt: string;
   updatedAt: string;
-  executionOptions: { cases?: string[]; exclude: string[]; override?: ModelMode };
+  executionOptions: {
+    cases?: string[];
+    exclude: string[];
+    override?: ModelMode;
+    heldAcknowledgement?: HeldAcknowledgement;
+  };
   provenance: {
     commit: string;
     dirty: boolean;
@@ -81,6 +103,8 @@ interface RecordFile {
   configurations?: unknown;
   billingBefore?: unknown;
   billingAfter?: unknown;
+  unresolvedBillingBefore?: UnresolvedBillingAttempt[];
+  unresolvedBillingAfter?: UnresolvedBillingAttempt[];
   failures: { caseId?: string; code: string; at: string }[];
   cases: CaseRecord[];
   semanticAcceptance: "not-reviewed";
@@ -119,7 +143,7 @@ async function main() {
   const opts = options(process.argv.slice(2));
   if (opts.help) {
     console.log(
-      "Dry run: pnpm exec tsx scripts/live-acceptance.ts [--cases learning,team] [--exclude creation] [--model-mode deepseek]\nReal run: add --run --out artifacts/live-acceptance-NAME.json\nResume: --run --resume artifacts/live-acceptance-NAME.json (saved selection/override retained)\nNo .env files are loaded. Set explicit arena and shared billing database paths. Terminal/uncertain attempts are never blindly retried. All semantic review remains manual.",
+      "Dry run: pnpm exec tsx scripts/live-acceptance.ts [--cases learning,team] [--exclude creation] [--model-mode deepseek]\nReal run: add --run --out artifacts/live-acceptance-NAME.json\nReviewed pre-existing holds only: --acknowledge-held ID[,ID] --acknowledgement-reason TEXT (exact startup set, no reserved attempts; old reservations remain charged/held)\nResume: --run --resume artifacts/live-acceptance-NAME.json (saved selection/override/acknowledgement retained)\nNo .env files are loaded. Set explicit arena and shared billing database paths. Terminal/uncertain attempts are never blindly retried. All semantic review remains manual.",
     );
     return;
   }
@@ -128,13 +152,29 @@ async function main() {
   const previous: RecordFile | undefined = opts.resume
     ? JSON.parse(readFileSync(opts.resume, "utf8"))
     : undefined;
-  if (previous && (opts.cases || opts.exclude.length || opts.override))
-    throw new Error("Resume retains saved selection and override; do not supply selection options");
+  if (
+    previous &&
+    (opts.cases ||
+      opts.exclude.length ||
+      opts.override ||
+      opts.acknowledgeHeld ||
+      opts.acknowledgementReason)
+  )
+    throw new Error(
+      "Resume retains saved selection, override and acknowledgement; do not replace them",
+    );
   const executionOptions = previous?.executionOptions ?? {
     cases: opts.cases,
     exclude: opts.exclude,
     override: opts.override,
+    heldAcknowledgement: heldAcknowledgement(opts.acknowledgeHeld, opts.acknowledgementReason),
   };
+  const acknowledgement = executionOptions.heldAcknowledgement
+    ? heldAcknowledgement(
+        executionOptions.heldAcknowledgement.attemptIds,
+        executionOptions.heldAcknowledgement.reason,
+      )
+    : undefined;
   const plan = planCases(
     fixture,
     executionOptions.cases,
@@ -156,6 +196,7 @@ async function main() {
         {
           dryRun: true,
           providerRequests: 0,
+          acknowledgedHeldCount: acknowledgement?.attemptIds.length ?? 0,
           fixtureSha256: identity.fixtureSha256,
           versions: plan.flatMap((item) =>
             item.versions.map((version) => ({
@@ -235,8 +276,12 @@ async function main() {
         assertResumeExecution(record.configurations, currentConfigurations, "configuration");
       record.configurations ??= currentConfigurations;
       record.billingBefore ??= billing.getBillingSummary();
-      if (unresolvedBilling(billing.getBillingSummary()))
-        throw Object.assign(new Error(), { code: "UNRESOLVED_BILLING_STOP" });
+      record.unresolvedBillingBefore ??= billing.getUnresolvedBillingAttempts();
+      assertBillingAttemptsReviewed(
+        billing.getUnresolvedBillingAttempts(),
+        acknowledgement,
+        !previous,
+      );
       save();
       let stopBatch = false;
       for (const item of record.cases) {
@@ -311,17 +356,22 @@ async function main() {
               if (current.status === "failed")
                 throw Object.assign(new Error(), { code: "FAILED_VERSION_REVIEW_REQUIRED" });
               if (decision !== "advance") break;
-              if (unresolvedBilling(billing.getBillingSummary()))
-                throw Object.assign(new Error(), { code: "UNRESOLVED_BILLING_STOP" });
+              assertBillingAttemptsReviewed(
+                billing.getUnresolvedBillingAttempts(),
+                acknowledgement,
+              );
               const before = JSON.stringify(item.snapshot);
               item.snapshot = await runtime.advanceArena(item.arenaId!, item.owner, current.id);
               version.status = item.snapshot.versions.find(
                 (candidate) => candidate.id === version.versionId,
               )!.status;
               record.billingAfter = billing.getBillingSummary();
+              record.unresolvedBillingAfter = billing.getUnresolvedBillingAttempts();
               save();
-              if (unresolvedBilling(billing.getBillingSummary()))
-                throw Object.assign(new Error(), { code: "UNRESOLVED_BILLING_STOP" });
+              assertBillingAttemptsReviewed(
+                billing.getUnresolvedBillingAttempts(),
+                acknowledgement,
+              );
               if (version.status === "uncertain")
                 throw Object.assign(new Error(), { code: "UNRESOLVED_REQUEST_STOP" });
               if (JSON.stringify(item.snapshot) === before) break;
@@ -373,6 +423,7 @@ async function main() {
       }
       try {
         record.billingAfter = billing.getBillingSummary();
+        record.unresolvedBillingAfter = billing.getUnresolvedBillingAttempts();
       } catch (error) {
         record.failures.push({ code: safeCode(error), at: new Date().toISOString() });
       }

@@ -87,6 +87,26 @@ function sessionSecret(path, create) {
   }
 }
 
+/** Only existing proxy settings cross the wrapper boundary; preload flags and keys do not. */
+export function proxyEnvironment(inherited) {
+  const env = {};
+  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"])
+    if (typeof inherited[name] === "string" && inherited[name]) env[name] = inherited[name];
+  const bypass = new Set(
+    [
+      ...String(inherited.NO_PROXY ?? "").split(","),
+      ...String(inherited.no_proxy ?? "").split(","),
+      "127.0.0.1",
+      "localhost",
+      "::1",
+    ]
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  env.NO_PROXY = env.no_proxy = [...bypass].join(",");
+  return env;
+}
+
 /** --check validates the same launch constraints without creating data or starting an app. */
 export async function prepareLivePreview(options, dependencies = {}) {
   if ((dependencies.nodeVersion ?? process.versions.node).split(".")[0] !== "24")
@@ -149,7 +169,9 @@ export async function prepareLivePreview(options, dependencies = {}) {
   const billing = (dependencies.readBillingStatus ?? billingStatus)(billingDatabase);
   if (
     billing.usdLimitMicros !== 10_000_000 ||
-    billing.requestLimit !== 300 ||
+    !Number.isInteger(billing.requestLimit) ||
+    billing.requestLimit < 300 ||
+    billing.requestLimit > 400 ||
     billing.tokenLimit !== 5_000_000 ||
     billing.hardTotalUsdMicros !== 200_000_000 ||
     billing.developmentMaxUsdMicros !== 120_000_000 ||
@@ -158,7 +180,7 @@ export async function prepareLivePreview(options, dependencies = {}) {
     billing.revision < 1
   )
     throw new Error(
-      "Ledger must already have audited cumulative USD 10 / 300 requests / 5000000 token limits; launcher never raises them.",
+      "Ledger must already have audited cumulative USD 10 / 300–400 requests / 5000000 token limits; launcher never raises them.",
     );
   if (
     billing.committedUsdMicros >= billing.usdLimitMicros ||
@@ -169,8 +191,10 @@ export async function prepareLivePreview(options, dependencies = {}) {
   await (dependencies.assertPortFree ?? assertPortFree)(port);
   const secret = sessionSecret(sessionFile, !options.check);
   if (!options.check) mkdirSync(dirname(database), { recursive: true, mode: 0o700 });
+  const inherited = dependencies.inheritedEnv ?? process.env;
   const env = {
-    PATH: process.env.PATH,
+    PATH: inherited.PATH,
+    ...proxyEnvironment(inherited),
     NODE_ENV: "production",
     NEXT_TELEMETRY_DISABLED: "1",
     HOSTNAME: "127.0.0.1",
@@ -191,7 +215,8 @@ export async function prepareLivePreview(options, dependencies = {}) {
     ARENA_GLOBAL_BUDGET_CNY: "60",
     ARENA_MAX_CONCURRENT_CALLS: "1",
   };
-  return { release, envFile, port, commit: info.commit, sessionFile, env };
+  const args = ["--use-env-proxy", `--env-file=${envFile}`, join(release, "server.js")];
+  return { release, envFile, port, commit: info.commit, sessionFile, env, args };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -226,11 +251,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         `${values.check ? "Validated" : "Starting"} real local preview http://127.0.0.1:${config.port}; release ${config.commit}; worker disabled.`,
       );
       if (!values.check) {
-        const child = spawn(
-          process.execPath,
-          [`--env-file=${config.envFile}`, join(config.release, "server.js")],
-          { cwd: config.release, env: config.env, stdio: "inherit" },
-        );
+        const child = spawn(process.execPath, config.args, {
+          cwd: config.release,
+          env: config.env,
+          stdio: "inherit",
+        });
         let stopping = false;
         for (const signal of ["SIGINT", "SIGTERM"])
           process.on(signal, () => {

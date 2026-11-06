@@ -191,3 +191,61 @@ test("homepage opens a real recorded preview and its full local replay", async (
   expect(requests.apiReads.every((item) => item === "GET /api/health")).toBe(true);
   expect(requests.forbidden).toEqual([]);
 });
+
+test("real recorded example: mobile card return stays over its source without moving the page", async ({
+  page,
+  baseURL,
+}) => {
+  const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/examples/learning");
+  await page.getByRole("button", { name: "第 1 步", exact: true }).click();
+  const trigger = page.getByRole("button", { name: "查看第 1 步", exact: true });
+  await trigger.scrollIntoViewIfNeeded();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await trigger.click();
+  const card = page.getByRole("dialog", { name: "第 1 步 · 独立提案", exact: true });
+  await expect(card).toBeVisible();
+  await expect.poll(() => card.locator(".c-pull-face").count()).toBe(0);
+  const deckHeight = await page
+    .locator(".c-deck")
+    .evaluate((node) => node.getBoundingClientRect().height);
+  await card.getByRole("button", { name: "收起这张卡片", exact: true }).click();
+  const landing = await page.locator(".c-return-proxy").evaluate((node) => {
+    // Sample the actual flight near its end so CSS cannot silently override its transform.
+    const dialog = document.querySelector<HTMLDialogElement>(".c-pull")!;
+    for (const animation of [
+      ...dialog.getAnimations({ subtree: true }),
+      ...node.getAnimations({ subtree: true }),
+    ]) {
+      animation.pause();
+      animation.currentTime = 459;
+    }
+    const source = document.querySelector<HTMLElement>('[data-step-source="0"]')!;
+    const bounds = node.getBoundingClientRect();
+    const sourceBounds = source.getBoundingClientRect();
+    return {
+      position: getComputedStyle(node).position,
+      transform: getComputedStyle(node).transform,
+      maxCornerError: Math.max(
+        Math.abs(bounds.left - sourceBounds.left),
+        Math.abs(bounds.top - sourceBounds.top),
+        Math.abs(bounds.right - sourceBounds.right),
+        Math.abs(bounds.bottom - sourceBounds.bottom),
+      ),
+      deckHeight: document.querySelector(".c-deck")!.getBoundingClientRect().height,
+    };
+  });
+  expect(landing.position).toBe("absolute");
+  expect(landing.transform).not.toBe("none");
+  expect(landing.maxCornerError).toBeLessThan(2);
+  expect(Math.abs(landing.deckHeight - deckHeight)).toBeLessThan(1);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(card).toBeHidden();
+  await expect(page.locator(".c-return-proxy")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await noHorizontalOverflow(page);
+  expect(requests.apiReads).toEqual([]);
+  expect(requests.forbidden).toEqual([]);
+});

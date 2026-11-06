@@ -8,6 +8,7 @@
   pointer-events: none !important;
 }
 .console-shell .c-return-proxy {
+  position: absolute;
   visibility: visible;
   contain: layout paint;
 }

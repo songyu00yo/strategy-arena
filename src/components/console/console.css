@@ -3770,7 +3770,7 @@
     max-height: 200px;
     margin-bottom: 6px;
   }
-  .c-deck-card {
+  .c-deck-card[data-step-source] {
     left: auto;
   }
   .c-deck {
@@ -3778,7 +3778,7 @@
     height: auto;
     margin-bottom: 6px;
   }
-  .c-deck-card {
+  .c-deck-card[data-step-source] {
     position: static;
     width: auto;
     transform: none !important;
@@ -3791,7 +3791,7 @@
     transform: none !important;
     max-height: none;
   }
-  .c-deck-card:not(.c-deck-now) {
+  .c-deck-card[data-step-source]:not(.c-deck-now) {
     display: none;
   }
   .c-stage3 {

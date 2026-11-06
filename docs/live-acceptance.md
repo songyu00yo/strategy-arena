@@ -35,7 +35,9 @@ pnpm exec tsx scripts/live-acceptance.ts --exclude creation
 
 本机需要代理时，使用 Node.js 24 的 `--use-env-proxy`，让模型请求使用已有的 `HTTPS_PROXY` 或 `HTTP_PROXY`。预览启动器仅传递这些代理变量，并将回环地址加入 `NO_PROXY`。启动器不继承 `NODE_OPTIONS` 或外层进程的模型密钥，应用子进程从指定私有配置文件加载密钥。
 
-OpenAI 使用 `/v1/responses`，保留 `low` 推理档位、严格函数工具和 `store: false`。DeepSeek 继续使用 Chat Completions。OpenAI 配置版本为 `openai-1.1.0`；历史版本仍显示原配置，不在新版适配器下续跑旧步骤。
+OpenAI 使用 `/v1/responses`，保留 `low` 推理档位、严格函数工具和 `store: false`。DeepSeek 继续使用 Chat Completions。OpenAI 配置版本为 `openai-1.1.1`；历史版本仍显示原配置，不在新版适配器下续跑旧步骤。
+
+真实 GPT 质疑阶段曾返回 `incomplete / max_output_tokens`，输出为空，用量为零。将输出额度从 2200 提高到 6000 未解决问题。后续对照调用仅删除有限枚举中已满足的重复正则约束，保留全部允许值，调用成功。OpenAI 的严格 Schema 因此做等价简化；DeepSeek、服务端字段校验和证据引用检查保持不变。这是本次观察到的兼容现象，不代表所有截断错误都由此引起。
 
 ```sh
 pnpm exec tsx scripts/live-acceptance.ts --run --exclude creation --out artifacts/planned.json

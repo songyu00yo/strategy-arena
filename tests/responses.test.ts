@@ -95,7 +95,7 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
   it("sends the actual flat Responses schema, disables storage and accounts reasoning once", async () => {
     const fetch = mockResponse();
     const config = getModelConfig("openai");
-    expect(config.configurationVersion).toBe("openai-1.1.0");
+    expect(config.configurationVersion).toBe("openai-1.1.1");
     const result = await generateStrategy(input, config, "responses-fixture");
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
@@ -231,6 +231,28 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
     expect(billing.holdBilling).toHaveBeenCalledWith("unknown-response");
     expect(billing.settleBilling).not.toHaveBeenCalled();
   });
+  it("reports the exact allowlisted incomplete reason without assuming ordinary token exhaustion", async () => {
+    const fetch = mockResponse({
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [],
+      usage: { input_tokens: 0, output_tokens: 0, input_tokens_details: { cached_tokens: 0 } },
+    });
+    const attempt = generateStrategy(input, getModelConfig("openai"), "incomplete-schema-fixture");
+    await expect(attempt).rejects.toMatchObject({
+      uncertain: false,
+      usage: { inputTokens: 0, outputTokens: 0 },
+      message: expect.stringContaining("max_output_tokens"),
+    });
+    await expect(attempt).rejects.toThrow("结构化协议兼容问题");
+    expect(billing.settleBilling).toHaveBeenCalledWith(
+      "incomplete-schema-fixture",
+      expect.objectContaining({ amount: 0 }),
+    );
+    expect(billing.holdBilling).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves invalid function arguments only in bounded private repair feedback", async () => {
     const bad = '{"id":"A" "title":"PRIVATE_FIXTURE"}';
     const fetch = mockResponse({ output: [{ ...call(), arguments: bad }] });

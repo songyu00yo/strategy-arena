@@ -86,7 +86,7 @@ test("explicit UI fixture: restored uncertain draft blocks mutations and model c
   const recovery = intake.getByRole("region", { name: "分析暂停", exact: true });
   await expect(recovery.getByRole("alert")).toContainText("暂时没有收到完整结果");
   await expect(recovery.getByRole("alert")).toContainText("不会自动重试");
-  const details = recovery.getByRole("button", { name: "查看调用与费用说明", exact: true });
+  const details = recovery.getByRole("button", { name: /^(查看|收起)调用与费用说明$/ });
   await expect(details).toHaveAttribute("aria-expanded", "false");
   await expect(
     recovery.getByText("此草稿已暂停模型请求，等待核账。", { exact: true }),

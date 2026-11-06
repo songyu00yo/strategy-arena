@@ -122,7 +122,7 @@ export function ArenaConsole({
   }, []);
   const reveal = useCallback(() => {
     setRevealed(true);
-    if (startFromBeginning) setCursor(0);
+    if (startFromBeginning) setCursor((cursor) => (cursor === -1 ? 0 : cursor));
   }, [startFromBeginning]);
   const endFilm = useCallback(() => setFilmDone(true), []);
   const endIntro = useCallback(() => {

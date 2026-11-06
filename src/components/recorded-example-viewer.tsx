@@ -159,6 +159,10 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
   const [details, setDetails] = useState<HTMLButtonElement | null>(null);
   const [located, setLocated] = useState<string>();
   const [started, setStarted] = useState(false);
+  const replayRoot = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (started) replayRoot.current?.focus({ preventScroll: true });
+  }, [started]);
   const version = arena.versions.find((item) => item.id === versionId) ?? arena.versions[0];
   if (!version)
     return (
@@ -210,7 +214,13 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
       <a href="#recorded-replay" className="skip-link">
         跳到推演记录
       </a>
-      <main id="recorded-replay" className="recorded-replay-main">
+      <main
+        ref={replayRoot}
+        id="recorded-replay"
+        className="recorded-replay-main"
+        tabIndex={-1}
+        aria-label="真实案例回放"
+      >
         <ArenaConsole
           key={version.id}
           version={version}

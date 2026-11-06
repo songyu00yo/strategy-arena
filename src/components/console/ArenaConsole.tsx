@@ -239,8 +239,8 @@ export function ArenaConsole({
     ["成立", count("supported"), "bad"],
     ["已反驳", count("refuted"), "ok"],
     ["未决", attacks.length - count("supported") - count("refuted"), "warn"],
-    ["模型调用", used.length, ""],
-    ["Token", tokens, ""],
+    [demo ? "演示调用" : "模型调用", used.length, ""],
+    [demo ? "Token（预设）" : "Token", tokens, ""],
   ];
 
   return (
@@ -352,6 +352,7 @@ export function ArenaConsole({
         <main className="c-main">
           <RouteStage
             version={version}
+            demo={demo}
             beats={beats}
             index={index}
             speed={speed}
@@ -393,7 +394,13 @@ export function ArenaConsole({
                   delay={180}
                 />
               </div>
-              <p>{current ? current.plain : "同一模型分成五个角色，替你比较三条路线。"}</p>
+              <p>
+                {current
+                  ? current.plain
+                  : demo
+                    ? "等待演示步骤，三条路线与步骤内容均为预设，未调用模型。"
+                    : "同一模型分成五个角色，替你比较三条路线。"}
+              </p>
               {canReturn && (
                 <button type="button" className="c-back" onClick={() => goTo(last)}>
                   回到结果 →

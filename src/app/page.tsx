@@ -79,11 +79,13 @@ function conditionChanges(parent: Challenge, current: Challenge) {
 }
 /** Failed, uncertain and paused differ in what the user can safely do next, so they differ here. */
 function RunNotice({
+  demo,
   version,
   historical,
   busy,
   onRefresh,
 }: {
+  demo: boolean;
   version: ArenaVersion;
   historical: boolean;
   busy: boolean;
@@ -100,7 +102,9 @@ function RunNotice({
     },
     paused: {
       title: "本轮已停止",
-      next: "不再发起新步骤。已发出的请求仍可能返回并计费，迟到的结果归入这一版本。",
+      next: demo
+        ? "演示已停止，已展示的预设内容会保留。未调用模型，不产生费用。"
+        : "不再发起新步骤。已发出的请求仍可能返回并计费，迟到的结果归入这一版本。",
     },
   }[version.status as "failed" | "uncertain" | "paused"];
   if (!copy && !version.error) return null;
@@ -525,6 +529,7 @@ export default function Page() {
                       </div>
                     )}
                     <RunNotice
+                      demo={demo}
                       version={selected}
                       historical={historical}
                       busy={arena.busy}
@@ -770,7 +775,9 @@ export default function Page() {
           <div className="stop-dialog">
             <p>系统将停止发起后续推演步骤，保留已完成的提案与证据。</p>
             <p>
-              已经发出的模型请求无法撤回，仍可能完成并产生费用；如果裁决尚未形成，本轮会明确保留为未完成状态。
+              {demo
+                ? "演示内容由脚本预设，停止不会产生模型调用或费用。如果裁决尚未展示，本轮会保留为未完成状态。"
+                : "已经发出的模型请求无法撤回，仍可能完成并产生费用；如果裁决尚未形成，本轮会明确保留为未完成状态。"}
             </p>
             <div>
               <button

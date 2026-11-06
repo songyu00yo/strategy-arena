@@ -282,6 +282,8 @@ describe("strict provider schema", () => {
       properties: { targetStrategyId: { enum: ["A"] }, targetClaimId: { enum: ["A1"] } },
     });
     const body = buildRequestBody("revise", current);
+    if (!("messages" in body) || !("tools" in body))
+      throw new Error("Expected DeepSeek strict chat body");
     expect(body.tools?.[0].function.parameters).toEqual(revise);
     expect(body.messages[0].content).toContain("不得为它生成 responses 项");
     expect(body.messages[0].content).toContain('attackId=["attack-C"]');

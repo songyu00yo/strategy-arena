@@ -172,6 +172,17 @@ export function openBillingLedger(options: BillingOptions) {
     close: () => connection.close(),
     getAttempt,
     summary,
+    unresolvedAttempts() {
+      return connection
+        .prepare(
+          "SELECT attempt_id AS attemptId,state,reserved_usd_micros AS reservedUsdMicros FROM billing_attempts WHERE state IN ('reserved','held') ORDER BY attempt_id",
+        )
+        .all() as unknown as {
+        attemptId: string;
+        state: "reserved" | "held";
+        reservedUsdMicros: number;
+      }[];
+    },
     reserve(input: BillingReservation) {
       identifier(input.attemptId, "attempt ID");
       identifier(input.provider, "provider");
@@ -538,3 +549,7 @@ export const holdBilling = (attemptId: string) => withLedger((ledger) => ledger.
 export const getBillingSummary = () => withLedger((ledger) => ledger.summary());
 export const getBillingAttempt = (attemptId: string) =>
   withLedger((ledger) => ledger.getAttempt(attemptId));
+
+/** Inspect unresolved identities without settling, releasing, retrying or changing any attempt. */
+export const getUnresolvedBillingAttempts = () =>
+  withLedger((ledger) => ledger.unresolvedAttempts());

@@ -168,24 +168,15 @@ describe("provider isolation and native billing with explicit test doubles", () 
     Response.json({
       id: "gpt-fixture",
       model: "gpt-6.1-terra",
-      choices: [
-        {
-          finish_reason: "tool_calls",
-          message: {
-            tool_calls: [
-              {
-                type: "function",
-                function: { name: "submit_propose", arguments: content },
-              },
-            ],
-          },
-        },
+      status: "completed",
+      output: [
+        { type: "function_call", name: "submit_propose", arguments: content, status: "completed" },
       ],
       usage: {
-        prompt_tokens: 1000,
-        completion_tokens: 500,
-        prompt_tokens_details: { cached_tokens: 200 },
-        completion_tokens_details: { reasoning_tokens: 300 },
+        input_tokens: 1000,
+        output_tokens: 500,
+        input_tokens_details: { cached_tokens: 200 },
+        output_tokens_details: { reasoning_tokens: 300 },
       },
     });
   it("separates credentials, model parameters and currency across providers", async () => {
@@ -207,11 +198,19 @@ describe("provider isolation and native billing with explicit test doubles", () 
     expect(JSON.stringify([gpt, ds])).not.toContain("fake-");
     const body = buildRequestBody("propose", input, StrategySchema, gpt);
     expect(body).toMatchObject({
-      max_completion_tokens: 2200,
-      reasoning_effort: "low",
+      max_output_tokens: 2200,
+      reasoning: { effort: "low" },
+      store: false,
       parallel_tool_calls: false,
     });
-    for (const field of ["temperature", "max_tokens", "thinking"])
+    for (const field of [
+      "temperature",
+      "max_tokens",
+      "thinking",
+      "max_completion_tokens",
+      "reasoning_effort",
+      "messages",
+    ])
       expect(body).not.toHaveProperty(field);
     const dsBody = buildRequestBody("propose", input, StrategySchema, ds);
     expect(dsBody).toMatchObject({
@@ -232,7 +231,7 @@ describe("provider isolation and native billing with explicit test doubles", () 
     vi.stubGlobal("fetch", fn);
     const result = await generateStrategy(input, gpt, "gpt-attempt-fixture");
     await generateStrategy(input, ds, "ds-attempt-fixture");
-    expect(fn.mock.calls[0][0]).toBe("https://api.openai.com/v1/chat/completions");
+    expect(fn.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
     expect(fn.mock.calls[0][1].headers.Authorization).toBe("Bearer fake-openai-key");
     expect(fn.mock.calls[1][1].headers.Authorization).toBe("Bearer fake-deepseek-key");
     expect(result.usage).toMatchObject({

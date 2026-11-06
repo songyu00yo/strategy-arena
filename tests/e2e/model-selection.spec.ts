@@ -96,7 +96,7 @@ test("explicit UI fixture: choose a concrete model, inspect its reason and prese
   await page.getByRole("button", { name: /^选择模型，当前/ }).click();
   await page.getByRole("button", { name: "查看选择依据", exact: true }).click();
   await expect(
-    page.getByText("你手动选择了 DeepSeek V4.1 Flash。", { exact: false }),
+    page.getByText("按你的选择使用 DeepSeek V4.1 Flash。", { exact: false }),
   ).toBeVisible();
   await confirmFixtureIntake(page, "测试：一个月内完成一门课程并做出小项目");
   expect(requests[0].modelMode).toBe("deepseek-flash");

@@ -63,6 +63,7 @@ export function ArenaConsole({
   conditions,
   selectedAttack,
   historical,
+  startFromBeginning = false,
   busy,
   onEvidence,
   onClaim,
@@ -76,18 +77,19 @@ export function ArenaConsole({
   conditions: React.ReactNode;
   selectedAttack?: string;
   historical: boolean;
+  startFromBeginning?: boolean;
   busy: boolean;
   onEvidence: (attack: Attack) => void;
   onClaim: (strategy: Strategy, claimId: string) => void;
 }) {
   const beats = beatsOf(version);
   const last = beats.length - 1;
-  const [cursor, setCursor] = useState<number | null>(null);
-  const [playing, setPlaying] = useState(false);
+  const [cursor, setCursor] = useState<number | null>(startFromBeginning ? -1 : null);
+  const [playing, setPlaying] = useState(startFromBeginning);
   const [speed, setSpeed] = useState(1);
-  const [intro, setIntro] = useState(false);
+  const [intro, setIntro] = useState(startFromBeginning);
   const [revealed, setRevealed] = useState(false);
-  const [motion, setMotion] = useState(false);
+  const [motion, setMotion] = useState(startFromBeginning);
   const [seeking, setSeeking] = useState(false);
   const [playbackPaused, setPlaybackPaused] = useState(false);
   const [filmDone, setFilmDone] = useState(false);
@@ -118,7 +120,10 @@ export function ArenaConsole({
     });
     return () => cancelAnimationFrame(frame);
   }, []);
-  const reveal = useCallback(() => setRevealed(true), []);
+  const reveal = useCallback(() => {
+    setRevealed(true);
+    if (startFromBeginning) setCursor(0);
+  }, [startFromBeginning]);
   const endFilm = useCallback(() => setFilmDone(true), []);
   const endIntro = useCallback(() => {
     setIntro(false);
@@ -271,8 +276,8 @@ export function ArenaConsole({
     ["成立", count("supported"), "bad"],
     ["已反驳", count("refuted"), "ok"],
     ["未决", attacks.length - count("supported") - count("refuted"), "warn"],
-    [demo ? "演示调用" : "模型调用", used.length, ""],
-    [demo ? "Token（预设）" : "Token", tokens, ""],
+    [demo ? "演示调用" : startFromBeginning ? "原记录调用" : "模型调用", used.length, ""],
+    [demo ? "Token（预设）" : startFromBeginning ? "原记录 Token" : "Token", tokens, ""],
   ];
 
   // Keep controls mounted. Interruptions start from the displayed pose, not the start keyframe.
@@ -341,11 +346,12 @@ export function ArenaConsole({
           <div className="c-time" role="group" aria-label="推演步骤">
             {STAGES.map((stage) => {
               const own = steps.filter((s) => s.stage === stage);
+              const list = beats.flatMap((b, i) => (b.stage === stage ? [{ b, i }] : []));
               const done =
                 own.length > 0 &&
-                own.every((s) => s.status === "completed" || s.status === "skipped");
+                own.every((s) => s.status === "completed" || s.status === "skipped") &&
+                (!startFromBeginning || list.every(({ i }) => i <= index));
               const bad = own.some((s) => s.status === "failed" || s.status === "uncertain");
-              const list = beats.flatMap((b, i) => (b.stage === stage ? [{ b, i }] : []));
               return (
                 <div
                   key={stage}

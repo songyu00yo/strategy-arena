@@ -293,14 +293,81 @@ export function StepCard({
   const known = reviewing ? beats : beats.slice(0, last + 1);
   const ref = useRef<HTMLDialogElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  const pageSnapshot = useRef<HTMLElement | null>(null);
+  const previousPage = useRef(index);
+  const pageScroll = useRef(0);
+  const pageLayers = useRef<HTMLElement[]>([]);
+  const pageAnimations = useRef<Animation[]>([]);
+  const pageGeneration = useRef(0);
+  const pendingHeight = useRef<number | null>(null);
   const showing = useRef(index);
   const leaving = useRef(false);
   const first = useRef(true);
   const flight = useRef<Flight | null>(null);
   const proxy = useRef<HTMLElement | null>(null);
-  const paging = useRef<Animation | null>(null);
   const closingAction = useRef<(() => void) | null>(null);
   const gapOrigins = useRef<{ card: HTMLElement; x: number; y: number }[]>([]);
+
+  const measurePage = () => {
+    const page = body.current;
+    const window = viewport.current;
+    const dialog = ref.current;
+    if (!page || !window || !dialog) return 0;
+    // Measure only the live page. Retiring pages are absolute and never change the dialog's size.
+    const height = page.style.height;
+    page.style.height = "auto";
+    const natural = page.scrollHeight;
+    const chrome = dialog.offsetHeight - window.offsetHeight;
+    const limit = Number.parseFloat(getComputedStyle(dialog).maxHeight);
+    page.style.height = height;
+    return Math.max(
+      0,
+      Math.min(natural, (Number.isFinite(limit) ? limit : innerHeight * 0.86) - chrome),
+    );
+  };
+
+  const resizePage = (height: number, animate = true) => {
+    const window = viewport.current;
+    if (!window) return;
+    const from = window.getBoundingClientRect().height;
+    window.style.height = `${height}px`;
+    if (!animate || reducedMotion() || Math.abs(from - height) < 0.5) return;
+    const animation = window.animate([{ height: `${from}px` }, { height: `${height}px` }], {
+      duration: 480,
+      easing: "cubic-bezier(.22,1,.3,1)",
+      fill: "both",
+    });
+    pageAnimations.current.push(animation);
+    animation.onfinish = () => animation.cancel();
+  };
+
+  const stopPaging = (preserve: boolean) => {
+    const window = viewport.current;
+    const nodes = new Set<HTMLElement>();
+    pageAnimations.current.forEach((animation) => {
+      const target = (animation.effect as KeyframeEffect | null)?.target;
+      if (target instanceof HTMLElement) nodes.add(target);
+    });
+    const poses = [...nodes].map((node) => {
+      const style = getComputedStyle(node);
+      return { node, transform: style.transform, opacity: style.opacity, height: style.height };
+    });
+    pageAnimations.current.forEach((animation) => animation.cancel());
+    pageAnimations.current = [];
+    poses.forEach(({ node, transform, opacity, height }) => {
+      if (node === window) node.style.height = height;
+      else {
+        node.style.transform = preserve ? transform : "";
+        node.style.opacity = preserve ? opacity : "";
+      }
+    });
+    window?.classList.remove("is-paging");
+    if (!preserve) {
+      pageLayers.current.forEach((layer) => layer.remove());
+      pageLayers.current = [];
+    }
+  };
 
   const clearFlight = () => {
     stopFlight(flight.current);
@@ -308,6 +375,11 @@ export function StepCard({
     proxy.current?.remove();
     proxy.current = null;
     ref.current?.querySelector(".c-pull-face")?.remove();
+    if (!leaving.current && pendingHeight.current !== null) {
+      const height = pendingHeight.current;
+      pendingHeight.current = null;
+      resizePage(height);
+    }
   };
 
   const fly = (opening: boolean, done: () => void, continuing = false) => {
@@ -477,10 +549,15 @@ export function StepCard({
       );
     deckTransitions.forEach((animation) => animation.pause());
     el.showModal();
+    resizePage(measurePage(), false);
     markDeck(index, true, DRAW_MS);
     if (!reducedMotion()) fly(true, clearFlight);
     const onResize = () => {
-      if (!flight.current) return;
+      if (!flight.current) {
+        stopPaging(false);
+        resizePage(measurePage(), false);
+        return;
+      }
       // A changed viewport invalidates the flight. Preserve its current visible pose before fading.
       const closing = closingAction.current;
       if (!closing) {
@@ -524,8 +601,10 @@ export function StepCard({
     const media = matchMedia("(prefers-reduced-motion: reduce)");
     const settlePreference = () => {
       if (!media.matches) return;
-      paging.current?.cancel();
+      stopPaging(false);
+      pendingHeight.current = null;
       clearFlight();
+      resizePage(measurePage(), false);
       el.style.transform = "";
       el.style.opacity = "";
       if (closingAction.current) closingAction.current();
@@ -535,7 +614,8 @@ export function StepCard({
     return () => {
       removeEventListener("resize", onResize);
       media.removeEventListener("change", settlePreference);
-      paging.current?.cancel();
+      stopPaging(false);
+      pendingHeight.current = null;
       clearFlight();
       markDeck(null, false, 0);
       document
@@ -566,7 +646,9 @@ export function StepCard({
     if (leaving.current) return;
     leaving.current = true;
     closingAction.current = then;
-    paging.current?.cancel();
+    // Retain the exact in-flight page composition until the geometric return covers it.
+    pendingHeight.current = null;
+    stopPaging(true);
     gapOrigins.current = [
       ...document.querySelectorAll<HTMLElement>("[data-step-source].past-gap"),
     ].map((card) => {
@@ -579,25 +661,122 @@ export function StepCard({
   };
 
   useLayoutEffect(() => {
+    const page = body.current;
+    const window = viewport.current;
+    if (!page || !window) return;
+    const snapshot = () => {
+      const clone = page.cloneNode(true) as HTMLElement;
+      clone.style.transform = "";
+      clone.style.opacity = "";
+      clone.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node) => {
+        node.style.transform = "";
+        node.style.opacity = "";
+      });
+      pageSnapshot.current = clone;
+    };
     if (first.current) {
       first.current = false;
+      snapshot();
       return;
     }
-    paging.current?.cancel();
-    if (reducedMotion() || leaving.current) return;
-    // If a page changes mid-draw, continue from the current pose instead of snapping fully open.
-    if (flight.current) fly(true, clearFlight, true);
-    paging.current =
-      body.current?.animate(
+    if (leaving.current) return;
+    const generation = ++pageGeneration.current;
+    const direction = index > previousPage.current ? 1 : -1;
+    previousPage.current = index;
+    const pose = getComputedStyle(page);
+    const from = { transform: pose.transform, opacity: pose.opacity };
+    const oldHeight = window.getBoundingClientRect().height;
+    const oldScroll = pageScroll.current;
+    stopPaging(true);
+    page.style.transform = "";
+    page.style.opacity = "";
+    page.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node) => {
+      node.style.transform = "";
+      node.style.opacity = "";
+    });
+    if (reducedMotion()) {
+      stopPaging(false);
+      page.scrollTop = 0;
+      pageScroll.current = 0;
+      resizePage(measurePage(), false);
+      snapshot();
+      return;
+    }
+    const outgoing = pageSnapshot.current;
+    if (outgoing) {
+      outgoing.classList.add("c-step-leaving");
+      outgoing.setAttribute("aria-hidden", "true");
+      outgoing.inert = true;
+      outgoing.style.height = `${oldHeight}px`;
+      outgoing.style.transform = from.transform;
+      outgoing.style.opacity = from.opacity;
+      window.append(outgoing);
+      outgoing.scrollTop = oldScroll;
+      pageLayers.current.push(outgoing);
+    }
+    // Preserve the visible layers when a second click arrives; old text is never replaced in place.
+    while (pageLayers.current.length > 2) pageLayers.current.shift()?.remove();
+    window.classList.add("is-paging");
+    const add = (node: HTMLElement, frames: Keyframe[], options: KeyframeAnimationOptions) => {
+      const animation = node.animate(frames, { fill: "both", ...options });
+      pageAnimations.current.push(animation);
+      return animation;
+    };
+    pageLayers.current.forEach((layer) => {
+      const style = getComputedStyle(layer);
+      const exit = add(
+        layer,
         [
-          { transform: "translateX(12px)", opacity: 0 },
+          { transform: style.transform, opacity: style.opacity },
+          {
+            transform: `translateX(${-direction * 54}px) rotateY(${direction * 3}deg)`,
+            opacity: 0,
+          },
+        ],
+        { duration: 300, easing: "cubic-bezier(.4,0,.2,1)" },
+      );
+      exit.onfinish = () => {
+        layer.remove();
+        pageLayers.current = pageLayers.current.filter((item) => item !== layer);
+        exit.cancel();
+      };
+    });
+    page.scrollTop = 0;
+    pageScroll.current = 0;
+    const targetHeight = measurePage();
+    // The draw keeps its physical card dimensions until it lands. Paging can run inside it meanwhile.
+    if (flight.current) pendingHeight.current = targetHeight;
+    else resizePage(targetHeight);
+    snapshot();
+    const enter = add(
+      page,
+      [
+        { transform: `translateX(${direction * 48}px) rotateY(${-direction * 4}deg)`, opacity: 0 },
+        {
+          transform: `translateX(${-direction * 4}px) rotateY(${direction * 0.25}deg)`,
+          opacity: 1,
+          offset: 0.72,
+        },
+        { transform: "none", opacity: 1 },
+      ],
+      { duration: 560, easing: "cubic-bezier(.16,1,.3,1)" },
+    );
+    page.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node, row) => {
+      const reveal = add(
+        node,
+        [
+          { transform: `translate(${direction * 10}px,8px)`, opacity: 0 },
           { transform: "none", opacity: 1 },
         ],
-        { duration: 240, easing: "cubic-bezier(.2,.8,.3,1)" },
-      ) ?? null;
-    return () => paging.current?.cancel();
-    // Flight inputs are read from refs; only a selected-record change starts paging.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        { duration: 390, delay: 65 + Math.min(row, 6) * 26, easing: "cubic-bezier(.16,1,.3,1)" },
+      );
+      reveal.onfinish = () => reveal.cancel();
+    });
+    enter.onfinish = () => {
+      enter.cancel();
+      if (pageGeneration.current === generation) window.classList.remove("is-paging");
+    };
+    // On the next commit we sample these animations before cancelling, including rapid reversals.
   }, [index]);
 
   const verified = beat.attack && known.some((b) => b.id === `v:${beat.attack!.id}`);
@@ -633,16 +812,24 @@ export function StepCard({
           <X size={17} />
         </button>
       </div>
-      <div className="c-step" ref={body}>
-        <h3>{beat.title}</h3>
-        <dl>
-          {rowsOf(version, beat, known).map((row) => (
-            <div key={row.label} className={row.tone}>
-              <dt>{row.label}</dt>
-              <dd>{row.text}</dd>
-            </div>
-          ))}
-        </dl>
+      <div className="c-step-window" ref={viewport}>
+        <div
+          className="c-step"
+          ref={body}
+          onScroll={() => {
+            pageScroll.current = body.current?.scrollTop ?? 0;
+          }}
+        >
+          <h3>{beat.title}</h3>
+          <dl>
+            {rowsOf(version, beat, known).map((row) => (
+              <div key={row.label} className={row.tone}>
+                <dt>{row.label}</dt>
+                <dd>{row.text}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       </div>
       <div className="actions">
         <button

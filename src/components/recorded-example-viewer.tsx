@@ -1,16 +1,152 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, FileText, History } from "lucide-react";
-import type { Attack } from "@/lib/contracts";
+import { ArrowLeft, ArrowRight, FileText, History, Pause, Play } from "lucide-react";
+import type { Attack, ArenaVersion } from "@/lib/contracts";
 import type { RecordedExamplePayload } from "@/lib/recorded-examples";
+import { MODEL_CATALOG } from "@/lib/model-catalog";
 import { ArenaConsole } from "./console/ArenaConsole";
 import { EvidenceDrawer } from "./evidence-drawer";
 import { Modal } from "./modal";
 import { ClickFx, reducedMotion } from "./console/effects";
 import "./console/console.css";
 import "./recorded-example-viewer.css";
+
+function RecordedExampleEntry({
+  title,
+  version,
+  modelId,
+  onStart,
+}: {
+  title: string;
+  version: ArenaVersion;
+  modelId: string;
+  onStart: () => void;
+}) {
+  const [paused, setPaused] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const form = useRef<HTMLFormElement>(null);
+  const startButton = useRef<HTMLButtonElement>(null);
+  const started = useRef(false);
+  const remaining = useRef(5200);
+  const exit = useRef<Animation | null>(null);
+  useEffect(() => {
+    const visibility = () => setHidden(document.hidden);
+    visibility();
+    document.addEventListener("visibilitychange", visibility);
+    return () => document.removeEventListener("visibilitychange", visibility);
+  }, []);
+  useEffect(() => {
+    if (paused || hidden || leaving) return;
+    const began = performance.now();
+    const timer = setTimeout(() => startButton.current?.click(), remaining.current);
+    return () => {
+      clearTimeout(timer);
+      remaining.current = Math.max(0, remaining.current - (performance.now() - began));
+    };
+  }, [paused, hidden, leaving]);
+  useEffect(() => {
+    const preference = matchMedia("(prefers-reduced-motion: reduce)");
+    const settle = () => {
+      if (preference.matches) exit.current?.finish();
+    };
+    preference.addEventListener("change", settle);
+    return () => {
+      preference.removeEventListener("change", settle);
+      exit.current?.cancel();
+    };
+  }, []);
+  const begin = () => {
+    if (started.current) return;
+    started.current = true;
+    setLeaving(true);
+    if (!form.current || reducedMotion()) return onStart();
+    const animation = form.current.animate(
+      [
+        { opacity: 1, transform: "translateY(0) scale(1)" },
+        { opacity: 0, transform: "translateY(-30px) scale(.97)" },
+      ],
+      { duration: 620, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
+    );
+    exit.current = animation;
+    animation.onfinish = onStart;
+  };
+  const { challenge } = version;
+  const fields = [
+    ["硬性限制", challenge.constraints],
+    ["偏好", challenge.preferences],
+    ["备选方案", challenge.options.join("\n")],
+    ["提供的材料", challenge.materials],
+  ].filter(([, value]) => value);
+  return (
+    <div className="console-shell home recorded-entry-shell">
+      <ClickFx />
+      <header className="site-header">
+        <Link href="/examples" className="text-button">
+          <ArrowLeft size={16} /> 返回案例
+        </Link>
+        <span>真实案例回放 · 新增用量为 0</span>
+      </header>
+      <main className="recorded-entry-main">
+        <p className="recorded-entry-eyebrow">先看当时填写的内容</p>
+        <h1>{title}</h1>
+        <p>接下来会自动触发“开始分析”，从第一步播放当时的真实推演。</p>
+        <form
+          ref={form}
+          className="recorded-entry-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            begin();
+          }}
+          aria-label="案例原始填写内容"
+          aria-busy={leaving}
+        >
+          <label className="recorded-entry-goal">
+            <span>你想解决什么问题？</span>
+            <textarea readOnly value={challenge.goal} rows={4} onFocus={() => setPaused(true)} />
+          </label>
+          <dl className="recorded-entry-fields">
+            {fields.map(([label, value], index) => (
+              <div key={label} style={{ animationDelay: `${180 + index * 100}ms` }}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+          {(challenge.budget !== null || challenge.timeHours !== null) && (
+            <p className="recorded-entry-limits">
+              {challenge.budget !== null && <span>预算上限 ¥{challenge.budget}</span>}
+              {challenge.timeHours !== null && <span>可用时间 {challenge.timeHours} 小时</span>}
+            </p>
+          )}
+          <footer className="recorded-entry-actions">
+            <span>{MODEL_CATALOG.find((model) => model.id === modelId)?.label ?? modelId}</span>
+            <button
+              type="button"
+              className="text-button"
+              disabled={leaving}
+              onClick={() => setPaused((value) => !value)}
+            >
+              {paused ? <Play size={14} /> : <Pause size={14} />}
+              {paused ? "继续自动开始" : "暂停自动开始"}
+            </button>
+            <button
+              ref={startButton}
+              type="submit"
+              className={`primary-button recorded-entry-start ${paused || hidden ? "is-paused" : ""}`}
+              disabled={leaving}
+            >
+              <ArrowRight size={17} /> 开始分析
+            </button>
+          </footer>
+        </form>
+        <p className="recorded-entry-footnote">播放已保存的内容，新增模型调用与 Token 均为 0。</p>
+      </main>
+    </div>
+  );
+}
 
 export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePayload }) {
   const { metadata, arena } = payload;
@@ -22,6 +158,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
   } | null>(null);
   const [details, setDetails] = useState<HTMLButtonElement | null>(null);
   const [located, setLocated] = useState<string>();
+  const [started, setStarted] = useState(false);
   const version = arena.versions.find((item) => item.id === versionId) ?? arena.versions[0];
   if (!version)
     return (
@@ -29,6 +166,15 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
         <h1>这份示例没有可回看的版本</h1>
         <Link href="/">返回首页</Link>
       </main>
+    );
+  if (!started)
+    return (
+      <RecordedExampleEntry
+        title={metadata.title}
+        version={version}
+        modelId={metadata.modelId}
+        onStart={() => setStarted(true)}
+      />
     );
   const activeEvidence = evidence?.versionId === version.id ? evidence : null;
   const date = new Date(metadata.generatedAt).toLocaleDateString("zh-CN", {
@@ -72,6 +218,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           events={arena.events.filter((event) => event.versionId === version.id)}
           demo={false}
           historical
+          startFromBeginning
           busy={false}
           selectedAttack={located}
           onEvidence={openEvidence}
@@ -127,7 +274,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           }
           notices={
             <p className="recorded-replay-notice">
-              示例问题为预设，方案来自真实模型。用播放按钮回看当时的步骤。
+              正在回放已保存的真实推演 · 新增模型调用与 Token 均为 0。
             </p>
           }
         />

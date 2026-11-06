@@ -24,3 +24,39 @@
     transition-duration: 0s;
   }
 }
+
+/* A fixed reading viewport carries both pages; only the incoming page is accessible. */
+.console-shell .c-pull .c-step-window {
+  position: relative;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+  perspective: 1400px;
+}
+.console-shell .c-step-window > .c-step {
+  box-sizing: border-box;
+  position: relative;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: 50% 50%;
+}
+.console-shell .c-step-window > .c-step-leaving {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+.console-shell .c-step-window.is-paging > .c-step {
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-shell .c-step-window.is-paging > .c-step {
+    will-change: auto;
+  }
+}

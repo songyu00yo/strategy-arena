@@ -401,29 +401,10 @@ export default function Page() {
                     </div>
                   )}
                 </div>
-                {!demo && (
-                  <a
-                    className="text-button h-examples-link"
-                    href="#recorded-examples"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      document.getElementById("recorded-examples")?.scrollIntoView({
-                        behavior: reducedMotion() ? "auto" : "smooth",
-                        block: "start",
-                      });
-                    }}
-                  >
-                    先看看真实示例 <ArrowRight size={14} />
-                  </a>
-                )}
+                {!demo && <RecordedExamples launcher />}
               </section>
               <HomeFlow />
             </div>
-            {!demo && (
-              <div id="recorded-examples">
-                <RecordedExamples />
-              </div>
-            )}
           </>
         ) : (
           selected && (

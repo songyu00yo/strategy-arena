@@ -83,9 +83,20 @@ test("explicit UI fixture: restored uncertain draft blocks mutations and model c
   });
   await page.goto("/");
   const intake = page.getByRole("region", { name: "准备一场推演", exact: true });
-  await expect(intake.getByRole("alert")).toContainText("此草稿已暂停模型请求，等待核账。");
-  await expect(intake.getByRole("alert")).toContainText("切换模型不能解除暂停");
-  await expect(intake.getByRole("alert")).toContainText("原来的调用记录和预留额度仍会保留");
+  const recovery = intake.getByRole("region", { name: "分析暂停", exact: true });
+  await expect(recovery.getByRole("alert")).toContainText("暂时没有收到完整结果");
+  await expect(recovery.getByRole("alert")).toContainText("不会自动重试");
+  const details = recovery.getByRole("button", { name: "查看调用与费用说明", exact: true });
+  await expect(details).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    recovery.getByText("此草稿已暂停模型请求，等待核账。", { exact: true }),
+  ).toBeHidden();
+  await details.click();
+  await expect(details).toHaveAttribute("aria-expanded", "true");
+  await expect(recovery).toContainText("此草稿已暂停模型请求，等待核账。");
+  await expect(recovery).toContainText("切换模型不能解除暂停");
+  await expect(recovery).toContainText("原来的调用记录和预留额度仍会保留");
+  await expect(recovery).toContainText(old.error!);
   await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeDisabled();
   await expect(
     page.getByRole("textbox", { name: "你想解决什么问题？", exact: true }),
@@ -123,9 +134,15 @@ test("explicit UI fixture: restored uncertain draft blocks mutations and model c
   expect(analyses).toEqual([]);
   expect(await page.evaluate((key) => localStorage.getItem(key), intakeStorageKey)).toBe(old.id);
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
-  await page
-    .getByRole("textbox", { name: "你想解决什么问题？", exact: true })
-    .fill("测试：另建一个独立草稿，不重放上一份未知请求");
+  const newGoal = page.getByRole("textbox", { name: "你想解决什么问题？", exact: true });
+  await expect(newGoal).toHaveValue(old.goal);
+  await expect(newGoal).toHaveJSProperty("readOnly", false);
+  await expect(newGoal).toBeFocused();
+  await expect(recovery).toHaveCount(0);
+  expect(mutations).toEqual([]);
+  expect(analyses).toEqual([]);
+  expect(await page.evaluate((key) => localStorage.getItem(key), intakeStorageKey)).toBeNull();
+  await newGoal.fill("测试：另建一个独立草稿，不重放上一份未知请求");
   await page.getByRole("button", { name: "开始分析", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "这是我们理解的任务。", exact: true }),
@@ -166,9 +183,10 @@ test("explicit UI fixture: a newly uncertain analysis cannot be replayed after r
     .getByRole("textbox", { name: "你想解决什么问题？", exact: true })
     .fill("测试：分析返回未知状态后等待核账，禁止重复模型调用");
   await page.getByRole("button", { name: "开始分析", exact: true }).click();
-  await expect(page.getByRole("region", { name: "准备一场推演" }).getByRole("alert")).toContainText(
-    "等待核账",
-  );
+  const recovery = page.getByRole("region", { name: "分析暂停", exact: true });
+  await expect(recovery.getByRole("alert")).toContainText("本次分析是否完成还待确认");
+  await recovery.getByRole("button", { name: "查看调用与费用说明", exact: true }).click();
+  await expect(recovery).toContainText("等待核账");
   await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeDisabled();
   expect(analyzes).toBe(1);
   await page.locator(".gi-composer").dispatchEvent("submit");

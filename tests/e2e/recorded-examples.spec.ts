@@ -49,6 +49,19 @@ for (const example of RECORDED_EXAMPLES) {
     await page.goto(`/examples/${example.slug}`);
     await expect(page.getByRole("heading", { name: example.title, exact: true })).toBeVisible();
     await expect(
+      page.getByRole("textbox", { name: "你想解决什么问题？", exact: true }),
+    ).toHaveValue(version.challenge.goal);
+    await page.getByRole("button", { name: "暂停自动开始", exact: true }).click();
+    await page.getByRole("button", { name: "开始分析", exact: true }).click();
+    await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    await expect(
+      page.getByRole("heading", { name: version.verdict!.headline, exact: true }),
+    ).toBeHidden();
+    await page.keyboard.press("End");
+    await expect(
       page.getByRole("heading", { name: version.verdict!.headline, exact: true }),
     ).toBeVisible();
     // The compact mobile header omits the secondary badge; the full replay notice stays visible.
@@ -147,8 +160,8 @@ for (const example of RECORDED_EXAMPLES) {
     await page.getByRole("link", { name: "返回示例", exact: true }).click();
     await expect(page).toHaveURL(/\/examples$/);
     await expect(
-      page.getByRole("button", {
-        name: `预览${example.direction}示例：${example.title}`,
+      page.getByRole("link", {
+        name: `播放${example.direction}案例：${example.title}`,
         exact: true,
       }),
     ).toBeVisible();
@@ -158,7 +171,7 @@ for (const example of RECORDED_EXAMPLES) {
   });
 }
 
-test("homepage opens a real recorded preview and its full local replay", async ({
+test("homepage keeps examples hidden until requested, then opens an input-first real replay", async ({
   page,
   baseURL,
 }) => {
@@ -167,28 +180,70 @@ test("homepage opens a real recorded preview and its full local replay", async (
   const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin, true);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  const entry = page.getByRole("button", {
-    name: `预览${example.direction}示例：${example.title}`,
-    exact: true,
-  });
+  await expect(page.getByRole("region", { name: "选择真实案例" })).toHaveCount(0);
+  const entry = page.getByRole("button", { name: "先看真实案例", exact: true });
   await entry.focus();
   await page.keyboard.press("Enter");
-  const preview = page.getByRole("dialog", { name: example.title, exact: true });
-  await expect(preview).toBeVisible();
-  await expect(preview).toContainText(payload.arena.versions.at(-1)!.verdict!.headline);
-  await preview.getByRole("button", { name: "来源与适用范围", exact: true }).click();
-  await expect(
-    preview.getByText("示例问题为预设，方案来自真实模型。", { exact: true }),
-  ).toBeVisible();
+  const chooser = page.getByRole("dialog", { name: "先看一场真实推演", exact: true });
+  await expect(chooser).toBeVisible();
+  await expect(chooser.getByRole("link")).toHaveCount(RECORDED_EXAMPLES.length);
   await page.keyboard.press("Escape");
-  await expect(preview).toBeHidden();
+  await expect(chooser).toBeHidden();
   await expect(entry).toBeFocused();
   await entry.click();
-  await preview.getByRole("link", { name: "回看完整推演", exact: true }).click();
+  await chooser
+    .getByRole("link", { name: `播放${example.direction}案例：${example.title}`, exact: true })
+    .click();
   await expect(page).toHaveURL(new RegExp(`/examples/${example.slug}$`));
-  await expect(page.getByRole("heading", { name: example.title, exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "你想解决什么问题？", exact: true })).toHaveValue(
+    payload.arena.versions[0].challenge.goal,
+  );
+  await expect(page.locator(".c-root")).toHaveCount(0);
+  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+  await expect(
+    page.getByRole("heading", { name: payload.arena.versions[0].verdict!.headline, exact: true }),
+  ).toBeHidden();
   await page.waitForLoadState("networkidle");
   expect(requests.apiReads.every((item) => item === "GET /api/health")).toBe(true);
+  expect(requests.forbidden).toEqual([]);
+});
+
+test("real recorded example automatically starts from empty progress and plays every stage to its result", async ({
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(90_000);
+  const payload = recording("learning");
+  const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin);
+  await page.goto("/examples/learning");
+  await expect(page.getByRole("textbox", { name: "你想解决什么问题？", exact: true })).toHaveValue(
+    payload.arena.versions[0].challenge.goal,
+  );
+  await expect(page.locator(".c-root")).toHaveCount(0);
+  await expect(page.locator(".c-root")).toBeVisible({ timeout: 12_000 });
+  await expect(
+    page.getByRole("heading", { name: payload.arena.versions[0].verdict!.headline, exact: true }),
+  ).toBeHidden();
+  await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+  await expect(page.locator(".c-intro")).toBeHidden();
+  for (const step of [2, 4, 7, 10, 13]) {
+    await expect(page.getByRole("button", { name: `第 ${step} 步`, exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+      { timeout: 20_000 },
+    );
+  }
+  await expect(
+    page.getByRole("heading", { name: payload.arena.versions[0].verdict!.headline, exact: true }),
+  ).toBeVisible();
+  expect(requests.apiReads).toEqual([]);
   expect(requests.forbidden).toEqual([]);
 });
 
@@ -200,6 +255,7 @@ test("real recorded example: mobile card return stays over its source without mo
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/examples/learning");
+  await page.getByRole("button", { name: "开始分析", exact: true }).click();
   await page.getByRole("button", { name: "第 1 步", exact: true }).click();
   const trigger = page.getByRole("button", { name: "查看第 1 步", exact: true });
   await trigger.scrollIntoViewIfNeeded();

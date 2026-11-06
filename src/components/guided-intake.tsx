@@ -210,9 +210,11 @@ export function GuidedIntake({
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [recoveryDetailsOpen, setRecoveryDetailsOpen] = useState(false);
   const [source, setSource] = useState<MaterialSource | null>(null);
   const [pageInputs, setPageInputs] = useState<Record<string, string>>({});
   const fileInput = useRef<HTMLInputElement>(null);
+  const goalInput = useRef<HTMLTextAreaElement>(null);
   const current = useRef<IntakeDraft | null>(null);
   const alive = useRef(false);
   const generation = useRef(0);
@@ -354,8 +356,7 @@ export function GuidedIntake({
         .then(async (next) => {
           if (!alive.current || epoch !== generation.current) return;
           if (next.status === "submitted") {
-            if (!next.arenaId)
-              throw new Error("草稿已提交，但暂时找不到对应的擂台，请稍后重试。");
+            if (!next.arenaId) throw new Error("草稿已提交，但暂时找不到对应的擂台，请稍后重试。");
             const snapshot = await request<ArenaSnapshot>(`/api/arenas/${next.arenaId}`);
             if (!alive.current || epoch !== generation.current) return;
             onCreatedRef.current(snapshot);
@@ -544,8 +545,7 @@ export function GuidedIntake({
   const analyze = (finish = false) =>
     void operate(async (epoch) => {
       if (unavailable) throw new Error("所选模型尚未配置，请先选择可用模型。");
-      if (goalRef.current.trim().length < 2)
-        throw new Error("请用至少 2 个字描述你的目标。");
+      if (goalRef.current.trim().length < 2) throw new Error("请用至少 2 个字描述你的目标。");
       let saved = await ensureDraft();
       if (saved.status === "questions") {
         const outgoing = answers.map((answer) =>
@@ -614,6 +614,7 @@ export function GuidedIntake({
     setAnalysisPending(false);
     setRestoring(false);
     setSource(null);
+    setRecoveryDetailsOpen(false);
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {}
@@ -634,6 +635,7 @@ export function GuidedIntake({
       >
         <label htmlFor={`${id}-goal`}>你想解决什么问题？</label>
         <textarea
+          ref={goalInput}
           id={`${id}-goal`}
           className="gi-goal"
           rows={3}
@@ -836,11 +838,43 @@ export function GuidedIntake({
           ))}
         </ul>
       </DisclosureMotion>
-      {(error || draft?.error || uncertain) && (
-        <div className="gi-error" role="alert">
-          {error || draft?.error}
-          {uncertain && (
-            <>
+      {uncertain ? (
+        <section className="gi-recovery" aria-label="分析暂停">
+          <div className="gi-recovery-message" role="alert">
+            <strong>暂时没有收到完整结果</strong>
+            <p>本次分析是否完成还待确认。目标和材料已保留，不会自动重试。</p>
+          </div>
+          <p className="gi-recovery-next">
+            可以保留目标另开草稿，材料需重新添加。新草稿不会自动开始分析。
+          </p>
+          <div className="gi-recovery-actions">
+            <button
+              type="button"
+              className="primary-button"
+              disabled={busy || analyzing || reading || pending || disabled}
+              onClick={() => {
+                const previousGoal = goalRef.current;
+                reset();
+                setGoal(previousGoal);
+                goalRef.current = previousGoal;
+                goalInput.current?.focus();
+              }}
+            >
+              准备新问题 <ArrowRight size={15} />
+            </button>
+            <button
+              type="button"
+              className="text-button gi-recovery-toggle"
+              aria-expanded={recoveryDetailsOpen}
+              aria-controls={`${id}-recovery-details`}
+              onClick={() => setRecoveryDetailsOpen(!recoveryDetailsOpen)}
+            >
+              {recoveryDetailsOpen ? "收起调用与费用说明" : "查看调用与费用说明"}
+              <ChevronDown size={14} />
+            </button>
+          </div>
+          <DisclosureMotion open={recoveryDetailsOpen} id={`${id}-recovery-details`}>
+            <div className="gi-recovery-details">
               <p>
                 <strong>此草稿已暂停模型请求，等待核账。</strong>
                 请等待管理员核对调用状态和费用，不要重试本次请求。
@@ -848,10 +882,15 @@ export function GuidedIntake({
               <p>
                 你仍可查看目标和材料。切换模型不能解除暂停；准备新问题会另建草稿，原来的调用记录和预留额度仍会保留，新请求也受共享预算限制。
               </p>
-            </>
-          )}
+              {(error || draft?.error) && <p>原始提示：{error || draft?.error}</p>}
+            </div>
+          </DisclosureMotion>
+        </section>
+      ) : error || draft?.error ? (
+        <div className="gi-error" role="alert">
+          {error || draft?.error}
         </div>
-      )}
+      ) : null}
       {summary.conflict && (
         <div className="gi-error gi-summary-conflict" role="alert">
           <strong>本机还有尚未保存的摘要修改。</strong>
@@ -1238,16 +1277,22 @@ export function GuidedIntake({
       )}
       {draft && (
         <div className="gi-draft-footer">
-          <span>草稿已保存，在当前浏览器刷新可继续。</span>
-          <button
-            type="button"
-            className="text-button"
-            disabled={busy || analyzing || reading}
-            onClick={reset}
-          >
-            <Plus size={13} />
-            准备新问题
-          </button>
+          <span>
+            {uncertain
+              ? "原草稿仍保存在服务器，准备新问题不会删除原记录。"
+              : "草稿已保存，在当前浏览器刷新可继续。"}
+          </span>
+          {!uncertain && (
+            <button
+              type="button"
+              className="text-button"
+              disabled={busy || analyzing || reading}
+              onClick={reset}
+            >
+              <Plus size={13} />
+              准备新问题
+            </button>
+          )}
         </div>
       )}
     </section>

@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { X } from "lucide-react";
+import { leaveAs } from "@/components/console/effects";
 export function Modal({
   title,
   children,
@@ -12,7 +13,19 @@ export function Modal({
   onClose: () => void;
   wide?: boolean;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
+  const ref = useRef<HTMLDialogElement>(null); // The dialog must be measured before it unmounts, so this runs ahead of the effect below.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    return () =>
+      leaveAs(
+        el,
+        [
+          { transform: "none", opacity: 1 },
+          { transform: "translateY(18px) scale(.93)", opacity: 0 },
+        ],
+        { duration: 230, backdrop: "rgb(11 13 16 / 0.34)" },
+      );
+  }, []);
   useEffect(() => {
     const el = ref.current;
     // The dialog unmounts before it closes, so the browser cannot restore focus by itself.

@@ -131,7 +131,7 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
   // A child's Space activation opens its card without triggering the global playback shortcut.
   await page.getByRole("button", { name: "查看第 1 步", exact: true }).focus();
   await page.keyboard.press("Space");
-  const step = page.getByRole("dialog", { name: "第 1 步 · 提案" });
+  const step = page.getByRole("dialog", { name: "第 1 步 · 独立提案" });
   await expect(step).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(step).not.toBeVisible();

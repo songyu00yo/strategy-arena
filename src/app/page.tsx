@@ -33,6 +33,7 @@ import { Chars, ClickFx, Dust, Leaving } from "@/components/console/effects";
 import { HomeFlow } from "@/components/console/HomeFlow";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
+import type { OverlayMotionHandle } from "@/components/overlay-motion";
 import { useArena } from "@/components/use-arena";
 
 const ERROR_EXIT: Keyframe[] = [
@@ -138,6 +139,13 @@ export default function Page() {
   );
   const [challengeText, setChallengeText] = useState("");
   const [stopConfirm, setStopConfirm] = useState(false);
+  const [overlayVersionId, setOverlayVersionId] = useState<string | null>(null);
+  const editMotion = useRef<OverlayMotionHandle>(null);
+  const claimMotion = useRef<OverlayMotionHandle>(null);
+  const stopMotion = useRef<OverlayMotionHandle>(null);
+  const locateFrame = useRef(0);
+  const navigationEpoch = useRef(0);
+  const versionPin = useRef<{ previous: string | null; epoch: number } | null>(null);
   const [accessCode, setAccessCode] = useState("");
   const accessRequired = !!arena.health?.requiresAccessCode && !arena.health?.accessGranted;
   const selected = arena.snapshot?.versions.find((v) => v.id === versionId) ?? arena.active;
@@ -147,9 +155,30 @@ export default function Page() {
   // Demo mode (pnpm demo) must never read as a live model run.
   const demo = arena.health?.version === "demo";
   // Resolve by ID, so an open drawer follows status changes from newer snapshots.
-  const attack = selected?.attacks.find((a) => a.id === attackId) ?? null;
+  const sameOverlayVersion = overlayVersionId === selected?.id;
+  const attack = sameOverlayVersion
+    ? (selected?.attacks.find((a) => a.id === attackId) ?? null)
+    : null;
   const closeAttack = useCallback(() => setAttackId(null), []);
+  const chooseVersion = (id: string | null) => {
+    navigationEpoch.current += 1;
+    versionPin.current = null;
+    setVersionId(id);
+  };
+  const releaseVersionPin = (pin = versionPin.current) => {
+    if (!pin || versionPin.current !== pin) return;
+    versionPin.current = null;
+    if (navigationEpoch.current === pin.epoch) setVersionId(pin.previous);
+  };
+  const beginVersionOverlay = () => {
+    setOverlayVersionId(selected?.id ?? null);
+    setEditing(false);
+    setClaimTarget(null);
+    setStopConfirm(false);
+    setAttackId(null);
+  };
   const selectAttack = (a: Attack) => {
+    beginVersionOverlay();
     setLocatedId(null);
     setAttackId(a.id);
   };
@@ -157,7 +186,8 @@ export default function Page() {
     setAttackId(null);
     setLocatedId(a.id);
     // Runs after a closing drawer has returned focus.
-    requestAnimationFrame(() => {
+    cancelAnimationFrame(locateFrame.current);
+    locateFrame.current = requestAnimationFrame(() => {
       const target = document.getElementById(`dispute-${a.id}`);
       target?.scrollIntoView({ block: "center" });
       target?.focus({ preventScroll: true });
@@ -170,8 +200,10 @@ export default function Page() {
   const previousDisplayedVersion = useRef<string | undefined>(undefined);
   const localVersionNavigation = useRef(false);
   const displayedVersionId = selected?.id;
+  useEffect(() => () => cancelAnimationFrame(locateFrame.current), [displayedVersionId]);
   const overlayOpen =
-    editing || modelOpen || claimTarget !== null || stopConfirm || attack !== null;
+    modelOpen ||
+    (sameOverlayVersion && (editing || claimTarget !== null || stopConfirm || attack !== null));
   useEffect(() => {
     const transitioned = previousDisplayedVersion.current !== displayedVersionId;
     previousDisplayedVersion.current = displayedVersionId;
@@ -217,7 +249,7 @@ export default function Page() {
           onClick={() => {
             if (!running) {
               arena.reset();
-              setVersionId(null);
+              chooseVersion(null);
             }
           }}
         >
@@ -322,7 +354,7 @@ export default function Page() {
                     pending={arena.busy}
                     disabled={configured === false || !arena.health || accessRequired}
                     onSubmit={async (challenge, _reason, modelMode) => {
-                      if (await arena.create(challenge, modelMode)) setVersionId(null);
+                      if (await arena.create(challenge, modelMode)) chooseVersion(null);
                     }}
                   />
                 )}
@@ -365,6 +397,7 @@ export default function Page() {
                 selectedAttack={attack?.id ?? locatedId ?? undefined}
                 onEvidence={selectAttack}
                 onClaim={(strategy, claimId) => {
+                  beginVersionOverlay();
                   setClaimTarget({ strategy, claimId });
                   setChallengeText("");
                 }}
@@ -462,7 +495,10 @@ export default function Page() {
                           value={selected.id}
                           onChange={(e) => {
                             historyNavigation.current = true;
-                            setVersionId(e.target.value);
+                            setEditing(false);
+                            setClaimTarget(null);
+                            setStopConfirm(false);
+                            chooseVersion(e.target.value);
                             setAttackId(null);
                             setLocatedId(null);
                           }}
@@ -490,6 +526,7 @@ export default function Page() {
                         type="button"
                         className="text-button"
                         onClick={() => {
+                          beginVersionOverlay();
                           setEditing(true);
                         }}
                         disabled={arena.busy}
@@ -503,7 +540,7 @@ export default function Page() {
                         disabled={!!running}
                         onClick={() => {
                           arena.reset();
-                          setVersionId(null);
+                          chooseVersion(null);
                         }}
                       >
                         <Plus size={14} />
@@ -521,7 +558,7 @@ export default function Page() {
                         <button
                           className="text-button"
                           type="button"
-                          onClick={() => setVersionId(null)}
+                          onClick={() => chooseVersion(null)}
                         >
                           回到当前版本
                           <ArrowRight size={13} />
@@ -578,7 +615,10 @@ export default function Page() {
                               type="button"
                               className="stop-button"
                               disabled={arena.busy}
-                              onClick={() => setStopConfirm(true)}
+                              onClick={() => {
+                                beginVersionOverlay();
+                                setStopConfirm(true);
+                              }}
                             >
                               <Square size={10} fill="currentColor" />
                               现在收束
@@ -691,8 +731,16 @@ export default function Page() {
           </div>
         </Modal>
       )}
-      {editing && selected && (
-        <Modal title="修改条件，重新开局" wide onClose={() => setEditing(false)}>
+      {editing && sameOverlayVersion && selected && (
+        <Modal
+          title="修改条件，重新开局"
+          wide
+          motionRef={editMotion}
+          onClose={() => {
+            releaseVersionPin();
+            setEditing(false);
+          }}
+        >
           <p className="modal-intro">
             补充限制、材料或偏好后生成新版本，原版本会保留。请说明改动原因。
           </p>
@@ -705,19 +753,37 @@ export default function Page() {
             pending={arena.busy}
             editing
             submitLabel="按新条件重新推演"
-            onCancel={() => setEditing(false)}
+            onCancel={() => editMotion.current?.close()}
             onSubmit={async (challenge, reason, modelMode) => {
+              // Keep the old version visible while its form completes the exit.
+              const motion = editMotion.current;
+              const pin = { previous: versionId, epoch: navigationEpoch.current };
+              versionPin.current = pin;
+              setVersionId(selected.id);
               if (await arena.rematch(challenge, reason, modelMode)) {
-                localVersionNavigation.current = true;
-                setVersionId(null);
-                setEditing(false);
-              }
+                if (navigationEpoch.current !== pin.epoch) return;
+                const navigate = () => {
+                  if (navigationEpoch.current !== pin.epoch) return;
+                  versionPin.current = null;
+                  localVersionNavigation.current = true;
+                  setVersionId(null);
+                  setEditing(false);
+                };
+                if (!motion?.close(navigate)) navigate();
+              } else releaseVersionPin(pin);
             }}
           />
         </Modal>
       )}
-      {claimTarget && (
-        <Modal title="向这条判断发起挑战" onClose={() => setClaimTarget(null)}>
+      {claimTarget && sameOverlayVersion && (
+        <Modal
+          title="向这条判断发起挑战"
+          motionRef={claimMotion}
+          onClose={() => {
+            releaseVersionPin();
+            setClaimTarget(null);
+          }}
+        >
           <div className="challenge-dialog">
             <span className="eyebrow">路线 {claimTarget.strategy.id} / 关键判断</span>
             <blockquote>
@@ -726,13 +792,23 @@ export default function Page() {
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                const motion = claimMotion.current;
+                const pin = { previous: versionId, epoch: navigationEpoch.current };
+                versionPin.current = pin;
+                setVersionId(selected?.id ?? null);
                 if (
                   await arena.intervene(claimTarget.strategy.id, claimTarget.claimId, challengeText)
                 ) {
-                  localVersionNavigation.current = true;
-                  setClaimTarget(null);
-                  setVersionId(null);
-                }
+                  if (navigationEpoch.current !== pin.epoch) return;
+                  const navigate = () => {
+                    if (navigationEpoch.current !== pin.epoch) return;
+                    versionPin.current = null;
+                    localVersionNavigation.current = true;
+                    setClaimTarget(null);
+                    setVersionId(null);
+                  };
+                  if (!motion?.close(navigate)) navigate();
+                } else releaseVersionPin(pin);
               }}
             >
               <label className="field">
@@ -764,14 +840,19 @@ export default function Page() {
       )}
       {attack && selected && (
         <EvidenceDrawer
+          key={selected.id}
           attack={attack}
           version={selected}
           onClose={closeAttack}
           onLocate={locateAttack}
         />
       )}
-      {stopConfirm && (
-        <Modal title="在这里收束本轮？" onClose={() => setStopConfirm(false)}>
+      {stopConfirm && sameOverlayVersion && (
+        <Modal
+          title="在这里收束本轮？"
+          motionRef={stopMotion}
+          onClose={() => setStopConfirm(false)}
+        >
           <div className="stop-dialog">
             <p>系统将停止发起后续推演步骤，保留已完成的提案与证据。</p>
             <p>
@@ -783,7 +864,7 @@ export default function Page() {
               <button
                 type="button"
                 className="secondary-button"
-                onClick={() => setStopConfirm(false)}
+                onClick={() => stopMotion.current?.close()}
               >
                 继续推演
               </button>
@@ -792,8 +873,9 @@ export default function Page() {
                 className="primary-button"
                 disabled={arena.busy}
                 onClick={async () => {
+                  const motion = stopMotion.current;
                   await arena.stop();
-                  setStopConfirm(false);
+                  motion?.close();
                 }}
               >
                 确认收束

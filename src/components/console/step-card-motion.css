@@ -1,0 +1,25 @@
+/* The return proxy lives in the deck's real stacking context. */
+.console-shell .c-return-proxy,
+.console-shell .c-pull-face,
+.console-shell .c-return-proxy *,
+.console-shell .c-pull-face * {
+  animation: none !important;
+  transition: none !important;
+  pointer-events: none !important;
+}
+.console-shell .c-return-proxy {
+  visibility: visible;
+  contain: layout paint;
+}
+.console-shell .c-deck-card {
+  transition-property: transform, opacity, translate, background-color, box-shadow;
+  transition-duration: 620ms, 500ms, var(--deck-gap-ms, 500ms), 150ms, 150ms;
+}
+.console-shell .c-deck-card.past-gap {
+  translate: 34px 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-shell .c-deck-card {
+    transition-duration: 0s;
+  }
+}

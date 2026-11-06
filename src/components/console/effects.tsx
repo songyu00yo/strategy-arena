@@ -1,19 +1,9 @@
 "use client";
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { createMotionLoop, createMotionScope, motionNow } from "./motion-runtime";
 
 export const reducedMotion = () =>
   typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-/**
- * While a card is out of the chain, the page behind it stops drawing, so nothing competes with the
- * card for the frame. Continuous loops check this; the one continuously repainted line pauses in CSS.
- */
-let held = false;
-export const motionHeld = () => held;
-export function holdMotion(on: boolean) {
-  held = on;
-  document.querySelector(".c-root")?.classList.toggle("held", on);
-}
 
 export const STATE_COLOR = {
   attack: "255,255,255",
@@ -69,7 +59,10 @@ export class Sparks {
   private blank = false;
   dust = 0;
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    private wake: () => void = () => {},
+  ) {
     this.context = canvas.getContext("2d");
     for (let i = 0; i < 60; i++)
       this.motes.push({
@@ -101,7 +94,11 @@ export class Sparks {
     this.height = height;
     // Soft light needs no retina pixels, and a full-screen layer at 2x is what costs frames.
     const ratio = 1;
-    if (this.canvas.width === Math.round(width * ratio)) return;
+    if (
+      this.canvas.width === Math.round(width * ratio) &&
+      this.canvas.height === Math.round(height * ratio)
+    )
+      return;
     this.canvas.width = Math.round(width * ratio);
     this.canvas.height = Math.round(height * ratio);
     this.context?.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -120,12 +117,14 @@ export class Sparks {
   ) {
     if (this.sparks.length > 1400) return;
     this.sparks.push({ x, y, vx, vy, life: 0, max, size, color, drag, rise });
+    this.wake();
   }
 
   /** Energy travelling from one part of the screen to another, ending in a small ring. */
   stream(x0: number, y0: number, x1: number, y1: number, color: string, ms: number) {
     const bow = (Math.random() < 0.5 ? -1 : 1) * Math.min(150, Math.hypot(x1 - x0, y1 - y0) * 0.25);
     this.streams.push({ x0, y0, x1, y1, bow, color, age: 0, dur: ms / 1000 });
+    this.wake();
   }
 
   comet(x: number, y: number, color: string) {
@@ -207,6 +206,20 @@ export class Sparks {
       color,
       0.998,
     );
+  }
+
+  get active() {
+    return (
+      this.sparks.length > 0 || this.rings.length > 0 || this.streams.length > 0 || this.dust > 0.01
+    );
+  }
+
+  clear() {
+    this.sparks = [];
+    this.rings = [];
+    this.streams = [];
+    this.context?.clearRect(0, 0, this.width, this.height);
+    this.blank = true;
   }
 
   tick(dt: number) {
@@ -323,36 +336,32 @@ export function Decode({
     const pool = Array.from(text.replace(/\s/g, ""));
     const glyphs = Array.from(text);
     const duration = Math.min(1000, 300 + glyphs.length * 16);
-    const began = performance.now() + delay;
-    let frame = 0;
-    let painted = 0;
-    const tick = (now: number) => {
-      const k = (now - began) / duration;
-      if (k >= 1) {
-        el.textContent = text;
-        return;
-      }
-      // Scrambling reads fine at half the frame rate, and every text change costs a layout.
-      if (now - painted < 33) {
-        frame = requestAnimationFrame(tick);
-        return;
-      }
-      painted = now;
-      const solved = Math.floor(Math.max(0, k) * glyphs.length);
-      el.textContent =
-        k < 0
-          ? ""
-          : glyphs
-              .slice(0, solved + 7)
-              .map((g, i) =>
-                i < solved || g === " " ? g : pool[Math.floor(Math.random() * pool.length)],
-              )
-              .join("");
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
+    const scope = createMotionScope();
+    let loop: ReturnType<typeof createMotionLoop> | undefined;
+    scope.later(delay, () => {
+      const began = motionNow();
+      let painted = 0;
+      loop = createMotionLoop((now) => {
+        const k = (now - began) / duration;
+        if (k >= 1) {
+          el.textContent = text;
+          return false;
+        }
+        if (now - painted < 33) return true;
+        painted = now;
+        const solved = Math.floor(Math.max(0, k) * glyphs.length);
+        el.textContent = glyphs
+          .slice(0, solved + 7)
+          .map((g, i) =>
+            i < solved || g === " " ? g : pool[Math.floor(Math.random() * pool.length)],
+          )
+          .join("");
+        return true;
+      });
+    });
     return () => {
-      cancelAnimationFrame(frame);
+      scope.dispose();
+      loop?.dispose();
       el.textContent = text;
     };
   }, [text, active, delay]);
@@ -360,39 +369,48 @@ export function Decode({
 }
 
 /** A number that rolls to its new value and jumps as it lands. */
-export function Roll({ value, delay = 0 }: { value: number; delay?: number }) {
+export function Roll({
+  value,
+  delay = 0,
+  animate = true,
+}: {
+  value: number;
+  delay?: number;
+  animate?: boolean;
+}) {
   const ref = useRef<HTMLSpanElement>(null);
   const shown = useRef(value);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const from = shown.current;
-    shown.current = value;
-    if (from === value || reducedMotion()) {
+    if (from === value || !animate || reducedMotion()) {
+      shown.current = value;
       el.textContent = value.toLocaleString();
       return;
     }
-    el.animate([{ transform: "scale(1.3)" }, { transform: "none" }], {
-      duration: 700,
-      delay,
-      easing: "cubic-bezier(.2,1.4,.3,1)",
+    const scope = createMotionScope();
+    let loop: ReturnType<typeof createMotionLoop> | undefined;
+    scope.later(delay, () => {
+      scope.animate(el, [{ transform: "scale(1.08)" }, { transform: "none" }], {
+        duration: 420,
+        easing: "cubic-bezier(.2,.7,.2,1)",
+      });
+      const began = motionNow();
+      loop = createMotionLoop((now) => {
+        const k = Math.max(0, Math.min(1, (now - began) / 420));
+        shown.current = Math.round(from + (value - from) * (1 - Math.pow(1 - k, 3)));
+        el.textContent = shown.current.toLocaleString();
+        return k < 1;
+      });
     });
-    const began = performance.now() + delay;
-    let frame = 0;
-    const tick = (now: number) => {
-      const k = Math.max(0, Math.min(1, (now - began) / 700));
-      const eased = 1 - Math.pow(1 - k, 3);
-      el.textContent = Math.round(from + (value - from) * eased).toLocaleString();
-      if (k < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
     return () => {
-      cancelAnimationFrame(frame);
-      el.textContent = value.toLocaleString();
+      scope.dispose();
+      loop?.dispose();
     };
-    // The delay only applies to the change that carried it.
+    // A step's delay is fixed when its recorded value changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+  }, [value, animate]);
   return (
     <span ref={ref} className="c-roll">
       {value.toLocaleString()}
@@ -411,24 +429,19 @@ export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string
     sparks.dust = 1;
     const size = new ResizeObserver(() => sparks.fit(canvas.clientWidth, canvas.clientHeight));
     size.observe(canvas);
-    let frame = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      // Ambient motion needs no more than half the frame rate.
-      if (now - last < 30 || held) {
-        frame = requestAnimationFrame(tick);
-        return;
-      }
+    let last = motionNow();
+    const loop = createMotionLoop((now) => {
+      if (now - last < 30) return true;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       if (embers?.length) sparks.ember(embers[Math.floor(Math.random() * embers.length)]);
       sparks.tick(dt);
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
+      return true;
+    });
     return () => {
-      cancelAnimationFrame(frame);
+      loop.dispose();
       size.disconnect();
+      sparks.clear();
     };
   }, [dark, embers]);
   return <canvas ref={ref} className="c-dust" aria-hidden="true" />;
@@ -450,8 +463,15 @@ export function leaveAs(
   const host = el.closest(".console-shell") ?? document.querySelector(".console-shell");
   const box = el.getBoundingClientRect();
   if (!host || !box.width) return;
+  host.querySelectorAll<HTMLElement>(".c-ghost").forEach((previous) => {
+    if (previous.dataset.exitKey === el.className) {
+      previous.getAnimations().forEach((animation) => animation.cancel());
+      previous.remove();
+    }
+  });
   const ghost = document.createElement("div");
   ghost.className = `${el.className} c-ghost`;
+  ghost.dataset.exitKey = el.className;
   ghost.innerHTML = el.innerHTML;
   ghost.setAttribute("aria-hidden", "true");
   ghost.inert = true;
@@ -479,7 +499,8 @@ export function leaveAs(
 
 /** A short stream of light between two places on screen, ending in a small ring. */
 export function flyLight(from: DOMRect, to: DOMRect, color: string, ms = 420) {
-  if (reducedMotion()) return;
+  if (reducedMotion()) return () => {};
+  const pieces: HTMLElement[] = [];
   const x0 = from.left + from.width / 2;
   const y0 = from.top + from.height / 2;
   const x1 = to.left + Math.min(to.width / 2, 60);
@@ -492,6 +513,7 @@ export function flyLight(from: DOMRect, to: DOMRect, color: string, ms = 420) {
     dot.className = "c-fill-dot";
     const size = 7 - i * 0.42;
     dot.style.cssText = `width:${size}px;height:${size}px;background:rgb(${color});offset-path:${route};opacity:${1 - i / count}`;
+    pieces.push(dot);
     document.body.appendChild(dot);
     dot.animate([{ offsetDistance: "0%" }, { offsetDistance: "100%" }], {
       duration: ms,
@@ -503,6 +525,7 @@ export function flyLight(from: DOMRect, to: DOMRect, color: string, ms = 420) {
   const ring = document.createElement("div");
   ring.className = "c-press-ring";
   ring.style.cssText = `left:${x1}px;top:${y1}px;color:rgb(${color});width:56px;height:56px`;
+  pieces.push(ring);
   document.body.appendChild(ring);
   ring.animate(
     [
@@ -511,6 +534,12 @@ export function flyLight(from: DOMRect, to: DOMRect, color: string, ms = 420) {
     ],
     { duration: 420, delay: ms * 0.92, easing: "cubic-bezier(.16,1,.3,1)", fill: "both" },
   ).onfinish = () => ring.remove();
+  return () => {
+    pieces.forEach((piece) => {
+      piece.getAnimations().forEach((animation) => animation.cancel());
+      piece.remove();
+    });
+  };
 }
 
 /** A container that animates out when it is removed. */
@@ -536,63 +565,56 @@ export function Leaving({
 export function ClickFx() {
   useEffect(() => {
     if (reducedMotion()) return;
-    const burst = (x: number, y: number, color: string) => {
-      const ring = document.createElement("div");
-      ring.className = "c-press-ring";
-      ring.style.cssText = `left:${x}px;top:${y}px;color:rgb(${color})`;
-      document.body.appendChild(ring);
-      ring.animate(
-        [
-          { transform: "translate(-50%,-50%) scale(.2)", opacity: 0.85 },
-          { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
-        ],
-        { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
-      ).onfinish = () => ring.remove();
-      for (let i = 0; i < 7; i++) {
-        const spark = document.createElement("div");
-        spark.className = "c-press-spark";
-        spark.style.cssText = `left:${x}px;top:${y}px;background:rgb(${color})`;
-        document.body.appendChild(spark);
-        const angle = (i / 7) * Math.PI * 2 + Math.random() * 0.6;
-        const reach = 18 + Math.random() * 22;
-        spark.animate(
-          [
-            { transform: "translate(-50%,-50%)", opacity: 0.9 },
-            {
-              transform: `translate(calc(-50% + ${Math.cos(angle) * reach}px),calc(-50% + ${Math.sin(angle) * reach}px)) scale(.3)`,
-              opacity: 0,
-            },
-          ],
-          { duration: 380 + Math.random() * 160, easing: "cubic-bezier(.16,1,.3,1)" },
-        ).onfinish = () => spark.remove();
-      }
+    const presses = new Map<HTMLElement, Animation>();
+    const decorations = new Set<HTMLElement>();
+    const add = (node: HTMLElement, frames: Keyframe[], duration: number) => {
+      decorations.add(node);
+      document.body.appendChild(node);
+      const animation = node.animate(frames, { duration, easing: "cubic-bezier(.16,1,.3,1)" });
+      animation.onfinish = () => {
+        decorations.delete(node);
+        node.remove();
+      };
     };
     const answer = (target: HTMLElement, x: number, y: number) => {
-      const route = getComputedStyle(target).getPropertyValue("--route").trim();
-      burst(x, y, route ? route.replaceAll(" ", ",") : "11,13,16");
-      target.animate(
-        [
-          { scale: "1" },
-          { scale: "0.955", offset: 0.28 },
-          { scale: "1.018", offset: 0.68 },
-          { scale: "1" },
-        ],
-        { duration: 340, easing: "ease-out" },
-      );
-      // Dialogs and fills grow from where the press happened.
+      // Read before adding nodes or starting any animation.
+      const style = getComputedStyle(target);
+      const route = style.getPropertyValue("--route").trim();
+      const color = route ? route.replaceAll(" ", ",") : "11,13,16";
       const box = target.getBoundingClientRect();
+      const scale = style.scale === "none" ? "1" : style.scale;
+      const compact = !!target.closest(".c-time, .c-transport, .c-pull .actions");
+      presses.get(target)?.cancel();
+      const press = target.animate([{ scale }, { scale: "0.97", offset: 0.3 }, { scale: "1" }], {
+        duration: compact ? 140 : 220,
+        easing: "cubic-bezier(.2,.7,.2,1)",
+      });
+      presses.set(target, press);
+      press.onfinish = () => {
+        if (presses.get(target) === press) presses.delete(target);
+      };
+      if (!compact) {
+        const ring = document.createElement("div");
+        ring.className = "c-press-ring";
+        ring.style.cssText = `left:${x}px;top:${y}px;color:rgb(${color})`;
+        add(
+          ring,
+          [
+            { transform: "translate(-50%,-50%) scale(.2)", opacity: 0.55 },
+            { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
+          ],
+          300,
+        );
+      }
       target.style.setProperty("--cx", `${x - box.left}px`);
       target.style.setProperty("--cy", `${y - box.top}px`);
-      const root = document.documentElement.style;
-      root.setProperty("--press-dx", `${x - innerWidth / 2}px`);
-      root.setProperty("--press-dy", `${y - innerHeight / 2}px`);
+      document.documentElement.style.setProperty("--press-dx", `${x - innerWidth / 2}px`);
+      document.documentElement.style.setProperty("--press-dy", `${y - innerHeight / 2}px`);
     };
     const onPointer = (event: PointerEvent) => {
       const target = (event.target as Element | null)?.closest<HTMLElement>(CLICKABLE);
-      if (!target || target.matches(":disabled")) return;
-      answer(target, event.clientX, event.clientY);
+      if (target && !target.matches(":disabled")) answer(target, event.clientX, event.clientY);
     };
-    // A keyboard press has no pointer behind it, so it answers from the control's centre.
     const onClick = (event: MouseEvent) => {
       if (event.detail !== 0) return;
       const target = (event.target as Element | null)?.closest<HTMLElement>(CLICKABLE);
@@ -605,6 +627,11 @@ export function ClickFx() {
     return () => {
       removeEventListener("pointerdown", onPointer, true);
       removeEventListener("click", onClick, true);
+      presses.forEach((animation) => animation.cancel());
+      decorations.forEach((node) => {
+        node.getAnimations().forEach((a) => a.cancel());
+        node.remove();
+      });
     };
   }, []);
   return null;

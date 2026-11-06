@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 // All amounts are integer micro units of their native currency. This fixed,
@@ -100,17 +100,8 @@ function configuredOptions(): BillingOptions {
  * No transaction remains open during an upstream request. Never remove an
  * unresolved attempt merely because its worker crashed before dispatch. */
 export function openBillingLedger(options: BillingOptions) {
-  if (!options.databasePath || !isAbsolute(options.databasePath))
-    invalid("ARENA_BILLING_DATABASE_PATH must be an absolute shared ledger path.");
-  const usdLimit = options.usdLimit ?? 2;
-  if (!Number.isFinite(usdLimit) || usdLimit <= 0 || usdLimit > 120)
-    invalid("Billing USD limit must be greater than 0 and at most 120.");
-  const usdMicros = Math.round(usdLimit * 1_000_000);
-  if (Math.abs(usdMicros / 1_000_000 - usdLimit) > 1e-10)
-    invalid("Billing USD limit supports at most six decimal places.");
-  integer(usdMicros, "USD limit", true);
-  const requestLimit = integer(options.requestLimit ?? 100, "request limit", true);
-  const tokenLimit = integer(options.tokenLimit ?? 2_000_000, "token limit", true);
+  validatePath(options.databasePath);
+  const { usdMicros, requestLimit, tokenLimit } = validateLimits(options);
   mkdirSync(dirname(options.databasePath), { recursive: true, mode: 0o700 });
   const connection = new DatabaseSync(options.databasePath);
   const atomic = <T>(fn: () => T): T => {
@@ -129,6 +120,9 @@ export function openBillingLedger(options: BillingOptions) {
     atomic(() => {
       connection.exec(
         readFileSync(resolve(process.cwd(), "migrations/billing/001_initial.sql"), "utf8"),
+      );
+      connection.exec(
+        readFileSync(resolve(process.cwd(), "migrations/billing/002_limit_audit.sql"), "utf8"),
       );
       connection
         .prepare(
@@ -172,39 +166,7 @@ export function openBillingLedger(options: BillingOptions) {
       .get(attemptId) as AttemptRow | undefined;
   }
   function summary() {
-    const totals = connection
-      .prepare(
-        `SELECT COUNT(*) requests,
-        COALESCE(SUM(CASE WHEN state='settled' THEN input_tokens+output_tokens ELSE max_tokens END),0) tokens,
-        COALESCE(SUM(CASE WHEN state='settled' THEN settled_usd_micros ELSE reserved_usd_micros END),0) committedUsdMicros,
-        COALESCE(SUM(CASE WHEN state='settled' THEN settled_usd_micros ELSE 0 END),0) settledUsdMicros,
-        COALESCE(SUM(CASE WHEN state!='settled' THEN reserved_usd_micros ELSE 0 END),0) reservedUsdMicros,
-        COALESCE(SUM(CASE WHEN state='held' THEN 1 ELSE 0 END),0) heldRequests,
-        COALESCE(SUM(CASE WHEN state='settled' AND currency='CNY' THEN amount_micros ELSE 0 END),0) settledCnyMicros,
-        COALESCE(SUM(CASE WHEN state='settled' AND currency='USD' THEN amount_micros ELSE 0 END),0) settledNativeUsdMicros
-        FROM billing_attempts`,
-      )
-      .get() as Record<
-      | "requests"
-      | "tokens"
-      | "committedUsdMicros"
-      | "settledUsdMicros"
-      | "reservedUsdMicros"
-      | "heldRequests"
-      | "settledCnyMicros"
-      | "settledNativeUsdMicros",
-      number
-    >;
-    return {
-      ...totals,
-      usdLimitMicros: usdMicros,
-      requestLimit,
-      tokenLimit,
-      hardTotalUsdMicros: BILLING_HARD_TOTAL_USD_MICROS,
-      finalReserveUsdMicros: 80_000_000,
-      cnyPerUsdEstimate: BILLING_CNY_PER_USD,
-      remainingUsdMicros: Math.max(0, usdMicros - totals.committedUsdMicros),
-    };
+    return readStatus(connection);
   }
   return {
     close: () => connection.close(),
@@ -223,6 +185,20 @@ export function openBillingLedger(options: BillingOptions) {
           );
         const totals = summary();
         if (
+          totals.usdLimitMicros !== usdMicros ||
+          totals.requestLimit !== requestLimit ||
+          totals.tokenLimit !== tokenLimit
+        )
+          throw new BillingError(
+            "Shared billing settings differ; restart with audited limits.",
+            "BILLING_SETTINGS_MISMATCH",
+          );
+        const stage = totals.activeStage;
+        if (
+          (stage &&
+            (stage.usage.requests + 1 > stage.requestLimit ||
+              stage.usage.tokens + input.maxTokens > stage.tokenLimit ||
+              stage.usage.committedUsdMicros + reservedUsdMicros > stage.usdLimitMicros)) ||
           totals.requests + 1 > requestLimit ||
           totals.tokens + input.maxTokens > tokenLimit ||
           totals.committedUsdMicros + reservedUsdMicros > usdMicros ||
@@ -307,6 +283,245 @@ export function openBillingLedger(options: BillingOptions) {
     },
   };
 }
+
+function validatePath(databasePath: string) {
+  if (!databasePath || !isAbsolute(databasePath))
+    invalid("ARENA_BILLING_DATABASE_PATH must be an absolute shared ledger path.");
+}
+function validateLimits(options: Omit<BillingOptions, "databasePath">) {
+  const usdLimit = options.usdLimit ?? 2;
+  if (!Number.isFinite(usdLimit) || usdLimit <= 0 || usdLimit > 120)
+    invalid("Billing USD limit must be greater than 0 and at most 120.");
+  const usdMicros = Math.round(usdLimit * 1_000_000);
+  if (Math.abs(usdMicros / 1_000_000 - usdLimit) > 1e-10)
+    invalid("Billing USD limit supports at most six decimal places.");
+  integer(usdMicros, "USD limit", true);
+  return {
+    usdMicros,
+    requestLimit: integer(options.requestLimit ?? 100, "request limit", true),
+    tokenLimit: integer(options.tokenLimit ?? 2_000_000, "token limit", true),
+  };
+}
+function readTotals(connection: DatabaseSync, baselineRowid = 0) {
+  return connection
+    .prepare(
+      `SELECT COUNT(*) requests,
+        COALESCE(SUM(CASE WHEN state='settled' THEN input_tokens+output_tokens ELSE max_tokens END),0) tokens,
+        COALESCE(SUM(CASE WHEN state='settled' THEN settled_usd_micros ELSE reserved_usd_micros END),0) committedUsdMicros,
+        COALESCE(SUM(CASE WHEN state='settled' THEN settled_usd_micros ELSE 0 END),0) settledUsdMicros,
+        COALESCE(SUM(CASE WHEN state!='settled' THEN reserved_usd_micros ELSE 0 END),0) reservedUsdMicros,
+        COALESCE(SUM(CASE WHEN state='held' THEN 1 ELSE 0 END),0) heldRequests,
+        COALESCE(SUM(CASE WHEN state='settled' AND currency='CNY' THEN amount_micros ELSE 0 END),0) settledCnyMicros,
+        COALESCE(SUM(CASE WHEN state='settled' AND currency='USD' THEN amount_micros ELSE 0 END),0) settledNativeUsdMicros
+        FROM billing_attempts WHERE rowid > ?`,
+    )
+    .get(baselineRowid) as Record<
+    | "requests"
+    | "tokens"
+    | "committedUsdMicros"
+    | "settledUsdMicros"
+    | "reservedUsdMicros"
+    | "heldRequests"
+    | "settledCnyMicros"
+    | "settledNativeUsdMicros",
+    number
+  >;
+}
+interface AuditRow {
+  revision: number;
+  changed_at: string;
+  reason: string;
+  stage_id: string;
+  previous_usd_limit_micros: number;
+  previous_request_limit: number;
+  previous_token_limit: number;
+  usd_limit_micros: number;
+  request_limit: number;
+  token_limit: number;
+  baseline_rowid: number;
+  baseline_json: string;
+  stage_usd_limit_micros: number;
+  stage_request_limit: number;
+  stage_token_limit: number;
+}
+function readSettings(connection: DatabaseSync) {
+  const settings = connection.prepare("SELECT * FROM billing_settings WHERE id=1").get() as
+    | Settings
+    | undefined;
+  if (
+    !settings ||
+    settings.schema_version !== 1 ||
+    settings.hard_total_usd_micros !== BILLING_HARD_TOTAL_USD_MICROS ||
+    settings.cny_per_usd !== BILLING_CNY_PER_USD
+  )
+    throw new BillingError("Unsupported billing settings.", "BILLING_SETTINGS_MISMATCH");
+  validateLimits({
+    usdLimit: settings.usd_limit_micros / 1_000_000,
+    requestLimit: settings.request_limit,
+    tokenLimit: settings.token_limit,
+  });
+  return settings;
+}
+function readStatus(connection: DatabaseSync) {
+  const settings = readSettings(connection);
+  const totals = readTotals(connection);
+  const hasAudit = connection
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='billing_limit_audit'")
+    .get();
+  const audit = hasAudit
+    ? (connection
+        .prepare("SELECT * FROM billing_limit_audit ORDER BY revision")
+        .all() as unknown as AuditRow[])
+    : [];
+  const latest = audit.at(-1);
+  return {
+    ...totals,
+    usdLimitMicros: settings.usd_limit_micros,
+    requestLimit: settings.request_limit,
+    tokenLimit: settings.token_limit,
+    hardTotalUsdMicros: BILLING_HARD_TOTAL_USD_MICROS,
+    developmentMaxUsdMicros: BILLING_DEVELOPMENT_MAX_USD_MICROS,
+    finalReserveUsdMicros: 80_000_000,
+    cnyPerUsdEstimate: BILLING_CNY_PER_USD,
+    remainingUsdMicros: Math.max(0, settings.usd_limit_micros - totals.committedUsdMicros),
+    revision: latest?.revision ?? 0,
+    activeStage: latest
+      ? {
+          id: latest.stage_id,
+          baselineRowid: latest.baseline_rowid,
+          baseline: JSON.parse(latest.baseline_json) as ReturnType<typeof readTotals>,
+          usdLimitMicros: latest.stage_usd_limit_micros,
+          requestLimit: latest.stage_request_limit,
+          tokenLimit: latest.stage_token_limit,
+          usage: readTotals(connection, latest.baseline_rowid),
+        }
+      : null,
+    audit,
+  };
+}
+function existingLedger(databasePath: string, readOnly: boolean) {
+  validatePath(databasePath);
+  if (!existsSync(databasePath))
+    throw new BillingError(
+      "Billing ledger does not exist; status/admin never initializes a ledger.",
+      "BILLING_NOT_FOUND",
+    );
+  const connection = new DatabaseSync(databasePath, { readOnly });
+  connection.exec("PRAGMA busy_timeout=5000");
+  return connection;
+}
+/** Offline inspection: never creates a database, applies migrations or loads environment files. */
+export function readBillingStatus(databasePath: string) {
+  const connection = existingLedger(databasePath, true);
+  try {
+    connection.exec("BEGIN");
+    return readStatus(connection);
+  } finally {
+    connection.close();
+  }
+}
+export interface BillingLimitChange {
+  databasePath: string;
+  expected: { revision: number; usdLimit: number; requestLimit: number; tokenLimit: number };
+  limits: { usdLimit: number; requestLimit: number; tokenLimit: number };
+  stage: { id: string; usdLimit: number; requestLimit: number; tokenLimit: number };
+  reason: string;
+}
+/** Explicit offline operator action. Factual attempts are never edited or released. */
+export function changeBillingLimits(input: BillingLimitChange) {
+  const explicitLimits = (limits: BillingLimitChange["limits"]) => {
+    if (
+      !limits ||
+      limits.usdLimit === undefined ||
+      limits.requestLimit === undefined ||
+      limits.tokenLimit === undefined
+    )
+      invalid("All administrative billing limits must be explicit.");
+    return validateLimits(limits);
+  };
+  const next = explicitLimits(input.limits);
+  const expected = explicitLimits(input.expected);
+  const stage = explicitLimits(input.stage);
+  identifier(input.stage.id, "stage ID");
+  integer(input.expected.revision, "expected revision");
+  if (typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 1000)
+    invalid("Billing limit change requires a reason of at most 1000 characters.");
+  if (stage.usdMicros > 10_000_000 || stage.requestLimit > 300 || stage.tokenLimit > 5_000_000)
+    invalid("Incremental stage ceilings are USD 10, 300 requests and 5000000 tokens.");
+  const connection = existingLedger(input.databasePath, false);
+  try {
+    connection.exec("BEGIN IMMEDIATE");
+    const before = readStatus(connection);
+    if (
+      before.revision !== input.expected.revision ||
+      before.usdLimitMicros !== expected.usdMicros ||
+      before.requestLimit !== expected.requestLimit ||
+      before.tokenLimit !== expected.tokenLimit
+    )
+      throw new BillingError(
+        "Stale expected billing settings; inspect status again.",
+        "BILLING_STALE_SETTINGS",
+      );
+    if (
+      next.usdMicros < before.committedUsdMicros ||
+      next.requestLimit < before.requests ||
+      next.tokenLimit < before.tokens
+    )
+      throw new BillingError(
+        "New billing limits are below committed usage, including held reservations.",
+        "BILLING_LIMIT_BELOW_USAGE",
+      );
+    connection.exec(
+      readFileSync(resolve(process.cwd(), "migrations/billing/002_limit_audit.sql"), "utf8"),
+    );
+    if (
+      connection.prepare("SELECT 1 FROM billing_limit_audit WHERE stage_id=?").get(input.stage.id)
+    )
+      throw new BillingError("Billing stage already exists.", "BILLING_STAGE_EXISTS");
+    const baselineRowid = (
+      connection.prepare("SELECT COALESCE(MAX(rowid),0) AS last FROM billing_attempts").get() as {
+        last: number;
+      }
+    ).last;
+    connection
+      .prepare(
+        `INSERT INTO billing_limit_audit
+      (changed_at,reason,stage_id,previous_usd_limit_micros,previous_request_limit,previous_token_limit,
+       usd_limit_micros,request_limit,token_limit,baseline_rowid,baseline_json,
+       stage_usd_limit_micros,stage_request_limit,stage_token_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        new Date().toISOString(),
+        input.reason.trim(),
+        input.stage.id,
+        before.usdLimitMicros,
+        before.requestLimit,
+        before.tokenLimit,
+        next.usdMicros,
+        next.requestLimit,
+        next.tokenLimit,
+        baselineRowid,
+        JSON.stringify(readTotals(connection)),
+        stage.usdMicros,
+        stage.requestLimit,
+        stage.tokenLimit,
+      );
+    connection
+      .prepare(
+        "UPDATE billing_settings SET usd_limit_micros=?, request_limit=?, token_limit=? WHERE id=1",
+      )
+      .run(next.usdMicros, next.requestLimit, next.tokenLimit);
+    const after = readStatus(connection);
+    connection.exec("COMMIT");
+    return after;
+  } catch (error) {
+    if (connection.isTransaction) connection.exec("ROLLBACK");
+    throw error;
+  } finally {
+    connection.close();
+  }
+}
+
 function withLedger<T>(fn: (ledger: ReturnType<typeof openBillingLedger>) => T): T {
   const ledger = openBillingLedger(configuredOptions());
   try {

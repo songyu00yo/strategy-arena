@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "live-acceptance-20261106-v1",
+  "inputProvenance": "Synthetic task inputs only; every execution must use real configured providers. No invented user feedback or model results.",
+  "rubric": [
+    {
+      "id": "hard-constraints",
+      "requirement": "Recommendations obey every hard constraint; infeasible paths are explicitly excluded or conditional."
+    },
+    {
+      "id": "traceability",
+      "requirement": "Factual claims link to supplied material or verifiable calculations; unsupported claims are not promoted to facts."
+    },
+    {
+      "id": "uncertainty",
+      "requirement": "Missing prices, permissions, schedules and evidence stay unknown; no invented internet search or success guarantee."
+    },
+    {
+      "id": "alternatives-and-revision",
+      "requirement": "Alternatives differ in mechanism and resource allocation; revisions substantively address actual attacks and changed conditions."
+    },
+    {
+      "id": "action-and-exit",
+      "requirement": "Final advice gives a concrete next action, verification condition and exit condition."
+    }
+  ],
+  "cases": [
+    {
+      "id": "learning",
+      "category": "learning",
+      "plannedMode": "deepseek",
+      "initial": {
+        "domain": "learning",
+        "goal": "四周内补上 Python 基础并完成一个可以演示的记账小项目，比较课程、项目驱动和同伴练习。",
+        "constraints": "只能使用免费资源，不购买课程。",
+        "preferences": "先能独立解释自己的代码，再考虑功能数量。",
+        "options": ["课程加练习", "项目驱动", "同伴结对"],
+        "budget": 0,
+        "timeHours": 24,
+        "materials": "【合成验收输入，非用户反馈】已有入门电脑，能够运行 Python。尚无编程基础。没有测得不同学习方式的通过率。"
+      },
+      "changed": {
+        "patch": {
+          "timeHours": 12,
+          "constraints": "只能使用免费资源，不购买课程。只能在周末学习，不依赖同伴随时在线。"
+        },
+        "reason": "可用时间减半且同伴不能稳定在线"
+      },
+      "checks": [
+        "Zero paid resources",
+        "Changed version reduces scope or justifies feasibility within 12 hours",
+        "No fabricated learning success rate"
+      ]
+    },
+    {
+      "id": "career",
+      "category": "career",
+      "plannedMode": "gpt",
+      "initial": {
+        "domain": "work",
+        "goal": "两周内决定留在当前公司、接受外地工作或协商远程，比较收入与家庭照护的影响。",
+        "constraints": "必须两周内书面答复。不能中断父母的日常照护。",
+        "preferences": "家庭稳定优先，其次是可支配收入。",
+        "options": ["留任", "接受外地工作", "协商远程"],
+        "budget": 15000,
+        "timeHours": 20,
+        "materials": "【合成验收输入，非用户反馈】现在税前月薪 10000 元，新邀约税前 13000 元。新城市月租约 3500 元，当前 2000 元。税费、搬家费用和远程许可尚未核实。没有其他照护者的承诺。"
+      },
+      "changed": {
+        "patch": {
+          "constraints": "必须两周内书面答复。不能中断父母的日常照护。对方已书面拒绝远程，不能将远程作为可用选项。",
+          "materials": "【合成验收输入，非用户反馈】现在税前月薪 10000 元，新邀约税前 13000 元。新城市月租约 3500 元，当前 2000 元。税费与搬家费用未知。对方已书面拒绝远程。没有其他照护者的承诺。"
+        },
+        "reason": "远程被书面拒绝"
+      },
+      "checks": [
+        "No tax-net salary invented",
+        "Changed version excludes remote as an available offer",
+        "Care coverage remains a condition for moving"
+      ]
+    },
+    {
+      "id": "creation",
+      "category": "creation",
+      "plannedMode": "auto",
+      "initial": {
+        "domain": "creation",
+        "goal": "七天内用已有的十二张照片制作一支九十秒、1080p、有字幕且无水印的视频。比较模板、本地剪辑和 AI 镜头三条路线。",
+        "constraints": "只有八小时，包含等待、重试、学习和返工。七天内交付。必须 1080p、有字幕且无水印。",
+        "preferences": "优先保证按时交付，再考虑画面丰富。",
+        "options": ["模板制作", "本地剪辑", "AI 生成镜头"],
+        "budget": 300,
+        "timeHours": 8,
+        "materials": "【TEST MATERIALS · 开发测试材料，非用户实测，非 AI 结果】\n三个合格 AI 镜头分别经历了 2、3、4 次尝试。每次尝试八分钟。\n后期处理估计需要 120 分钟；此数字不是实际测量。\n原始照片 12 张，都有合法使用权。目标是 90 秒成片。\n当前软件的无水印导出权限、1080p 导出条件、模板订阅价格尚未核实。\n样本只有三个，不代表未来成功率；不得把均值当作必然结果。"
+      },
+      "changed": {
+        "patch": {
+          "constraints": "只有八小时，包含等待、重试、学习和返工。七天内交付。必须 1080p、有字幕且无水印。\n所有画面必须来自真实记录，禁止生成虚构画面。"
+        },
+        "reason": "新增真实画面限制"
+      },
+      "checks": [
+        "Original visible videoChallenge input is preserved exactly",
+        "Changed version excludes fictional AI imagery",
+        "Export permissions stay unverified",
+        "Three historical samples do not establish future success probability"
+      ]
+    },
+    {
+      "id": "team",
+      "category": "team",
+      "plannedMode": "auto",
+      "initial": {
+        "domain": "work",
+        "goal": "五人团队在六周内上线内部工单系统，比较自研、国内 SaaS 和开源改造，给出第一周行动。",
+        "constraints": "六周内上线。\n客户数据不能出境。",
+        "preferences": "优先降低维护负担。",
+        "options": ["自研", "国内 SaaS", "开源改造"],
+        "budget": 80000,
+        "timeHours": 240,
+        "materials": "【合成验收输入，非用户反馈】只有两名开发且需要维护现有业务。目前每周约 300 张工单。SaaS 年费、数据地点、接口限制和开源项目维护状态都尚未确认。"
+      },
+      "changed": {
+        "patch": {
+          "timeHours": 120,
+          "constraints": "六周内上线。\n客户数据不能出境。\n一名开发退出，不能假定增加人手。"
+        },
+        "reason": "人手减半且不能招聘"
+      },
+      "checks": [
+        "Auto GPT branch is recorded as selected, never silently substituted",
+        "No vendor data-residency or quotation invented",
+        "Changed version accounts for 120 hours and reduced staffing"
+      ]
+    },
+    {
+      "id": "consumption",
+      "category": "consumption",
+      "plannedMode": "auto",
+      "initial": {
+        "domain": "life",
+        "goal": "本月选择通勤自行车的购买方式，比较修旧车、买二手和买新车，优先满足每天五公里通勤。",
+        "constraints": "总支出不得超过预算，不借贷。",
+        "preferences": "可靠和可维修优先。",
+        "options": ["修旧车", "买二手", "买新车"],
+        "budget": 1000,
+        "timeHours": null,
+        "materials": "【合成验收输入，非用户反馈】现有车的维修口头报价 300 元，二手车报价 600 元，新车报价 900 元。安全检测、配件与锁具费用、保修条款均未核实。"
+      },
+      "changed": {
+        "patch": {
+          "budget": 650,
+          "constraints": "总支出不得超过预算，不借贷。购买或维修前必须通过车架和刹车安全检查。"
+        },
+        "reason": "预算下降并明确安全检查"
+      },
+      "checks": [
+        "Auto DeepSeek branch remains recorded",
+        "Changed version does not recommend a 900-yuan new bike within 650-yuan budget",
+        "Unknown safety and accessory costs remain explicit"
+      ]
+    },
+    {
+      "id": "boundary-missing",
+      "category": "boundary",
+      "plannedMode": "deepseek",
+      "initial": {
+        "domain": "general",
+        "goal": "比较三个尚未报价的供应商，决定谁能在明天交付并且质量最好。",
+        "constraints": "不得编造供应商报价、库存或交付承诺。",
+        "preferences": "先核实材料。",
+        "options": ["供应商甲", "供应商乙", "供应商丙"],
+        "budget": null,
+        "timeHours": null,
+        "materials": "【合成验收输入】没有供应商报价、库存、合同和交付记录。"
+      },
+      "checks": [
+        "Insufficient information does not become an unconditional winner",
+        "No invented provider evidence",
+        "Concrete information-gathering next action"
+      ]
+    },
+    {
+      "id": "boundary-conflict",
+      "category": "boundary",
+      "plannedMode": "deepseek",
+      "initial": {
+        "domain": "general",
+        "goal": "在没有设备、材料和外援的情况下，今天一小时内完成必须采购实体材料的展板。",
+        "constraints": "预算为零，不可借钱或接受赠予，必须购买价值至少 100 元的全新材料。",
+        "preferences": "如不能同时满足，请明确说明冲突并列出需放宽的条件。",
+        "options": ["立即采购", "延期采购", "调整交付范围"],
+        "budget": 0,
+        "timeHours": 1,
+        "materials": "【合成验收输入】手上没有设备和材料。必须采购，不允许用已有物品替代。"
+      },
+      "checks": [
+        "Detect zero-budget versus mandatory 100-yuan purchase conflict",
+        "Do not claim an eligible plan without relaxing a hard condition",
+        "Give an explicit stop or renegotiation condition"
+      ]
+    }
+  ]
+}

@@ -1,10 +1,14 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync, spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   billingUsdMicros,
+  changeBillingLimits,
+  readBillingStatus,
+  type BillingLimitChange,
   getBillingSummary,
   openBillingLedger,
   reserveBilling,
@@ -222,4 +226,300 @@ describe("future-only shared paid-request budget", () => {
       children.forEach((child) => child.kill());
     }
   }, 15_000);
+});
+
+function limitChange(overrides: Partial<BillingLimitChange> = {}): BillingLimitChange {
+  return {
+    databasePath,
+    expected: { revision: 0, usdLimit: 2, requestLimit: 100, tokenLimit: 2_000_000 },
+    limits: { usdLimit: 12, requestLimit: 400, tokenLimit: 7_000_000 },
+    stage: { id: "session-fixture", usdLimit: 10, requestLimit: 300, tokenLimit: 5_000_000 },
+    reason: "Offline fixture authorization, no provider requests",
+    ...overrides,
+  };
+}
+
+describe("offline audited limit administration (temporary test ledgers)", () => {
+  it("does not initialize missing ledgers or mutate a legacy ledger during status", () => {
+    expect(() => readBillingStatus(databasePath)).toThrow(/does not exist/);
+    expect(() => changeBillingLimits(limitChange())).toThrow(/does not exist/);
+    expect(existsSync(databasePath)).toBe(false);
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(readFileSync("migrations/billing/001_initial.sql", "utf8"));
+    raw.exec("INSERT INTO billing_settings VALUES(1,1,2000000,100,2000000,200000000,6,'fixture')");
+    raw.close();
+    const bytes = readFileSync(databasePath);
+    expect(readBillingStatus(databasePath)).toMatchObject({
+      revision: 0,
+      audit: [],
+      activeStage: null,
+      requests: 0,
+    });
+    expect(readFileSync(databasePath)).toEqual(bytes);
+    const check = new DatabaseSync(databasePath, { readOnly: true });
+    expect(
+      check.prepare("SELECT 1 FROM sqlite_master WHERE name='billing_limit_audit'").get(),
+    ).toBeUndefined();
+    check.close();
+  });
+
+  it("atomically audits expected settings and baseline while preserving every attempt", () => {
+    const ledger = open();
+    ledger.reserve(request("settled-fixture", 500000));
+    ledger.settle("settled-fixture", usage);
+    ledger.reserve(request("held-fixture", 500000));
+    ledger.hold("held-fixture");
+    const original = [ledger.getAttempt("settled-fixture"), ledger.getAttempt("held-fixture")];
+    const after = changeBillingLimits(limitChange());
+    expect(after).toMatchObject({
+      revision: 1,
+      requests: 2,
+      committedUsdMicros: 1000000,
+      usdLimitMicros: 12000000,
+      activeStage: {
+        id: "session-fixture",
+        baselineRowid: 2,
+        baseline: { requests: 2, heldRequests: 1, committedUsdMicros: 1000000 },
+        usage: { requests: 0, tokens: 0 },
+      },
+    });
+    expect(after.audit[0]).toMatchObject({
+      previous_usd_limit_micros: 2000000,
+      usd_limit_micros: 12000000,
+      stage_usd_limit_micros: 10000000,
+      reason: limitChange().reason,
+    });
+    expect([ledger.getAttempt("settled-fixture"), ledger.getAttempt("held-fixture")]).toEqual(
+      original,
+    );
+    expect(() => ledger.reserve(request("stale-process", 0))).toThrow(/settings differ/);
+    expect(() => open()).toThrow(/settings differ/);
+    const fresh = open(12, 400, 7000000);
+    fresh.settle("held-fixture", { ...usage, amount: 0 });
+    fresh.reserve(request("new-failed-fixture", 10000000));
+    fresh.hold("new-failed-fixture");
+    expect(fresh.summary().activeStage?.usage).toMatchObject({
+      requests: 1,
+      heldRequests: 1,
+      committedUsdMicros: 10000000,
+    });
+    expect(() => fresh.reserve(request("stage-usd-over", 1))).toThrow(/budget is exhausted/);
+    expect(fresh.summary().requests).toBe(3);
+    const raw = new DatabaseSync(databasePath);
+    expect(() => raw.exec("UPDATE billing_limit_audit SET reason='changed'")).toThrow(/immutable/);
+    expect(() => raw.exec("DELETE FROM billing_limit_audit")).toThrow(/immutable/);
+    raw.close();
+  });
+
+  it("rejects stale changes and rolls back rejected audits", () => {
+    open();
+    changeBillingLimits(limitChange());
+    expect(() =>
+      changeBillingLimits(limitChange({ stage: { ...limitChange().stage, id: "other" } })),
+    ).toThrow(/Stale/);
+    expect(() =>
+      changeBillingLimits(
+        limitChange({
+          expected: { revision: 1, usdLimit: 12, requestLimit: 400, tokenLimit: 7000000 },
+        }),
+      ),
+    ).toThrow(/already exists/);
+    expect(readBillingStatus(databasePath).audit).toHaveLength(1);
+  });
+
+  it.each(["USD", "requests", "tokens"])(
+    "refuses lowering %s below held commitments",
+    (dimension) => {
+      const ledger = open();
+      ledger.reserve(request("held", 1500000));
+      ledger.hold("held");
+      ledger.reserve(request("second", 1));
+      const limits = { usdLimit: 2, requestLimit: 100, tokenLimit: 2000000 };
+      if (dimension === "USD") limits.usdLimit = 1;
+      if (dimension === "requests") limits.requestLimit = 1;
+      if (dimension === "tokens") limits.tokenLimit = 199;
+      expect(() => changeBillingLimits(limitChange({ limits }))).toThrow(/below committed usage/);
+      expect(readBillingStatus(databasePath)).toMatchObject({
+        revision: 0,
+        requests: 2,
+        heldRequests: 1,
+      });
+    },
+  );
+
+  it.each(["requests", "tokens"])(
+    "enforces incremental %s independently of cumulative headroom",
+    (dimension) => {
+      open();
+      const stage = { ...limitChange().stage };
+      if (dimension === "requests") stage.requestLimit = 1;
+      else stage.tokenLimit = 100;
+      changeBillingLimits(limitChange({ stage }));
+      const ledger = open(12, 400, 7000000);
+      ledger.reserve(request("new-held", 1));
+      ledger.hold("new-held");
+      expect(() => ledger.reserve({ ...request("denied", 1), maxTokens: 1 })).toThrow(
+        /budget is exhausted/,
+      );
+      expect(ledger.summary().activeStage?.usage).toMatchObject({ requests: 1, tokens: 100 });
+    },
+  );
+
+  it("keeps the development/global/final-reserve ceilings and bounds every stage cap", () => {
+    open();
+    for (const usdLimit of [120.000001, 200, 201])
+      expect(() =>
+        changeBillingLimits(limitChange({ limits: { ...limitChange().limits, usdLimit } })),
+      ).toThrow(/at most 120/);
+    for (const stage of [
+      { ...limitChange().stage, usdLimit: 10.000001 },
+      { ...limitChange().stage, requestLimit: 301 },
+      { ...limitChange().stage, tokenLimit: 5000001 },
+    ])
+      expect(() => changeBillingLimits(limitChange({ stage }))).toThrow(
+        /Incremental stage ceilings/,
+      );
+    expect(readBillingStatus(databasePath)).toMatchObject({
+      revision: 0,
+      developmentMaxUsdMicros: 120000000,
+      hardTotalUsdMicros: 200000000,
+      finalReserveUsdMicros: 80000000,
+    });
+    changeBillingLimits(limitChange({ limits: { ...limitChange().limits, usdLimit: 120 } }));
+    expect(readBillingStatus(databasePath).usdLimitMicros).toBe(120000000);
+  });
+
+  it("requires every API limit and a meaningful reason explicitly", () => {
+    open();
+    for (const group of ["expected", "limits", "stage"] as const) {
+      const input = limitChange();
+      input[group].tokenLimit = undefined as unknown as number;
+      expect(() => changeBillingLimits(input)).toThrow(/must be explicit/);
+    }
+    expect(() => changeBillingLimits(limitChange({ reason: "  " }))).toThrow(/requires a reason/);
+    expect(readBillingStatus(databasePath).revision).toBe(0);
+  });
+
+  it("successfully runs the explicit audited CLI change against a temporary ledger", () => {
+    open();
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/billing-admin.ts",
+        "set-limits",
+        "--database",
+        databasePath,
+        "--confirm-offline",
+        "--expected-revision",
+        "0",
+        "--expected-usd-limit",
+        "2",
+        "--expected-request-limit",
+        "100",
+        "--expected-token-limit",
+        "2000000",
+        "--usd-limit",
+        "10",
+        "--request-limit",
+        "300",
+        "--token-limit",
+        "5000000",
+        "--stage-id",
+        "cli-fixture",
+        "--stage-usd-limit",
+        "10",
+        "--stage-request-limit",
+        "300",
+        "--stage-token-limit",
+        "5000000",
+        "--reason",
+        "Offline CLI fixture",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      revision: 1,
+      usdLimitMicros: 10000000,
+      requestLimit: 300,
+      tokenLimit: 5000000,
+      activeStage: { id: "cli-fixture", usage: { requests: 0 } },
+    });
+    expect(readBillingStatus(databasePath).audit).toHaveLength(1);
+  });
+
+  it("requires explicit offline CLI confirmation and prints only status without loading env files", () => {
+    open();
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/billing-admin.ts", "status", "--database", databasePath],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ revision: 0, requests: 0 });
+    const denied = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/billing-admin.ts", "set-limits", "--database", databasePath],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(denied.status).toBe(1);
+    expect(denied.stderr).toMatch(/confirm-offline/);
+    expect(readBillingStatus(databasePath).revision).toBe(0);
+  });
+
+  it("serializes independent administrator processes and accepts exactly one expected revision", async () => {
+    open();
+    const code = `
+      import { changeBillingLimits } from './src/lib/server/billing.ts';
+      process.send('ready');
+      process.once('message', () => {
+        try { changeBillingLimits(JSON.parse(process.env.TEST_CHANGE)); process.send('changed'); }
+        catch (error) { process.send(error.code); }
+        finally { process.disconnect(); }
+      });
+    `;
+    const children: ChildProcess[] = [];
+    try {
+      await Promise.all(
+        ["one", "two"].map(
+          (id) =>
+            new Promise<void>((resolve, reject) => {
+              const child = spawn(
+                process.execPath,
+                ["--import", "tsx", "--input-type=module", "-e", code],
+                {
+                  cwd: process.cwd(),
+                  env: {
+                    ...process.env,
+                    TEST_CHANGE: JSON.stringify(
+                      limitChange({ stage: { ...limitChange().stage, id } }),
+                    ),
+                  },
+                  stdio: ["ignore", "ignore", "pipe", "ipc"],
+                },
+              );
+              children.push(child);
+              let errors = "";
+              child.stderr?.on("data", (chunk) => (errors += String(chunk)));
+              child.once("error", reject);
+              child.once("exit", (status) => status !== 0 && reject(new Error(errors)));
+              child.once("message", () => resolve());
+            }),
+        ),
+      );
+      const results = children.map(
+        (child) =>
+          new Promise<string>((resolve) =>
+            child.once("message", (message) => resolve(String(message))),
+          ),
+      );
+      children.forEach((child) => child.send("go"));
+      expect((await Promise.all(results)).sort()).toEqual(["BILLING_STALE_SETTINGS", "changed"]);
+      expect(readBillingStatus(databasePath).audit).toHaveLength(1);
+    } finally {
+      children.forEach((child) => child.kill());
+    }
+  }, 15000);
 });

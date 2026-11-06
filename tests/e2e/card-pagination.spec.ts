@@ -42,7 +42,8 @@ test("real career recording: card pages crossfade without replacing visible text
     "step",
   );
   const trigger = page.getByRole("button", { name: "查看第 11 步", exact: true });
-  await trigger.click();
+  await trigger.focus();
+  await page.keyboard.press("Enter");
   const card = page.getByRole("dialog");
   const window = card.locator(".c-step-window");
   await expect(card.getByRole("heading", { name: title11, exact: true })).toBeVisible();
@@ -88,7 +89,8 @@ test("real career recording: card pages crossfade without replacing visible text
   await expect(trigger).toBeFocused();
 
   // Reverse twice while the preceding page is still moving, then reduce motion mid-transition.
-  await trigger.click();
+  await trigger.focus();
+  await page.keyboard.press("Enter");
   await expect(card).toBeVisible();
   await expect(card.locator(".c-pull-face")).toHaveCount(0);
   await card.getByRole("button", { name: "下一步", exact: true }).click();

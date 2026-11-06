@@ -5,6 +5,7 @@ import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { STAGE_LABELS, type ArenaVersion, type Attack } from "@/lib/contracts";
 import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
+import { readMotionOrigin } from "../motion-origin";
 import "./step-card-motion.css";
 import { nameOf, type Beat } from "./beats";
 
@@ -536,7 +537,10 @@ export function StepCard({
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const previous = document.activeElement as HTMLElement | null;
+    const origin = readMotionOrigin();
+    const previous = origin?.element.isConnected
+      ? origin.element
+      : (document.activeElement as HTMLElement | null);
     const release = acquireMotionHold();
     // A user can draw a card while a seek is still rearranging the deck. Freeze that exact pose.
     const deckTransitions = [...document.querySelectorAll<HTMLElement>("[data-step-source]")]

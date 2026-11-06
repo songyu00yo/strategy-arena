@@ -640,7 +640,7 @@ export function ChainDeck({
                   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      onStep(i);
+                      event.currentTarget.click();
                     }
                   },
                 })}

@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { z } from "zod";
-import { ChallengeSchema, type Challenge, type ModelUsage } from "../contracts";
+import {
+  ChallengeSchema,
+  type Challenge,
+  type ModelUsage,
+  type ModelFormatNormalization,
+} from "../contracts";
 import {
   CreateIntakeSchema,
   UpdateIntakeSchema,
@@ -165,7 +170,16 @@ function allSources(draftId: string): MaterialSource[] {
   return storedAttachments(draftId).flatMap((attachment) => {
     if (!attachment.parsed || attachment.state === "failed" || attachment.state === "needs_pages")
       return [];
-    const chunks = attachment.parsed.chunks.map((chunk) => ({ ...chunk, interpretation: false }));
+    const chunks: Array<{
+      location: string;
+      text: string;
+      interpretation: boolean;
+      origin: NonNullable<MaterialSource["origin"]>;
+    }> = attachment.parsed.chunks.map((chunk) => ({
+      ...chunk,
+      interpretation: false,
+      origin: "document",
+    }));
     if (attachment.visual)
       for (const batch of Object.values(attachment.visual.batches))
         for (const reading of batch.readings) {
@@ -174,12 +188,14 @@ function allSources(draftId: string): MaterialSource[] {
               location: `${reading.location} · 图像转录（需核对）`,
               text: reading.transcription,
               interpretation: false,
+              origin: "model_transcription",
             });
           if (reading.interpretation.trim() || reading.uncertain.trim())
             chunks.push({
               location: `${reading.location} · 模型解读`,
               text: `${reading.interpretation}${reading.uncertain ? `\n未确认：${reading.uncertain}` : ""}`,
               interpretation: true,
+              origin: "model_interpretation",
             });
         }
     return chunks.flatMap((chunk) => {
@@ -197,6 +213,7 @@ function allSources(draftId: string): MaterialSource[] {
           location,
           text,
           interpretation: chunk.interpretation,
+          origin: chunk.origin,
         });
       }
       return result;
@@ -554,7 +571,17 @@ async function billed<T>(
   });
   try {
     const result = await generateStructured({ ...request, attemptId: callId });
-    recordCall(draftId, owner, operationId, callId, estimate, result.usage);
+    recordCall(
+      draftId,
+      owner,
+      operationId,
+      callId,
+      estimate,
+      result.usage,
+      false,
+      undefined,
+      result.formatNormalization,
+    );
     return result.value;
   } catch (error) {
     const modelError = error instanceof ModelCallError ? error : undefined;
@@ -580,6 +607,7 @@ function recordCall(
   usage?: ModelUsage,
   uncertain = false,
   error?: string,
+  formatNormalization?: ModelFormatNormalization,
 ) {
   atomic(() => {
     const draft = read(draftId, owner);
@@ -596,7 +624,11 @@ function recordCall(
       .prepare("UPDATE intake_calls SET state=?,usage=?,error=? WHERE id=?")
       .run(
         uncertain ? "uncertain" : error ? "failed" : "completed",
-        JSON.stringify({ reservation: estimate, usage }),
+        JSON.stringify({
+          reservation: estimate,
+          usage,
+          ...(formatNormalization ? { formatNormalization } : {}),
+        }),
         error ?? null,
         callId,
       );

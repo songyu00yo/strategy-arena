@@ -596,6 +596,24 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
     else if (step.stage === "attack") result = await generateAttack(input, config, step.id);
     else if (step.stage === "revise") result = await generateRevision(input, config, step.id);
     else if (step.stage === "judge") result = await generateVerdict(input, config, step.id);
+    if (result?.formatNormalization)
+      atomic(() => {
+        event(
+          arenaId,
+          versionId,
+          "format_normalized",
+          "模型参数仅移除一个冗余尾部右花括号，原始参数已保存；这不表示语义核验通过。",
+          step.stage,
+          step.role,
+          {
+            ...result!.formatNormalization,
+            schemaValidated: true,
+            semanticValidation: "pending",
+            model: result!.usage.model,
+            responseId: result!.usage.responseId,
+          },
+        );
+      });
     const evidence =
       step.stage === "verify"
         ? [

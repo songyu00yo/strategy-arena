@@ -208,6 +208,34 @@ describe("five model structured generation and shared billing", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(tooMany.options).toHaveLength(4);
   });
+  it("accepts one redundant trailing brace without another paid attempt and retains normalization provenance", async () => {
+    const original = '{"answer":"仅修正语法，不证明内容正确"}}';
+    const fetch = vi.fn().mockResolvedValue(response("openai", original));
+    vi.stubGlobal("fetch", fetch);
+    const result = await generateStructured(request);
+    expect(result.value).toEqual({ answer: "仅修正语法，不证明内容正确" });
+    expect(result.formatNormalization).toMatchObject({
+      originalOutput: original,
+      kind: "single-redundant-trailing-object-brace",
+      removedSuffix: "}",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(billing.reserveBilling).toHaveBeenCalledTimes(1);
+    expect(billing.settleBilling).toHaveBeenCalledTimes(1);
+  });
+  it("still rejects schema-invalid normalized objects with recorded usage and no silent field completion", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(response("openai", '{"unrelated":"not the required answer"}}'));
+    vi.stubGlobal("fetch", fetch);
+    await expect(generateStructured(request)).rejects.toMatchObject({
+      uncertain: false,
+      usage: { inputTokens: 100 },
+      repair: undefined,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(billing.settleBilling).toHaveBeenCalledTimes(1);
+  });
   it("rejects forged dimensions before reserving or dispatching", async () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

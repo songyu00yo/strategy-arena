@@ -245,9 +245,17 @@ export interface ModelUsage {
   responseId: string;
   durationMs: number;
 }
+export interface ModelFormatNormalization {
+  kind: "single-redundant-trailing-object-brace";
+  originalOutput: string;
+  originalOutputSha256: string;
+  removedSuffix: "}";
+  removedOffset: number;
+}
 export interface ModelResult<T> {
   value: T;
   usage: ModelUsage;
+  formatNormalization?: ModelFormatNormalization;
 }
 export interface StageInput {
   challenge: Challenge;

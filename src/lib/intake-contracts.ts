@@ -31,6 +31,7 @@ export interface MaterialSource {
   location: string;
   text: string;
   interpretation: boolean;
+  origin?: "document" | "model_transcription" | "model_interpretation";
 }
 export interface IntakeAttachment {
   id: string;

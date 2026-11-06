@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import sharp from "sharp";
 import {
@@ -8,6 +8,7 @@ import {
   VerdictSchema,
   SCHEMA_VERSION,
   type ModelResult,
+  type ModelFormatNormalization,
   type ModelUsage,
   type ModelProvider,
   type Currency,
@@ -35,6 +36,7 @@ function numberEnv(name: string, fallback: number, min: number, max: number) {
 }
 export interface ModelConfig {
   configurationVersion: string;
+  parserVersion: string;
   provider: ModelProvider;
   currency: Currency;
   reasoningEffort: "low" | null;
@@ -107,6 +109,7 @@ export function getModelConfig(
       : prefix;
   return {
     configurationVersion: openai ? "openai-1.2.0" : defaults.configVersion,
+    parserVersion: "json-single-trailing-brace-1.0.0",
     provider,
     currency: openai ? "USD" : "CNY",
     reasoningEffort: openai ? "low" : null,
@@ -138,6 +141,38 @@ export function getModelConfig(
       1000,
     ),
   };
+}
+/** Accept exactly one redundant closing brace after an otherwise complete object.
+ * A second strict parse verifies strings, escaping, nesting and the absence of any other
+ * trailing content. No incomplete JSON, primitive, array, field or text is repaired. */
+export function decodeModelJson(output: string): {
+  value: unknown;
+  formatNormalization?: ModelFormatNormalization;
+} {
+  try {
+    return { value: JSON.parse(output) };
+  } catch (originalError) {
+    const ending = /}([ \t\r\n]*)$/.exec(output);
+    if (!ending) throw originalError;
+    const candidate = output.slice(0, ending.index) + ending[1];
+    let value: unknown;
+    try {
+      value = JSON.parse(candidate);
+    } catch {
+      throw originalError;
+    }
+    if (value === null || typeof value !== "object" || Array.isArray(value)) throw originalError;
+    return {
+      value,
+      formatNormalization: {
+        kind: "single-redundant-trailing-object-brace",
+        originalOutput: output,
+        originalOutputSha256: createHash("sha256").update(output).digest("hex"),
+        removedSuffix: "}",
+        removedOffset: ending.index,
+      },
+    };
+  }
 }
 export class ModelCallError extends Error {
   constructor(
@@ -798,8 +833,11 @@ async function executeStructured<T>({
     }
   }
   let decoded: unknown;
+  let formatNormalization: ModelFormatNormalization | undefined;
   try {
-    decoded = JSON.parse(output);
+    const parsedJson = decodeModelJson(output);
+    decoded = parsedJson.value;
+    formatNormalization = parsedJson.formatNormalization;
   } catch (error) {
     throw new ModelCallError(
       "模型没有返回有效 JSON；已记录实际用量。",
@@ -823,7 +861,7 @@ async function executeStructured<T>({
       allowRepair ? { feedback: paths, rejectedOutput: output.slice(0, 24000) } : undefined,
     );
   }
-  return { value: parsed.data, usage };
+  return { value: parsed.data, usage, ...(formatNormalization ? { formatNormalization } : {}) };
 }
 export const generateStrategy = (
   input: StageInput,

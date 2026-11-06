@@ -435,6 +435,32 @@ describe("guided task preparation with synthetic model output", () => {
     expect(draft.challenge?.goal).toBe("希望比较适合自己的体重管理行动路线");
     expect(draft.challenge?.materials).toContain("用户原始目标：我要减肥");
   });
+  it("keeps a model-format normalization record private while persisting its original parameters", async () => {
+    const draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+    const original = `${JSON.stringify(analysis())}}`;
+    fixture.generate.mockResolvedValueOnce({
+      ...result(analysis()),
+      formatNormalization: {
+        kind: "single-redundant-trailing-object-brace",
+        originalOutput: original,
+        originalOutputSha256: "synthetic-hash",
+        removedSuffix: "}",
+        removedOffset: original.length - 1,
+      },
+    });
+    const prepared = await analyzeIntake(draft.id, "alice", operation(draft));
+    expect(prepared.status).toBe("summary");
+    const call = db()
+      .prepare(
+        "SELECT c.usage FROM intake_calls c JOIN intake_operations o ON o.id=c.operation_id WHERE o.draft_id=?",
+      )
+      .get(draft.id) as { usage: string };
+    expect(JSON.parse(call.usage).formatNormalization).toMatchObject({
+      originalOutput: original,
+      removedSuffix: "}",
+    });
+    expect(JSON.stringify(prepared)).not.toContain("originalOutput");
+  });
   it("deduplicates in-flight and completed operations and rejects reused payloads", async () => {
     let finish!: (value: ReturnType<typeof result>) => void;
     fixture.generate.mockReturnValueOnce(
@@ -517,6 +543,7 @@ describe("attachment sources and atomic confirmation", () => {
       true,
     );
     expect(JSON.stringify(draft)).not.toMatch(/data:image|"parsed"|"bytes"/);
+    expect(draft.sources.every((source) => source.origin === "document")).toBe(true);
     draft = await analyzeIntake(draft.id, "alice", operation(draft));
     expect(draft.challenge!.materials.length).toBeLessThanOrEqual(20000);
     expect(draft.challenge!.materials).toContain("文件：计划材料.txt；位置：");
@@ -559,8 +586,8 @@ describe("attachment sources and atomic confirmation", () => {
   });
   it("reuses billed image batches across question rounds and invalidates them when changing model", async () => {
     vi.spyOn(parser, "parseAttachment").mockResolvedValue({
-      kind: "image",
-      chunks: [],
+      kind: "document",
+      chunks: [{ location: "图像转录（需核对）!A1", text: "真实文档单元格文字" }],
       images: [
         { location: "图片1", width: 1, height: 1, dataUrl: "data:image/png;base64,c3ludGhldGlj" },
       ],
@@ -571,7 +598,7 @@ describe("attachment sources and atomic confirmation", () => {
       draft.id,
       "alice",
       Buffer.from("synthetic-image"),
-      "chart.png",
+      "mixed.pdf",
     );
     fixture.generate
       .mockResolvedValueOnce(
@@ -589,7 +616,18 @@ describe("attachment sources and atomic confirmation", () => {
       .mockResolvedValueOnce(result(analysis({ ready: false, questions: [question()] })));
     draft = await analyzeIntake(draft.id, "alice", operation(draft));
     expect(draft.attachments[0].interpreted).toBe(true);
-    expect(draft.sources.some((source) => source.interpretation)).toBe(true);
+    expect(draft.sources.find((source) => source.text === "真实文档单元格文字")).toMatchObject({
+      origin: "document",
+      interpretation: false,
+    });
+    expect(draft.sources.find((source) => source.text === "预算100元")).toMatchObject({
+      origin: "model_transcription",
+      interpretation: false,
+    });
+    expect(draft.sources.find((source) => source.interpretation)).toMatchObject({
+      origin: "model_interpretation",
+      interpretation: true,
+    });
     expect(JSON.stringify(draft)).not.toContain("base64");
     draft = updateIntake(draft.id, "alice", { revision: draft.revision, answers: [] });
     draft = await analyzeIntake(draft.id, "alice", operation(draft));
@@ -598,7 +636,12 @@ describe("attachment sources and atomic confirmation", () => {
     ).toHaveLength(1);
     draft = updateIntake(draft.id, "alice", { revision: draft.revision, modelMode: "gpt-6.1-sol" });
     expect(draft.attachments[0].interpreted).toBe(false);
-    expect(draft.sources).toEqual([]);
+    expect(draft.sources).toHaveLength(1);
+    expect(draft.sources[0]).toMatchObject({
+      text: "真实文档单元格文字",
+      origin: "document",
+      interpretation: false,
+    });
   });
   it("creates one arena on replay and stores the exact original goal, answers, sources and usage audit", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });

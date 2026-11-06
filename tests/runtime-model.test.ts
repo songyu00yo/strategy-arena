@@ -1,4 +1,5 @@
 /** Synthetic provider boundaries; no external request or bill is produced. */
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ChallengeSchema,
@@ -127,6 +128,36 @@ describe("per-version selected provider and native currency", () => {
       "gpt-6-luna",
       "deepseek-flash",
     ]);
+  });
+  it("audits exact syntax normalization independently from subsequent semantic validation", async () => {
+    const arena = createArena(challenge, "owner", "gpt");
+    let original = "";
+    fixture.generate.mockImplementationOnce(async (input, config) => {
+      const generated = result(input, config);
+      original = `${JSON.stringify(generated.value)}}`;
+      return {
+        ...generated,
+        formatNormalization: {
+          kind: "single-redundant-trailing-object-brace",
+          originalOutput: original,
+          originalOutputSha256: createHash("sha256").update(original).digest("hex"),
+          removedSuffix: "}",
+          removedOffset: original.length - 1,
+        },
+      };
+    });
+    const advanced = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    const audit = advanced.events.find((event) => event.type === "format_normalized");
+    expect(audit?.data).toMatchObject({
+      originalOutput: original,
+      originalOutputSha256: createHash("sha256").update(original).digest("hex"),
+      schemaValidated: true,
+      semanticValidation: "pending",
+      removedSuffix: "}",
+    });
+    expect(audit?.message).toContain("不表示语义核验通过");
+    expect(advanced.events.some((event) => event.type === "protocol_repair_scheduled")).toBe(false);
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
   });
   it("pins the automatic choice, records its reason, and reevaluates only on a new version", async () => {
     const first = createArena(challenge, "owner");

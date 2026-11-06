@@ -68,6 +68,22 @@ export function parseIntakePages(input: string, pageCount: number): number[] {
   return [...pages].sort((a, b) => a - b);
 }
 
+function sourceLabel(source: MaterialSource) {
+  if (source.interpretation || source.origin === "model_interpretation") return "模型解读";
+  if (source.origin === "model_transcription") return "模型转录，需核对原图";
+  if (source.origin === "document") return "原文";
+  return "来源待核对";
+}
+
+function sourceNotice(source: MaterialSource) {
+  if (source.interpretation || source.origin === "model_interpretation")
+    return "这是模型对图片或扫描页的解读，包含推测和不确定内容，请与原文件核对。";
+  if (source.origin === "model_transcription")
+    return "这是模型对图片或扫描页的转录，可能混入描述或推测，请核对原图。";
+  if (source.origin === "document") return null;
+  return "此片段缺少明确的来源记录，请与原材料核对，不能将其视为已核实原文。";
+}
+
 function answerOf(question: IntakeQuestion): IntakeAnswer {
   return {
     questionId: question.id,
@@ -1168,7 +1184,7 @@ export function GuidedIntake({
                   <strong>{item.filename}</strong>
                   <small>
                     {item.location}
-                    {item.interpretation ? " · 模型辨读" : " · 原文"}
+                    {` · ${sourceLabel(item)}`}
                     {draft.usedSourceIds.includes(item.id) ? " · 已用于摘要" : ""}
                   </small>
                 </span>
@@ -1191,8 +1207,8 @@ export function GuidedIntake({
                   <X size={15} />
                 </button>
               </div>
-              {source?.interpretation && (
-                <p className="gi-file-warning">这是模型对图片或扫描页的辨读，请与原文件核对。</p>
+              {source && sourceNotice(source) && (
+                <p className="gi-file-warning">{sourceNotice(source)}</p>
               )}
               <pre>{source?.text}</pre>
             </div>

@@ -37,6 +37,10 @@ test("real career recording: card pages crossfade without replacing visible text
   await page.getByRole("button", { name: "开始分析", exact: true }).click();
   await expect(page.getByRole("group", { name: "推演步骤", exact: true })).toBeVisible();
   await page.keyboard.press("End");
+  await expect(page.getByRole("button", { name: "第 13 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
   const trigger = page.getByRole("button", { name: "查看第 11 步", exact: true });
   await trigger.click();
   const card = page.getByRole("dialog");

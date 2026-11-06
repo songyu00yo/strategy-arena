@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, FileText, History, Pause, Play } from "lucide-react";
 import type { Attack, ArenaVersion } from "@/lib/contracts";
@@ -160,7 +160,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
   const [located, setLocated] = useState<string>();
   const [started, setStarted] = useState(false);
   const replayRoot = useRef<HTMLElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (started) replayRoot.current?.focus({ preventScroll: true });
   }, [started]);
   const version = arena.versions.find((item) => item.id === versionId) ?? arena.versions[0];

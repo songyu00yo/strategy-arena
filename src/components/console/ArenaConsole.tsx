@@ -218,7 +218,7 @@ export function ArenaConsole({
     setPlaying(true);
   }, [playing, index, last, playbackPaused]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;

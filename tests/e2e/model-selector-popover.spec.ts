@@ -33,10 +33,39 @@ test.beforeEach(async ({ page }) => {
 test("explicit UI fixture: floating picker keeps form geometry, arrows only focus, reverses smoothly and tracks a resized viewport", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto("/");
   const trigger = page.getByRole("button", { name: /^选择模型，当前/ });
   await expect(trigger).toBeEnabled();
+  // Resize the goal as a real user can, forcing a menu above the source with limited height.
+  const textarea = await page.getByLabel("你想解决什么问题？", { exact: true }).boundingBox();
+  await page.mouse.move(textarea!.x + textarea!.width - 4, textarea!.y + textarea!.height - 4);
+  await page.mouse.down();
+  await page.mouse.move(textarea!.x + textarea!.width - 4, textarea!.y + textarea!.height + 106, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  expect((await trigger.boundingBox())!.y).toBeGreaterThan(360);
+  await trigger.click();
+  const popup = page.locator('[popover="manual"]');
+  const reasonToggle = page.getByRole("button", { name: "查看选择依据", exact: true });
+  const pageScroll = await page.evaluate(() => scrollY);
+  await reasonToggle.click();
+  await page.waitForTimeout(650);
+  const reasonId = await reasonToggle.getAttribute("aria-controls");
+  const reasonText = page.locator(`[id="${reasonId}"] p`);
+  const reasonBox = await reasonText.boundingBox();
+  const popupBox = await popup.boundingBox();
+  expect(reasonBox!.y).toBeGreaterThanOrEqual(popupBox!.y + 6);
+  expect(reasonBox!.y + reasonBox!.height).toBeLessThanOrEqual(popupBox!.y + popupBox!.height - 6);
+  expect(await page.evaluate(() => scrollY)).toBe(pageScroll);
+  await reasonToggle.click();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(100);
+  expect(await trigger.evaluate((node) => node === document.activeElement)).toBe(false);
+  await expect.poll(() => popup.evaluate((node) => node.matches(":popover-open"))).toBe(false);
+  await expect(trigger).toBeFocused();
+  await page.setViewportSize({ width: 1440, height: 900 });
   const composer = page.locator(".gi-composer");
   const before = await composer.boundingBox();
   await trigger.focus();
@@ -95,6 +124,7 @@ test("explicit UI fixture: floating picker keeps form geometry, arrows only focu
     .toBe(0);
   await page.keyboard.press("Escape");
   await expect(listbox).toBeHidden();
+  await expect.poll(() => popup.evaluate((node) => node.matches(":popover-open"))).toBe(false);
   await expect(trigger).toBeFocused();
 });
 
@@ -119,6 +149,11 @@ test("explicit UI fixture: picker stays in the modal focus boundary and Escape r
   expect(await listbox.evaluate((node) => node.contains(document.activeElement))).toBe(true);
   await page.keyboard.press("Escape");
   await expect(listbox).toBeHidden();
+  await expect
+    .poll(() =>
+      modal.locator('[popover="manual"]').evaluate((node) => node.matches(":popover-open")),
+    )
+    .toBe(false);
   await expect(modal).toBeVisible();
   await expect(trigger).toBeFocused();
   await page.keyboard.press("Escape");

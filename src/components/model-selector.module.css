@@ -197,3 +197,7 @@
     animation: none !important;
   }
 }
+
+.option[aria-disabled="true"] {
+  cursor: default;
+}

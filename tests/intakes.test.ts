@@ -341,6 +341,90 @@ describe("guided task preparation with synthetic model output", () => {
     draft = await analyzeIntake(draft.id, "alice", operation(draft));
     expect(draft.challenge).toMatchObject({ budget: 100, timeHours: 10 });
   });
+  it.each([
+    "我有12小时可用",
+    "可用工时12小时",
+    "共12小时可投入",
+    "我有12小时可用，预计课程耗时8小时",
+  ])("keeps a clear existing Chinese available-time statement: %s", async (source) => {
+    let draft = createIntake("alice", {
+      goal: `请按我已有的时间比较三条学习路线：${source}`,
+      modelMode: "gpt-6.1-terra",
+    });
+    const timeQuote = source.split("，")[0];
+    fixture.generate.mockResolvedValueOnce(result(analysis({ timeHours: 12, timeQuote })));
+    draft = await analyzeIntake(draft.id, "alice", operation(draft));
+    expect(draft.challenge?.timeHours).toBe(12);
+  });
+  it("keeps directly quoted English CNY and total-hour caps from the uploaded document", async () => {
+    let draft = createIntake("alice", {
+      goal: "请根据附件整理三条路线及明确资源上限",
+      modelMode: "gpt-6.1-terra",
+    });
+    draft = await addIntakeAttachment(
+      draft.id,
+      "alice",
+      Buffer.from("The spending cap is CNY 300; total work cap is 12 hours."),
+      "brief.txt",
+    );
+    fixture.generate.mockResolvedValueOnce(
+      result(
+        analysis({
+          budget: 300,
+          budgetQuote: "The spending cap is CNY 300",
+          timeHours: 12,
+          timeQuote: "total work cap is 12 hours",
+        }),
+      ),
+    );
+    draft = await analyzeIntake(draft.id, "alice", operation(draft));
+    expect(draft.challenge).toMatchObject({ budget: 300, timeHours: 12 });
+    expect(draft.assumptions.join(" ")).not.toContain("未找到");
+    const call = fixture.generate.mock.calls[0][0];
+    expect(call.system).toContain("options最多3项");
+    expect(call.system).toContain("assumptions最多6项");
+    expect(call.system).toContain("英文来源也须原样引用");
+  });
+  it.each([
+    {
+      source: "Savings: CNY 50000. Spending budget is not yet decided.",
+      value: { budget: 50000, budgetQuote: "Savings: CNY 50000" },
+    },
+    {
+      source: "Vendor quote: CNY 300; estimated project duration: 12 hours.",
+      value: {
+        budget: 300,
+        budgetQuote: "Vendor quote: CNY 300",
+        timeHours: 12,
+        timeQuote: "estimated project duration: 12 hours",
+      },
+    },
+    {
+      source: "My budget is USD 300; available work is 12 hours per week.",
+      value: {
+        budget: 300,
+        budgetQuote: "My budget is USD 300",
+        timeHours: 12,
+        timeQuote: "12 hours",
+      },
+    },
+    {
+      source: "这门课程时长12小时，报价300元。",
+      value: { budget: 300, budgetQuote: "报价300元", timeHours: 12, timeQuote: "课程时长12小时" },
+    },
+  ])(
+    "does not convert savings, quotations, foreign currency or recurring/estimated duration into caps: $source",
+    async ({ source, value }) => {
+      let draft = createIntake("alice", {
+        goal: "请根据现有材料比较三条可行学习路线",
+        modelMode: "gpt-6.1-terra",
+      });
+      draft = await addIntakeAttachment(draft.id, "alice", Buffer.from(source), "facts.txt");
+      fixture.generate.mockResolvedValueOnce(result(analysis(value)));
+      draft = await analyzeIntake(draft.id, "alice", operation(draft));
+      expect(draft.challenge).toMatchObject({ budget: null, timeHours: null });
+    },
+  );
   it("handles a short original goal with faithful expanded summary and retained original text", async () => {
     let draft = createIntake("alice", { goal: "我要减肥", modelMode: "gpt-6.1-terra" });
     fixture.generate.mockResolvedValueOnce(

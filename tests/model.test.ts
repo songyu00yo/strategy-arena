@@ -112,6 +112,37 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
       expect(messages[0].content).toContain("不是材料原文或工具证据");
     }
   });
+  it("keeps the assigned route and explicit deliverables in revision requests with the strengthened protocol", () => {
+    const revision: StageInput = {
+      ...input,
+      role: "B",
+      challenge: {
+        ...input.challenge,
+        goal: "交付三个可离线打开的练习页面，并保留互动按钮及全部说明",
+        constraints: "固定两名成员，合计工时不超过12小时",
+        options: ["手写HTML和CSS", "修改免费静态模板", "免费静态生成工具"],
+      },
+      strategies: [{ ...strategy, id: "B", title: "静态模板路线" }] as StageInput["strategies"],
+    };
+    const messages = buildMessages("revise", revision, RevisionSchema);
+    expect(messages[1].content).toContain('本角色负责比较的已有路线："修改免费静态模板"');
+    const data = JSON.parse(messages[1].content.slice(messages[1].content.indexOf("\n") + 1));
+    expect(data).toMatchObject({
+      role: "B",
+      challenge: { goal: revision.challenge.goal, constraints: revision.challenge.constraints },
+      strategies: [{ id: "B", title: "静态模板路线" }],
+    });
+    expect(messages[0].content).toContain("保留本角色原路线的关键执行机制");
+    expect(messages[0].content).toContain(
+      "减少交付数量、删除必要功能或缩减交付范围，必须先获得用户明确同意",
+    );
+    expect(messages[0].content).toContain(
+      "标题、分项、第一步、下一步、停止阈值中的累计时间必须一致",
+    );
+    const judge = buildMessages("judge", revision, VerdictSchema)[0].content;
+    expect(judge).toContain("逐个累计各验证或撤回节点之前的全部前置步骤");
+    expect(judge).toContain("不等于“已证明满足全部硬限制”");
+  });
   it("sends bounded JSON request and records returned model and actual usage", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({

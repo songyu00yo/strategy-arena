@@ -248,7 +248,7 @@ export function GuidedIntake({
     request,
     applyDraft: applyDraftRef,
     busy,
-    disabled: disabled || pending || restoring || analysisPending,
+    disabled: disabled || pending || restoring || analysisPending || draft?.status === "uncertain",
   });
   const {
     challenge,
@@ -294,6 +294,10 @@ export function GuidedIntake({
   const operate = useCallback(
     async (action: (epoch: number) => Promise<void>) => {
       if (locked.current || disabled || pending) return;
+      if (current.current?.status === "uncertain") {
+        setError("此草稿的调用状态与费用尚未确认，请等待运行者核账，不能再次发送模型请求。");
+        return;
+      }
       locked.current = true;
       const epoch = generation.current;
       setBusy(true);
@@ -451,6 +455,7 @@ export function GuidedIntake({
     modelProviders?.find((option) => option.id === routing.modelId) ??
     modelProviders?.find((option) => option.provider === routing.provider);
   const unavailable = !provider?.configured;
+  const uncertain = draft?.status === "uncertain";
   const analyzing = analysisPending || draft?.status === "analyzing";
   const reading = draft?.attachments.some((file) => file.state === "reading") ?? false;
   const blocked =
@@ -618,6 +623,7 @@ export function GuidedIntake({
           rows={3}
           maxLength={3000}
           value={goal}
+          readOnly={uncertain}
           disabled={blocked}
           placeholder="比如：还有两个月毕业，我该先找工作，还是集中准备考研？"
           onChange={(event) => {
@@ -631,6 +637,7 @@ export function GuidedIntake({
                 disabled ||
                 pending ||
                 locked.current ||
+                current.current?.status === "uncertain" ||
                 goalRef.current.trim().length < 2
               )
                 return;
@@ -655,7 +662,7 @@ export function GuidedIntake({
               className="gi-tool"
               aria-label="上传参考材料"
               title="上传参考材料"
-              disabled={blocked}
+              disabled={blocked || uncertain}
               onClick={() => fileInput.current?.click()}
             >
               <Paperclip size={18} />
@@ -667,7 +674,9 @@ export function GuidedIntake({
               providers={modelProviders}
               challenge={baseChallenge}
               disabled={blocked}
+              selectionDisabled={uncertain}
               onChange={(mode) => {
+                if (current.current?.status === "uncertain") return;
                 setModelMode(mode);
                 modeRef.current = mode;
                 if (current.current)
@@ -680,7 +689,7 @@ export function GuidedIntake({
           <button
             className="primary-button gi-analyze"
             type="submit"
-            disabled={blocked || unavailable || goal.trim().length < 2}
+            disabled={blocked || uncertain || unavailable || goal.trim().length < 2}
           >
             {busy || analyzing ? (
               <LoaderCircle size={17} className="gi-spin" />
@@ -709,7 +718,7 @@ export function GuidedIntake({
           accept={ACCEPT}
           className="sr-only"
           aria-label="选择参考材料"
-          disabled={blocked}
+          disabled={blocked || uncertain}
           onChange={(event) => {
             const files = [...(event.target.files ?? [])];
             event.target.value = "";
@@ -739,7 +748,7 @@ export function GuidedIntake({
                   type="button"
                   className="icon-button"
                   aria-label={`移除 ${file.name}`}
-                  disabled={blocked}
+                  disabled={blocked || uncertain}
                   onClick={() =>
                     void operate(async (epoch) => {
                       const next = await request<IntakeDraft>(
@@ -777,6 +786,7 @@ export function GuidedIntake({
                     <input
                       value={pageInputs[file.id] ?? ""}
                       placeholder="例如 1-5, 8"
+                      readOnly={uncertain}
                       disabled={blocked}
                       onChange={(event) =>
                         setPageInputs((old) => ({ ...old, [file.id]: event.target.value }))
@@ -786,7 +796,7 @@ export function GuidedIntake({
                   <button
                     type="button"
                     className="secondary-button"
-                    disabled={blocked}
+                    disabled={blocked || uncertain}
                     onClick={() =>
                       void operate(async (epoch) => {
                         const pages = parseIntakePages(
@@ -810,11 +820,19 @@ export function GuidedIntake({
           ))}
         </ul>
       </DisclosureMotion>
-      {(error || draft?.error) && (
+      {(error || draft?.error || uncertain) && (
         <div className="gi-error" role="alert">
           {error || draft?.error}
-          {draft?.status === "uncertain" && (
-            <p>上次调用的结果尚未确定，请先核对进度与费用，再决定是否重试。</p>
+          {uncertain && (
+            <>
+              <p>
+                <strong>此草稿已暂停模型请求，等待核账。</strong>
+                请等待运行者核对调用状态与费用，不要重试本次请求。
+              </p>
+              <p>
+                目标和材料仍可查看。切换模型不能解除暂停；准备新问题会另建草稿，原调用和预留仍保留，新请求继续受共享预算限制。
+              </p>
+            </>
           )}
         </div>
       )}
@@ -912,7 +930,7 @@ export function GuidedIntake({
             <button
               type="button"
               className="text-button"
-              disabled={blocked || unavailable}
+              disabled={blocked || uncertain || unavailable}
               onClick={() => analyze(true)}
             >
               跳过本轮，整理摘要
@@ -920,7 +938,7 @@ export function GuidedIntake({
             <button
               type="button"
               className="primary-button"
-              disabled={blocked || unavailable}
+              disabled={blocked || uncertain || unavailable}
               onClick={() => analyze(false)}
             >
               继续梳理
@@ -1089,7 +1107,7 @@ export function GuidedIntake({
           <button
             type="button"
             className="primary-button gi-start"
-            disabled={blocked || unavailable || goal !== draft?.goal}
+            disabled={blocked || uncertain || unavailable || goal !== draft?.goal}
             onClick={() =>
               void operate(async (epoch) => {
                 await ensureDraft();

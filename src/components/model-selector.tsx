@@ -17,6 +17,19 @@ import { DisclosureMotion } from "./disclosure-motion";
 import { reducedMotion } from "./console/effects";
 import styles from "./model-selector.module.css";
 
+/** Keep keyboard navigation inside the floating menu's own scroll container. */
+function revealOption(host: HTMLElement, option: HTMLElement) {
+  let top = 0;
+  let node: HTMLElement | null = option;
+  while (node && node !== host) {
+    top += node.offsetTop;
+    node = node.offsetParent as HTMLElement | null;
+  }
+  if (top < host.scrollTop + 8) host.scrollTop = Math.max(0, top - 8);
+  else if (top + option.offsetHeight > host.scrollTop + host.clientHeight - 8)
+    host.scrollTop = top + option.offsetHeight - host.clientHeight + 8;
+}
+
 export function ModelSelector({
   mode,
   onChange,
@@ -24,6 +37,7 @@ export function ModelSelector({
   providers,
   disabled = false,
   compact = true,
+  selectionDisabled = false,
 }: {
   mode: ModelMode;
   onChange: (mode: ModelMode) => void;
@@ -31,6 +45,7 @@ export function ModelSelector({
   providers?: ModelOption[];
   disabled?: boolean;
   compact?: boolean;
+  selectionDisabled?: boolean;
 }) {
   const id = useId();
   const [expanded, setExpanded] = useState(false);
@@ -42,6 +57,8 @@ export function ModelSelector({
   const wantsOpen = useRef(false);
   const focusOnOpen = useRef(0);
   const returnFocus = useRef(false);
+  const reason = useRef<HTMLDivElement>(null);
+  const followReason = useRef(false);
   const route = routeModel(challenge, mode);
   const selectedId = isModelId(mode) ? mode : route.modelId;
   const selectedModel = MODEL_CATALOG.find((model) => model.id === selectedId)!;
@@ -72,8 +89,7 @@ export function ModelSelector({
       setActiveIndex(index);
     }
     setExpanded(open);
-    if (!open && restore && trigger.current && !trigger.current.disabled)
-      trigger.current.focus({ preventScroll: true });
+    if (!open) followReason.current = false;
   }, []);
   const stop = useCallback(() => {
     if (flight.current) {
@@ -153,9 +169,24 @@ export function ModelSelector({
     fly(expanded);
     if (expanded) {
       const options = panel.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
-      options?.[focusOnOpen.current]?.focus({ preventScroll: true });
+      const option = options?.[focusOnOpen.current];
+      option?.focus({ preventScroll: true });
+      if (panel.current && option) revealOption(panel.current, option);
     }
   }, [expanded, fly]);
+  useLayoutEffect(() => {
+    const host = panel.current;
+    const content = reason.current;
+    if (!expanded || !showReason || !followReason.current || !host || !content) return;
+    const reveal = () => {
+      if (followReason.current) host.scrollTop = Math.max(0, host.scrollHeight - host.clientHeight);
+    };
+    const observer = new ResizeObserver(reveal);
+    observer.observe(content);
+    observer.observe(host);
+    reveal();
+    return () => observer.disconnect();
+  }, [expanded, showReason]);
   useEffect(() => {
     const el = panel.current;
     const button = trigger.current;
@@ -219,10 +250,11 @@ export function ModelSelector({
   }, [finish, fly, requestOpen, stop]);
   useEffect(() => {
     if (disabled && wantsOpen.current) queueMicrotask(() => requestOpen(false));
-    if (!disabled) restoreFocus();
+    if (!disabled && !flight.current && !panel.current?.matches(":popover-open")) restoreFocus();
   }, [disabled, requestOpen, restoreFocus]);
 
   const choose = (next: ModelMode) => {
+    if (selectionDisabled) return;
     onChange(next);
     requestOpen(false, true);
   };
@@ -232,7 +264,7 @@ export function ModelSelector({
     const target = (index + options.length) % options.length;
     setActiveIndex(target);
     options[target].focus({ preventScroll: true });
-    options[target].scrollIntoView({ block: "nearest" });
+    if (panel.current) revealOption(panel.current, options[target]);
   };
   const navigate = (event: KeyboardEvent<HTMLDivElement>) => {
     const options = [
@@ -302,6 +334,7 @@ export function ModelSelector({
                 aria-label={model.label}
                 aria-describedby={`${id}-${model.id}-note`}
                 aria-selected={checked}
+                aria-disabled={selectionDisabled || undefined}
                 tabIndex={activeIndex === index ? 0 : -1}
                 className={`${styles.option} ${checked ? styles.selected : ""}`}
                 onClick={() => choose(model.id)}
@@ -325,6 +358,7 @@ export function ModelSelector({
               role="option"
               aria-label="自动选择"
               aria-selected
+              aria-disabled={selectionDisabled || undefined}
               tabIndex={activeIndex === MODEL_CATALOG.length ? 0 : -1}
               className={`${styles.option} ${styles.selected}`}
               onClick={() => choose("auto")}
@@ -338,7 +372,11 @@ export function ModelSelector({
             </button>
           )}
         </div>
-        <p className={styles.detail}>本轮各角色使用同一模型。</p>
+        <p className={styles.detail}>
+          {selectionDisabled
+            ? "当前只能查看模型信息，暂时不能更改选择。"
+            : "本轮各角色使用同一模型。"}
+        </p>
         {selected?.configured === false && (
           <p className={styles.unavailable} role="status">
             {selected.error || "当前模型尚未配置，请选择已配置的模型。"}
@@ -349,19 +387,24 @@ export function ModelSelector({
           className={styles.reasonToggle}
           aria-expanded={showReason}
           aria-controls={`${id}-reason`}
-          onClick={() => setShowReason(!showReason)}
+          onClick={() => {
+            followReason.current = !showReason;
+            setShowReason(!showReason);
+          }}
         >
           查看选择依据
           <ChevronDown size={13} aria-hidden="true" />
         </button>
-        <DisclosureMotion open={showReason} id={`${id}-reason`}>
-          <p className={styles.detail}>
-            {route.reason}
-            {mode === "auto"
-              ? "材料达到6000字符，或限制加预算与时间达到4项时选择GPT；其他任务选择DeepSeek。这不是模型质量评估。"
-              : "可以按任务需要与参考费用更换；后续调用使用新选择。"}
-          </p>
-        </DisclosureMotion>
+        <div ref={reason}>
+          <DisclosureMotion open={showReason} id={`${id}-reason`}>
+            <p className={styles.detail}>
+              {route.reason}
+              {mode === "auto"
+                ? "材料达到6000字符，或限制加预算与时间达到4项时选择GPT；其他任务选择DeepSeek。这不是模型质量评估。"
+                : "可以按任务需要与参考费用更换；后续调用使用新选择。"}
+            </p>
+          </DisclosureMotion>
+        </div>
       </div>
     </fieldset>
   );

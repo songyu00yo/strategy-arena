@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import sharp from "sharp";
+import { IntakeAnalysisSchema } from "../src/lib/intake-contracts";
 import { MODEL_CATALOG } from "../src/lib/model-catalog";
 import {
   generateStructured,
@@ -182,6 +183,30 @@ describe("five model structured generation and shared billing", () => {
     expect(parameters.properties.choice).not.toHaveProperty("pattern");
     expect(parameters.properties.note).toHaveProperty("pattern");
     expect(billing.settleBilling).toHaveBeenCalledTimes(1);
+  });
+  it("bills and rejects excess intake options without silently deleting facts or making a repair request", async () => {
+    const tooMany = {
+      ready: true,
+      goal: "根据材料比较三条行动路线",
+      constraints: "",
+      preferences: "",
+      options: ["路线A", "路线B", "路线C", "额外事实不应作为第四选项"],
+      domain: "general",
+      budget: -1,
+      budgetQuote: "",
+      timeHours: -1,
+      timeQuote: "",
+      assumptions: [],
+      questions: [],
+    };
+    const fetch = vi.fn().mockResolvedValue(response("openai", JSON.stringify(tooMany)));
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      generateStructured({ ...request, schema: IntakeAnalysisSchema }),
+    ).rejects.toMatchObject({ uncertain: false, usage: { inputTokens: 100 }, repair: undefined });
+    expect(billing.settleBilling).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(tooMany.options).toHaveLength(4);
   });
   it("rejects forged dimensions before reserving or dispatching", async () => {
     const fetch = vi.fn();

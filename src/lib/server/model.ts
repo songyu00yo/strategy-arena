@@ -228,7 +228,9 @@ export function buildMessages(
       ? "这是独立方案自检对照：每个编号独立提案，只核验和反驳自身方案，不读对手质疑。"
       : "";
   const assigned =
-    kind === "propose" ? input.challenge.options[["A", "B", "C"].indexOf(input.role)] : undefined;
+    kind === "propose" || kind === "revise"
+      ? input.challenge.options[["A", "B", "C"].indexOf(input.role)]
+      : undefined;
   const strict = structuredOutput === "strict-tool";
   const outputSchema = strict
     ? strictOutputSchema(kind, input, schema, provider)

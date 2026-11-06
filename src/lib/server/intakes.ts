@@ -71,9 +71,10 @@ function expireOwnedDraft(draftId: string, owner: string) {
   if (!row || row.submitted_arena_id || row.updated_at >= Date.now() - IDLE_MS) return;
   // Run before the public entry point opens its transaction: a later 404 must not roll back
   // the deletion. Only this owner's expired draft is inspected, never the shared billing ledger.
+  // Unknown provider outcomes retain their local audit trail until explicitly resolved.
   db()
     .prepare(
-      "DELETE FROM intake_drafts WHERE id=? AND owner=? AND updated_at<? AND submitted_arena_id IS NULL AND NOT EXISTS (SELECT 1 FROM intake_operations WHERE draft_id=intake_drafts.id AND state='pending' AND updated_at>=?)",
+      "DELETE FROM intake_drafts WHERE id=? AND owner=? AND updated_at<? AND submitted_arena_id IS NULL AND COALESCE(json_extract(intake_drafts.body,'$.status'),'')!='uncertain' AND NOT EXISTS (SELECT 1 FROM intake_operations WHERE draft_id=intake_drafts.id AND state='uncertain') AND NOT EXISTS (SELECT 1 FROM intake_calls JOIN intake_operations ON intake_operations.id=intake_calls.operation_id WHERE intake_operations.draft_id=intake_drafts.id AND intake_calls.state='uncertain') AND NOT EXISTS (SELECT 1 FROM intake_operations WHERE draft_id=intake_drafts.id AND state='pending' AND updated_at>=?)",
     )
     .run(draftId, owner, Date.now() - IDLE_MS, Date.now() - ACTIVE_OPERATION_MS);
 }
@@ -353,7 +354,7 @@ function recoverStale(draft: PrivateDraft) {
 function cleanup() {
   db()
     .prepare(
-      "DELETE FROM intake_drafts WHERE updated_at<? AND submitted_arena_id IS NULL AND id NOT IN (SELECT draft_id FROM intake_operations WHERE state='pending' AND updated_at>=?)",
+      "DELETE FROM intake_drafts WHERE updated_at<? AND submitted_arena_id IS NULL AND COALESCE(json_extract(intake_drafts.body,'$.status'),'')!='uncertain' AND NOT EXISTS (SELECT 1 FROM intake_operations WHERE draft_id=intake_drafts.id AND state='uncertain') AND NOT EXISTS (SELECT 1 FROM intake_calls JOIN intake_operations ON intake_operations.id=intake_calls.operation_id WHERE intake_operations.draft_id=intake_drafts.id AND intake_calls.state='uncertain') AND id NOT IN (SELECT draft_id FROM intake_operations WHERE state='pending' AND updated_at>=?)",
     )
     .run(Date.now() - IDLE_MS, Date.now() - ACTIVE_OPERATION_MS);
 }
@@ -979,7 +980,11 @@ export async function addIntakeAttachment(
       attachments.length >= MAX_FILES ||
       attachments.reduce((sum, row) => sum + row.size, 0) + bytes.length > MAX_TOTAL
     )
-      throw new ArenaError("每份任务最多上传 5 个文件，总大小最多 30 MiB。", 413, "ATTACHMENT_LIMIT");
+      throw new ArenaError(
+        "每份任务最多上传 5 个文件，总大小最多 30 MiB。",
+        413,
+        "ATTACHMENT_LIMIT",
+      );
     const pending = db()
       .prepare(
         "SELECT COUNT(*) AS count FROM intake_attachments a JOIN intake_drafts d ON d.id=a.draft_id WHERE d.owner=? AND json_extract(a.body,'$.state')='reading'",

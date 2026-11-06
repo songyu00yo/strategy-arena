@@ -720,6 +720,67 @@ describe("lazy retention at every existing-draft read entry", () => {
     ).toBeUndefined();
     expect(fixture.hold).not.toHaveBeenCalled();
   });
+  it.each(["draft", "operation", "call"] as const)(
+    "retains an expired %s uncertainty record through owned reads and new-draft cleanup",
+    async (uncertainRecord) => {
+      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+      const bytes = Buffer.from("unknown request audit material");
+      draft = await addIntakeAttachment(draft.id, "alice", bytes, "unknown.txt");
+      const operationId = randomUUID();
+      const callId = randomUUID();
+      db()
+        .prepare(
+          "INSERT INTO intake_operations(id,draft_id,revision,body,state,updated_at) VALUES(?,?,?,?,?,?)",
+        )
+        .run(
+          operationId,
+          draft.id,
+          draft.revision,
+          "{}",
+          uncertainRecord === "operation" ? "uncertain" : "completed",
+          expiredAt(),
+        );
+      db()
+        .prepare(
+          "INSERT INTO intake_calls(id,operation_id,kind,state,created_at) VALUES(?,?,?,?,?)",
+        )
+        .run(
+          callId,
+          operationId,
+          "analysis",
+          uncertainRecord === "call" ? "uncertain" : "completed",
+          expiredAt(),
+        );
+      if (uncertainRecord === "draft") {
+        const body = JSON.parse(
+          (
+            db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+              body: string;
+            }
+          ).body,
+        );
+        body.status = "uncertain";
+        db()
+          .prepare("UPDATE intake_drafts SET body=? WHERE id=?")
+          .run(JSON.stringify(body), draft.id);
+      }
+      db().prepare("UPDATE intake_drafts SET updated_at=? WHERE id=?").run(expiredAt(), draft.id);
+      expect(() => getIntake(draft.id, "bob")).toThrow("无权访问");
+      expect(getIntake(draft.id, "alice").id).toBe(draft.id);
+      expect(
+        getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
+      ).toBe(true);
+      createIntake("bob", { goal, modelMode: "gpt-6.1-terra" });
+      createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+      expect(getIntake(draft.id, "alice").id).toBe(draft.id);
+      expect(
+        db().prepare("SELECT id FROM intake_operations WHERE id=?").get(operationId),
+      ).toBeTruthy();
+      expect(db().prepare("SELECT id FROM intake_calls WHERE id=?").get(callId)).toBeTruthy();
+      expect(fixture.generate).not.toHaveBeenCalled();
+      expect(fixture.hold).not.toHaveBeenCalled();
+    },
+  );
   it("retains submitted drafts and their source files beyond the idle window", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     const bytes = Buffer.from("submitted source retained for audit");

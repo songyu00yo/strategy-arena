@@ -202,6 +202,31 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
       }),
     );
   });
+  it.each([
+    ["ETIMEDOUT", "连接模型服务超时"],
+    ["ENOTFOUND", "模型服务域名暂时无法解析"],
+    ["CERT_HAS_EXPIRED", "模型服务安全连接校验失败"],
+    ["ECONNRESET", "模型服务连接中断或被拒绝"],
+    ["PRIVATE_UNKNOWN_CODE", "模型服务连接异常"],
+  ])(
+    "stores only a safe connection category for %s without making the attempt retryable",
+    async (code, category) => {
+      const failure = new Error("private input and secret URL", {
+        cause: { code, message: "private cause" },
+      });
+      const fetchDouble = vi.fn().mockRejectedValue(failure);
+      vi.stubGlobal("fetch", fetchDouble);
+      const error = await generateStrategy(input).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ uncertain: true });
+      expect(String(error)).toContain(category);
+      expect(String(error)).toMatch(/本次已等待 \d+\.\d 秒/);
+      expect(String(error)).not.toContain("private");
+      expect(String(error)).not.toContain("PRIVATE_UNKNOWN_CODE");
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+      expect(billing.holdBilling).toHaveBeenCalledTimes(1);
+      expect(billing.settleBilling).not.toHaveBeenCalled();
+    },
+  );
   it("treats connection loss as unknown and hides arbitrary upstream body", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("sensitive upstream message")));
     try {

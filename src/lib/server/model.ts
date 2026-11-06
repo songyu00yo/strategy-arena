@@ -186,6 +186,31 @@ export class ModelCallError extends Error {
     this.name = "ModelCallError";
   }
 }
+function connectionFailure(error: unknown, aborted: boolean, elapsedMs: number) {
+  const candidate = error && typeof error === "object" ? error : {};
+  const cause =
+    "cause" in candidate && candidate.cause && typeof candidate.cause === "object"
+      ? candidate.cause
+      : {};
+  const code = "code" in cause ? cause.code : "code" in candidate ? candidate.code : undefined;
+  const category = aborted
+    ? "已达到本次等待上限"
+    : ["ENOTFOUND", "EAI_AGAIN"].includes(String(code))
+      ? "模型服务域名暂时无法解析"
+      : ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(String(code))
+        ? "连接模型服务超时"
+        : [
+              "CERT_HAS_EXPIRED",
+              "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+              "DEPTH_ZERO_SELF_SIGNED_CERT",
+              "ERR_TLS_CERT_ALTNAME_INVALID",
+            ].includes(String(code))
+          ? "模型服务安全连接校验失败"
+          : ["ECONNRESET", "ECONNREFUSED", "UND_ERR_SOCKET"].includes(String(code))
+            ? "模型服务连接中断或被拒绝"
+            : "模型服务连接异常";
+  return `${category}，本次已等待 ${(Math.max(0, elapsedMs) / 1000).toFixed(1)} 秒。暂时无法确认这次请求是否完成。预留费用会保留，本步骤不会自动重试。`;
+}
 const stageSchemas = {
   propose: StrategySchema,
   attack: AttackSchema,
@@ -645,11 +670,10 @@ async function executeStructured<T>({
         redirect: "error",
       },
     );
-  } catch {
+  } catch (error) {
     clearTimeout(timer);
-    throw unknown(
-      "模型连接中断或超时，暂时无法确认这次请求是否完成。预留费用会保留，本步骤不会自动重试。",
-    );
+    // Persist only a fixed category and elapsed time, never arbitrary upstream text or URLs.
+    throw unknown(connectionFailure(error, controller.signal.aborted, Date.now() - started));
   }
   if (!response.ok) {
     clearTimeout(timer);

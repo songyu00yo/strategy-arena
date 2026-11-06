@@ -190,7 +190,7 @@ describe("guided task preparation with synthetic model output", () => {
       assumptions: ["先核实是否已有合适设备"],
     };
     expect(() => updateIntake(draft.id, "alice", { revision: draft.revision, summary })).toThrow(
-      "尚未生成",
+      "还没有可编辑的摘要",
     );
     draft = await analyzeIntake(draft.id, "alice", operation(draft));
     const priorRevision = draft.revision;
@@ -573,7 +573,7 @@ describe("attachment sources and atomic confirmation", () => {
     await expect(analyzeIntake(draft.id, "alice", operation(draft))).rejects.toThrow("页码");
     await expect(
       selectIntakePages(draft.id, "alice", draft.attachments[0].id, [1, 1]),
-    ).rejects.toThrow("不重复");
+    ).rejects.toThrow("不要重复");
     parsed.mockResolvedValueOnce({
       kind: "document",
       chunks: [{ location: "第 2 页", text: "只有此页被读取" }],

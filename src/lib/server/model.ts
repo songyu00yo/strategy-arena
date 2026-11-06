@@ -647,7 +647,9 @@ async function executeStructured<T>({
     );
   } catch {
     clearTimeout(timer);
-    throw unknown("模型连接中断或超时，服务端是否完成未知。本步骤不会自动重试，预留额度暂不释放。");
+    throw unknown(
+      "模型连接中断或超时，暂时无法确认这次请求是否完成。预留费用会保留，本步骤不会自动重试。",
+    );
   }
   if (!response.ok) {
     clearTimeout(timer);
@@ -784,7 +786,7 @@ async function executeStructured<T>({
     amount > Math.ceil(estimatedCost * 1e6)
   )
     throw new ModelCallError(
-      "模型报告用量超出本次预留上界；已按实际用量入账并停止，需检查图片计费规则后再继续。",
+      "服务商返回的用量超出本次预留。已按返回用量入账并停止，请检查用量和计费设置。",
       false,
       usage,
     );
@@ -908,7 +910,7 @@ async function executeStructured<T>({
       .map((issue) => `${issue.path.join(".")}: ${issue.code}`)
       .join("；");
     throw new ModelCallError(
-      `模型返回的字段不符合竞技协议（${paths}）；已记录用量。`,
+      `模型返回的内容格式有误（${paths}），已记录用量。`,
       false,
       usage,
       allowRepair ? { feedback: paths, rejectedOutput: output.slice(0, 24000) } : undefined,

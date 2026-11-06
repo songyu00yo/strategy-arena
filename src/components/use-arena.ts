@@ -123,7 +123,7 @@ export function useArena() {
           localStorage.removeItem(storageKey);
         setError(
           e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
-            ? "上次的擂台无法在当前浏览器身份下打开。你可以开始新一轮。"
+            ? "当前浏览器无法访问上次的擂台，你可以开始新一轮。"
             : "未能恢复上次的擂台，你可以重新开始。",
         );
       }
@@ -230,8 +230,8 @@ export function useArena() {
             setAuto(false);
             setError(
               e instanceof Error
-                ? `${e.message}。为避免重复计费，自动推进已停止；请先刷新状态。`
-                : "请求状态不明，已停止自动推进。请先刷新状态。",
+                ? `${e.message}。为避免重复计费，已停止自动推演，请先刷新状态。`
+                : "请求状态不明，已停止自动推演，请先刷新状态。",
             );
             return;
           }

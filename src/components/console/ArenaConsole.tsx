@@ -47,7 +47,7 @@ const SPEEDS = [
 
 const OUTCOME = {
   recommendation: "当前条件下的建议",
-  tie: "两条路线各有成立条件",
+  tie: "几条路线各有适用条件",
   insufficient: "现有依据不足以判断",
   infeasible: "当前条件下无法成立",
   partial: "阶段性判断",
@@ -414,7 +414,7 @@ export function ArenaConsole({
               </div>
               <div className="act">
                 <div className="first">
-                  <small>现在第一步</small>
+                  <small>现在该做的第一步</small>
                   <strong>{verdict.nextActions[0]}</strong>
                 </div>
                 <dl>
@@ -576,7 +576,7 @@ export function ArenaConsole({
               <small>
                 {demo
                   ? "演示内容：步骤和用量都是预设的，未调用模型。"
-                  : `模型隐藏推理未保存，这里只有真实步骤。${version.modelSelection?.modelId ?? "早期记录：模型未记录"}`}
+                  : `未保存模型的隐藏推理，这里展示的是实际记录的步骤。${version.modelSelection?.modelId ?? "早期记录：模型未记录"}`}
               </small>
             </section>
           </div>

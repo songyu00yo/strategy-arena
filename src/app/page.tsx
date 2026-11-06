@@ -28,11 +28,12 @@ import {
 import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
 import { GuidedIntake } from "@/components/guided-intake";
+import { RecordedExamples } from "@/components/recorded-examples";
 import { IntakeContext } from "@/components/intake-context";
 import { DecisionReviewPanel } from "@/components/decision-review-panel";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
-import { Chars, ClickFx, Dust, Leaving } from "@/components/console/effects";
+import { Chars, ClickFx, Dust, Leaving, reducedMotion } from "@/components/console/effects";
 import { HomeFlow } from "@/components/console/HomeFlow";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
@@ -47,7 +48,7 @@ const ERROR_EXIT: Keyframe[] = [
 const statusLabels = {
   ready: "准备上场",
   running: "正在推演",
-  completed: "本轮已收束",
+  completed: "本轮已完成",
   paused: "已暂停",
   failed: "本轮未完成",
   uncertain: "结果待确认",
@@ -98,11 +99,11 @@ function RunNotice({
   const copy = {
     failed: {
       title: "本轮未完成",
-      next: "已产生的结果保留在下方。可以修改条件后开新版本。",
+      next: "下方保留了已有结果。你可以修改条件，创建新版本。",
     },
     uncertain: {
-      title: "结果待确认：无法判断请求是否完成或已计费",
-      next: "相应预留不会释放，系统也不会自动重试，需要由运行者核账。已产生的结果保留在下方。",
+      title: "这次请求的结果和费用还未确认",
+      next: "这笔预留暂不释放，也不会自动重试。请让运行服务的人核对调用结果和费用。下方保留了已有结果。",
     },
     paused: {
       title: "本轮已停止",
@@ -308,98 +309,122 @@ export default function Page() {
           </Leaving>
         )}
         {!arena.snapshot ? (
-          <div className="h-grid">
-            <Dust />
-            <section className="h-lead" aria-label="开始一次方案推演">
-              <h1>
-                <Chars text="先让三个方案互相挑错，再决定。" active />
-              </h1>
-              <p>说出你的问题。三条路线各自提案、互相质疑、查证修正，最后给你一个带条件的建议。</p>
-              <div className="h-form">
-                {accessRequired && (
-                  <form
-                    className="access-panel"
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      if (await arena.unlock(accessCode)) setAccessCode("");
+          <>
+            <div className="h-grid">
+              <Dust />
+              <section className="h-lead" aria-label="开始一次方案推演">
+                <h1>
+                  <Chars text="先让三个方案互相挑错，再决定。" active />
+                </h1>
+                <p>
+                  写下你想解决的问题。三条路线分别提案、互相质疑，再根据证据修改，给出建议和适用条件。
+                </p>
+                <div className="h-form">
+                  {accessRequired && (
+                    <form
+                      className="access-panel"
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (await arena.unlock(accessCode)) setAccessCode("");
+                      }}
+                    >
+                      <div>
+                        <span className="eyebrow">受邀预览</span>
+                        <h2>凭访问码入场</h2>
+                        <p>输入运行者提供的访问码后，就可以开始推演。</p>
+                      </div>
+                      <label className="sr-only" htmlFor="access-code">
+                        访问码
+                      </label>
+                      <div className="access-input-row">
+                        <input
+                          id="access-code"
+                          type="password"
+                          autoComplete="off"
+                          placeholder="输入访问码"
+                          value={accessCode}
+                          onChange={(e) => setAccessCode(e.target.value)}
+                          required
+                        />
+                        <button type="submit" className="primary-button" disabled={arena.busy}>
+                          {arena.busy ? "验证中…" : "验证访问码"}
+                          <ArrowRight size={15} />
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                  {arena.restoring ? (
+                    <div className="restoring-state">
+                      <LoaderCircle className="spin" size={24} />
+                      <p>正在恢复上一次的推演…</p>
+                    </div>
+                  ) : demo ? (
+                    <ChallengeForm
+                      demo={demo}
+                      modelProviders={arena.health?.model.providers}
+                      pending={arena.busy}
+                      disabled={configured === false || !arena.health || accessRequired}
+                      onSubmit={async (challenge, _reason, modelMode) => {
+                        if (await arena.create(challenge, modelMode)) chooseVersion(null);
+                      }}
+                    />
+                  ) : (
+                    <GuidedIntake
+                      modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
+                      pending={arena.busy}
+                      disabled={!arena.health || accessRequired}
+                      onCreated={(snapshot) => {
+                        arena.adopt(snapshot);
+                        chooseVersion(null);
+                      }}
+                    />
+                  )}
+                  {(configured === false || arena.healthError) && (
+                    <div className="configuration-notice">
+                      <CircleHelp size={16} />
+                      <div>
+                        <strong>{arena.healthError || "配置模型后就能开始"}</strong>
+                        <p>
+                          {arena.healthError
+                            ? "连接恢复后刷新页面即可继续。"
+                            : "你可以先看已有示例。配置完成前，新的推演不会发起收费调用。"}
+                        </p>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => setModelOpen(true)}
+                        >
+                          查看连接信息
+                          <ArrowUpRight size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {!demo && (
+                  <a
+                    className="text-button h-examples-link"
+                    href="#recorded-examples"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      document.getElementById("recorded-examples")?.scrollIntoView({
+                        behavior: reducedMotion() ? "auto" : "smooth",
+                        block: "start",
+                      });
                     }}
                   >
-                    <div>
-                      <span className="eyebrow">受邀预览</span>
-                      <h2>凭访问码入场</h2>
-                      <p>这是一个受邀预览。输入运行者提供的访问码，即可开始真实推演。</p>
-                    </div>
-                    <label className="sr-only" htmlFor="access-code">
-                      访问码
-                    </label>
-                    <div className="access-input-row">
-                      <input
-                        id="access-code"
-                        type="password"
-                        autoComplete="off"
-                        placeholder="输入访问码"
-                        value={accessCode}
-                        onChange={(e) => setAccessCode(e.target.value)}
-                        required
-                      />
-                      <button type="submit" className="primary-button" disabled={arena.busy}>
-                        {arena.busy ? "验证中…" : "验证访问码"}
-                        <ArrowRight size={15} />
-                      </button>
-                    </div>
-                  </form>
+                    先看看真实示例 <ArrowRight size={14} />
+                  </a>
                 )}
-                {arena.restoring ? (
-                  <div className="restoring-state">
-                    <LoaderCircle className="spin" size={24} />
-                    <p>正在找回上一次的擂台…</p>
-                  </div>
-                ) : demo ? (
-                  <ChallengeForm
-                    demo={demo}
-                    modelProviders={arena.health?.model.providers}
-                    pending={arena.busy}
-                    disabled={configured === false || !arena.health || accessRequired}
-                    onSubmit={async (challenge, _reason, modelMode) => {
-                      if (await arena.create(challenge, modelMode)) chooseVersion(null);
-                    }}
-                  />
-                ) : (
-                  <GuidedIntake
-                    modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
-                    pending={arena.busy}
-                    disabled={!arena.health || accessRequired}
-                    onCreated={(snapshot) => {
-                      arena.adopt(snapshot);
-                      chooseVersion(null);
-                    }}
-                  />
-                )}
-                {(configured === false || arena.healthError) && (
-                  <div className="configuration-notice">
-                    <CircleHelp size={16} />
-                    <div>
-                      <strong>{arena.healthError || "还差一步：连接真实模型"}</strong>
-                      <p>
-                        {arena.healthError
-                          ? "连接恢复后刷新页面即可继续。"
-                          : "配置 API 密钥后即可上场。当前不会生成模拟结果或发起计费请求。"}
-                      </p>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => setModelOpen(true)}
-                      >
-                        查看连接信息
-                        <ArrowUpRight size={13} />
-                      </button>
-                    </div>
-                  </div>
-                )}
+              </section>
+              <HomeFlow />
+            </div>
+            {!demo && (
+              <div id="recorded-examples">
+                <RecordedExamples />
               </div>
-            </section>
-            <HomeFlow />
-          </div>
+            )}
+          </>
         ) : (
           selected && (
             <div className="arena-view">
@@ -707,7 +732,7 @@ export default function Page() {
               {demo
                 ? "演示内容，未调用模型"
                 : configured
-                  ? "已有模型密钥配置，连通性待实际请求确认"
+                  ? "已读取模型配置，实际连接会在首次调用时确认"
                   : "模型尚未配置"}
             </span>
             <dl>
@@ -751,9 +776,7 @@ export default function Page() {
             {!configured && (
               <div className="model-setup">
                 <h3>连接真实模型后开始</h3>
-                <p>
-                  请由运行此服务的人配置服务端的模型 API 密钥，并重启服务。密钥不在浏览器内保存。
-                </p>
+                <p>请让运行此服务的人配置模型 API 密钥，然后重启服务。密钥由服务端保存。</p>
                 <p>
                   当前模型：<code>{arena.health?.model.id || "查看服务配置"}</code>
                 </p>
@@ -764,7 +787,7 @@ export default function Page() {
               <p>
                 {demo
                   ? "演示中的路线、证据、裁决、Token 数和费用都是预设的，实际费用为 0。"
-                  : "发起推演会调用所选模型。总费用取决于问题长度、材料与推演步骤，开始前无法给出可靠的固定金额。运行中按已记录用量估算，并使用本轮模型的原始币种。"}
+                  : "AI 分析问题、读图和推演方案时，都会调用所选模型。费用取决于问题长度、材料和推演步骤。运行时会根据已记录的用量估算费用，按所选模型的原始币种显示。"}
               </p>
             </div>
             <p className="muted">
@@ -821,7 +844,7 @@ export default function Page() {
       )}
       {claimTarget && sameOverlayVersion && (
         <Modal
-          title="向这条判断发起挑战"
+          title="质疑这条判断"
           motionRef={claimMotion}
           onClose={() => {
             releaseVersionPin();
@@ -856,7 +879,7 @@ export default function Page() {
               }}
             >
               <label className="field">
-                <span>你认为哪里需要再想一遍？</span>
+                <span>你认为哪里有问题？</span>
                 <textarea
                   value={challengeText}
                   onChange={(e) => setChallengeText(e.target.value)}
@@ -892,17 +915,13 @@ export default function Page() {
         />
       )}
       {stopConfirm && sameOverlayVersion && (
-        <Modal
-          title="在这里收束本轮？"
-          motionRef={stopMotion}
-          onClose={() => setStopConfirm(false)}
-        >
+        <Modal title="停止本轮推演？" motionRef={stopMotion} onClose={() => setStopConfirm(false)}>
           <div className="stop-dialog">
             <p>系统将停止发起后续推演步骤，保留已完成的提案与证据。</p>
             <p>
               {demo
                 ? "演示内容由脚本预设，停止不会产生模型调用或费用。如果裁决尚未展示，本轮会保留为未完成状态。"
-                : "已经发出的模型请求无法撤回，仍可能完成并产生费用；如果裁决尚未形成，本轮会明确保留为未完成状态。"}
+                : "已经发出的请求仍可能完成并产生费用。如果结论尚未形成，本轮会标为未完成。"}
             </p>
             <div>
               <button
@@ -922,7 +941,7 @@ export default function Page() {
                   motion?.close();
                 }}
               >
-                确认收束
+                确认停止
                 <Square size={12} />
               </button>
             </div>

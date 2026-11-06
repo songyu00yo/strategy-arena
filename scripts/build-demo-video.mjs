@@ -359,7 +359,7 @@ async function snapshot() {
     const stop = page.getByRole("button", { name: "现在收束", exact: true });
     if (await stop.isVisible()) {
       await stop.click();
-      await page.getByRole("button", { name: "确认收束", exact: true }).click();
+      await page.getByRole("button", { name: "确认停止", exact: true }).click();
     }
     throw new Error(
       "Secondary budget guard stopped capture; inspect current reservations before any further call",

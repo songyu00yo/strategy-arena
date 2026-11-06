@@ -17,7 +17,7 @@ export function IntakeContext({ intake }: { intake: NonNullable<ArenaVersion["in
         aria-controls={id}
         onClick={() => setOpen(!open)}
       >
-        {open ? "收起任务依据" : "查看补充回答与材料"}
+        {open ? "收起补充回答与材料" : "查看补充回答与材料"}
       </button>
       <DisclosureMotion open={open} id={id}>
         <div className="intake-context-body">

@@ -9,8 +9,8 @@ import { DisclosureMotion } from "./disclosure-motion";
 import "./decision-review-panel.css";
 
 const CHOICE_LABELS: Record<string, string> = {
-  conditional: "可按条件试行",
-  violates: "存在硬限制冲突",
+  conditional: "满足条件后可试行",
+  violates: "与硬限制有冲突",
   unknown: "关键条件待确认",
   A: "倾向路线 A",
   B: "倾向路线 B",
@@ -74,7 +74,7 @@ export function DecisionReviewPanel({
         },
       );
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "暂时无法读取复核，请稍后重试。");
+      if (!response.ok) throw new Error(data.error || "暂时无法读取复核记录，请稍后重试。");
       if (alive.current) setReview(data);
       return data as DecisionReview | null;
     } finally {
@@ -173,21 +173,21 @@ export function DecisionReviewPanel({
                 onClick={() => void run()}
               >
                 {pending ? <LoaderCircle size={16} className="spin" /> : <ArrowRight size={16} />}
-                {pending ? "正在复核…" : review ? "重新请求复核" : "用 Luna 运行快速复核"}
+                {pending ? "正在复核…" : review ? "重新复核" : "用 Luna 快速复核"}
               </button>
             )}
-            {pending && <p role="status">正在检查本版本，关闭后可回来查看结果。</p>}
+            {pending && <p role="status">正在复核这个版本，关闭弹窗后也可以回来查看结果。</p>}
             {(error || review?.error) && (
               <p className="decision-review-error" role="alert">
                 {error || review?.error}
               </p>
             )}
             {review?.status === "uncertain" && (
-              <p>调用结果与费用待确认，已保留预留，暂停再次发送。</p>
+              <p>调用结果和费用还未确认，预留费用暂不释放，也暂不允许再次发起复核。</p>
             )}
             {review?.stale && (
               <p className="decision-review-error">
-                这是先前输入或配置下的复核记录，请按记录对应的版本理解。
+                这份复核使用的是先前的输入或配置，请结合当时的版本查看。
               </p>
             )}
             <DisclosureMotion open={review?.status === "completed"}>
@@ -209,12 +209,12 @@ export function DecisionReviewPanel({
                   <p>
                     {version.verdict?.preferred === candidate
                       ? "这次复核与本轮建议一致。"
-                      : `本轮${version.verdict?.preferred ? `建议 ${version.verdict.preferred}` : "保留了多个可能方向"}，复核倾向 ${candidate}。可结合证据查看分歧。`}
+                      : `本轮${version.verdict?.preferred ? `建议 ${version.verdict.preferred}` : "保留了多个可能方向"}，复核倾向 ${candidate}。可以对照证据看看分歧在哪里。`}
                   </p>
                 )}
                 {violates && (
                   <p className="decision-review-error">
-                    该路线已记录硬限制冲突，需要先解决冲突再考虑执行。
+                    这条路线已有硬限制冲突记录，需要先解决冲突，再考虑执行。
                   </p>
                 )}
                 <button
@@ -231,7 +231,7 @@ export function DecisionReviewPanel({
                     .map((answer) => (
                       <div className="decision-review-distribution" key={answer.name}>
                         <strong>
-                          {QUESTION_LABELS[answer.name]} · 模型判断信心{" "}
+                          {QUESTION_LABELS[answer.name]} · 模型对判断的信心{" "}
                           {(answer.confidence * 100).toFixed(1)}%
                         </strong>
                         {answer.probabilities.map((item) => (
@@ -245,7 +245,8 @@ export function DecisionReviewPanel({
                     ))}
                 </DisclosureMotion>
                 <p className="decision-review-note">
-                  分值反映 Luna 对本次输入的判断。实际行动仍需满足明确限制，并核对关键未知项。
+                  这些分值反映 Luna
+                  对本次输入的判断。采取行动前，仍需满足已明确的限制，并核对尚未确认的关键事项。
                 </p>
               </div>
             </DisclosureMotion>
@@ -257,7 +258,7 @@ export function DecisionReviewPanel({
               </p>
             )}
             {(review?.reservedUsd ?? 0) > 0 && (
-              <p className="decision-review-cost">调用中预留 ${review!.reservedUsd.toFixed(6)}</p>
+              <p className="decision-review-cost">本次调用预留 ${review!.reservedUsd.toFixed(6)}</p>
             )}
           </div>
         </Modal>

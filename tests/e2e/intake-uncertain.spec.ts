@@ -85,7 +85,7 @@ test("explicit UI fixture: restored uncertain draft blocks mutations and model c
   const intake = page.getByRole("region", { name: "准备一场推演", exact: true });
   await expect(intake.getByRole("alert")).toContainText("此草稿已暂停模型请求，等待核账。");
   await expect(intake.getByRole("alert")).toContainText("切换模型不能解除暂停");
-  await expect(intake.getByRole("alert")).toContainText("原调用和预留仍保留");
+  await expect(intake.getByRole("alert")).toContainText("原来的调用记录和预留额度仍会保留");
   await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeDisabled();
   await expect(
     page.getByRole("textbox", { name: "你想解决什么问题？", exact: true }),

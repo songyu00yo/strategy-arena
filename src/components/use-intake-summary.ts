@@ -88,7 +88,7 @@ export function useIntakeSummary({
       localStorage.setItem(SUMMARY_JOURNAL_KEY, JSON.stringify(entry));
       setJournalWarning("");
     } catch {
-      setJournalWarning("本机恢复记录未能保存，请保持此页打开，等待服务器保存成功。");
+      setJournalWarning("未能在本机保存恢复记录，请保持此页打开，等待服务器保存成功。");
     }
   }, []);
   const show = useCallback((summary: Summary) => {
@@ -150,7 +150,7 @@ export function useIntakeSummary({
         ...next,
         updatedAt: new Date().toISOString(),
       });
-      setStatus("摘要修改待保存…");
+      setStatus("摘要修改等待保存…");
       setEditCount((count) => count + 1);
     },
     [current, show, writeJournal],
@@ -183,7 +183,7 @@ export function useIntakeSummary({
       while (dirty.current) {
         const draft = current.current;
         if (!draft || draft.status !== "summary")
-          throw new Error("草稿状态已变化，未保存摘要仍保留在本机，请先核对草稿。");
+          throw new Error("草稿状态已变化，尚未保存的摘要仍保留在本机，请先核对草稿。");
         const atVersion = version.current;
         const summary = structuredClone(values.current);
         const parsed = ChallengeSchema.safeParse({

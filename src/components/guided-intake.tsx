@@ -81,7 +81,7 @@ function sourceNotice(source: MaterialSource) {
   if (source.origin === "model_transcription")
     return "这是模型对图片或扫描页的转录，可能混入描述或推测，请核对原图。";
   if (source.origin === "document") return null;
-  return "此片段缺少明确的来源记录，请与原材料核对，不能将其视为已核实原文。";
+  return "这段内容缺少明确的来源记录，请与原材料核对，不能当作已核实的原文。";
 }
 
 function answerOf(question: IntakeQuestion): IntakeAnswer {
@@ -311,7 +311,7 @@ export function GuidedIntake({
     async (action: (epoch: number) => Promise<void>) => {
       if (locked.current || disabled || pending) return;
       if (current.current?.status === "uncertain") {
-        setError("此草稿的调用状态与费用尚未确认，请等待运行者核账，不能再次发送模型请求。");
+        setError("这份草稿的调用状态和费用尚未确认，请等待管理员核账，不能再次发送模型请求。");
         return;
       }
       locked.current = true;
@@ -355,7 +355,7 @@ export function GuidedIntake({
           if (!alive.current || epoch !== generation.current) return;
           if (next.status === "submitted") {
             if (!next.arenaId)
-              throw new Error("草稿已提交，但还没有可恢复的擂台标识，请稍后重试。");
+              throw new Error("草稿已提交，但暂时找不到对应的擂台，请稍后重试。");
             const snapshot = await request<ArenaSnapshot>(`/api/arenas/${next.arenaId}`);
             if (!alive.current || epoch !== generation.current) return;
             onCreatedRef.current(snapshot);
@@ -374,7 +374,7 @@ export function GuidedIntake({
         })
         .catch((failure) => {
           if (alive.current && epoch === generation.current && failure.name !== "AbortError")
-            setError(`未能恢复准备中的草稿：${failure.message}`);
+            setError(`未能恢复上次的草稿：${failure.message}`);
         })
         .finally(() => {
           if (alive.current && epoch === generation.current) setRestoring(false);
@@ -545,7 +545,7 @@ export function GuidedIntake({
     void operate(async (epoch) => {
       if (unavailable) throw new Error("所选模型尚未配置，请先选择可用模型。");
       if (goalRef.current.trim().length < 2)
-        throw new Error("再多说一点吧，请用至少 2 个字描述你的目标。");
+        throw new Error("请用至少 2 个字描述你的目标。");
       let saved = await ensureDraft();
       if (saved.status === "questions") {
         const outgoing = answers.map((answer) =>
@@ -682,7 +682,7 @@ export function GuidedIntake({
               onClick={() => fileInput.current?.click()}
             >
               <Paperclip size={18} />
-              <span>添材料</span>
+              <span>添加材料</span>
             </button>
             <ModelSelector
               compact
@@ -716,7 +716,7 @@ export function GuidedIntake({
               {restoring
                 ? "恢复草稿…"
                 : analyzing
-                  ? "正在理解…"
+                  ? "正在分析…"
                   : busy
                     ? "正在保存…"
                     : summaryVisible
@@ -745,11 +745,11 @@ export function GuidedIntake({
 
       {unavailable && !pending && !restoring && (
         <p className="gi-config" role="status">
-          {provider?.error ?? "所选模型尚未配置。请打开模型选择，选择已配置的模型。"}
+          {provider?.error ?? "所选模型尚未配置，请在模型列表中选择已配置的模型。"}
         </p>
       )}
       <p className="gi-hint">
-        先说目标，接着最多补充两轮问题。文件可选：PDF、Word、表格、文字或图片；最多 5 个，每个 10
+        先说目标，再回答最多两轮补充问题。也可以上传 PDF、Word、表格、文本或图片；最多 5 个，每个 10
         MiB，总计 30 MiB。
       </p>
       <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
@@ -783,7 +783,7 @@ export function GuidedIntake({
               </div>
               <p className={`gi-file-state ${file.state === "failed" ? "failed" : ""}`}>
                 {file.state === "ready"
-                  ? `${file.interpreted ? "含模型辨读，请核对" : file.imageCount > 0 ? (draft.sources.some((item) => item.attachmentId === file.id && !item.interpretation && item.text.trim()) ? "文字已提取，图像待读取" : "图像等待模型读取") : "文字已提取"}${file.pageCount ? ` · ${file.pageCount} 页` : ""}`
+                  ? `${file.interpreted ? "含模型读取的内容，请核对" : file.imageCount > 0 ? (draft.sources.some((item) => item.attachmentId === file.id && !item.interpretation && item.text.trim()) ? "文字已提取，图像待读取" : "图像等待模型读取") : "文字已提取"}${file.pageCount ? ` · ${file.pageCount} 页` : ""}`
                   : file.state === "reading"
                     ? "正在读取材料…"
                     : file.state === "needs_pages"
@@ -843,10 +843,10 @@ export function GuidedIntake({
             <>
               <p>
                 <strong>此草稿已暂停模型请求，等待核账。</strong>
-                请等待运行者核对调用状态与费用，不要重试本次请求。
+                请等待管理员核对调用状态和费用，不要重试本次请求。
               </p>
               <p>
-                目标和材料仍可查看。切换模型不能解除暂停；准备新问题会另建草稿，原调用和预留仍保留，新请求继续受共享预算限制。
+                你仍可查看目标和材料。切换模型不能解除暂停；准备新问题会另建草稿，原来的调用记录和预留额度仍会保留，新请求也受共享预算限制。
               </p>
             </>
           )}
@@ -876,7 +876,7 @@ export function GuidedIntake({
                 ))
               ) : (
                 <p>
-                  可编辑字段内容一致，草稿状态或参考材料已有更新。参考材料以服务器保存的内容为准。
+                  可编辑的内容没有变化，但草稿状态或参考材料已有更新。参考材料以服务器保存的内容为准。
                 </p>
               )}
             </div>
@@ -907,7 +907,7 @@ export function GuidedIntake({
           <span>
             {reading
               ? "正在整理材料，原文和位置会一并保留。"
-              : "正在理解你的目标，找出真正影响选择的信息。"}
+              : "正在分析你的目标，梳理影响选择的信息。"}
           </span>
         </div>
       </DisclosureMotion>
@@ -1118,7 +1118,7 @@ export function GuidedIntake({
                 />
               </label>
             </div>
-            <p className="gi-hint">这里是行动方案的资源限制，模型调用费用单独记录。</p>
+            <p className="gi-hint">这里填写执行方案可用的金额和时间，模型调用费用另行记录。</p>
           </DisclosureMotion>
           <button
             type="button"
@@ -1238,7 +1238,7 @@ export function GuidedIntake({
       )}
       {draft && (
         <div className="gi-draft-footer">
-          <span>草稿已保存在当前浏览器，刷新可继续。</span>
+          <span>草稿已保存，在当前浏览器刷新可继续。</span>
           <button
             type="button"
             className="text-button"

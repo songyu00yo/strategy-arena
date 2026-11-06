@@ -313,7 +313,7 @@ export function ModelSelector({
       </button>
       <div ref={panel} popover="manual" className={styles.popover} inert={!expanded}>
         <div className={styles.heading}>
-          选择模型<span>服务商原币参考价</span>
+          选择模型<span>服务商参考价（原币）</span>
         </div>
         <div
           id={`${id}-models`}
@@ -400,8 +400,8 @@ export function ModelSelector({
             <p className={styles.detail}>
               {route.reason}
               {mode === "auto"
-                ? "材料达到6000字符，或限制加预算与时间达到4项时选择GPT；其他任务选择DeepSeek。这不是模型质量评估。"
-                : "可以按任务需要与参考费用更换；后续调用使用新选择。"}
+                ? "材料达到 6000 字符，或限制条件连同预算、时间合计达到 4 项时，选择 GPT；其他任务选择 DeepSeek。这一规则不代表模型质量评估。"
+                : "你可以根据任务需要和参考费用更换模型，后续调用会使用新选择。"}
             </p>
           </DisclosureMotion>
         </div>

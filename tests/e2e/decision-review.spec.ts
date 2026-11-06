@@ -170,13 +170,15 @@ test("explicit UI fixture: Luna review sends one POST, reopens from GET cache an
   await expect(dialog).toContainText("使用 GPT 6 Luna");
   await expect(dialog).toContainText(original!.headline);
   expect(posts).toBe(0);
-  await dialog.getByRole("button", { name: "用 Luna 运行快速复核", exact: true }).click();
+  await dialog.getByRole("button", { name: "用 Luna 快速复核", exact: true }).click();
   await expect(
     dialog.locator(".decision-review-answer").getByText("倾向路线 B", { exact: true }),
   ).toBeVisible();
   await expect(dialog).toContainText("本轮建议 A，复核倾向 B");
   await dialog.getByRole("button", { name: "展开判断分布", exact: true }).click();
-  await expect(dialog.getByText("选择倾向 · 模型判断信心 50.0%", { exact: true })).toBeVisible();
+  await expect(
+    dialog.getByText("选择倾向 · 模型对判断的信心 50.0%", { exact: true }),
+  ).toBeVisible();
   await expect(dialog).toContainText("分值反映 Luna 对本次输入的判断");
   await expect(dialog).toContainText("本次复核约 $0.000110");
   for (let reopen = 0; reopen < 2; reopen++) {
@@ -186,10 +188,10 @@ test("explicit UI fixture: Luna review sends one POST, reopens from GET cache an
     await expect(
       dialog.locator(".decision-review-answer").getByText("倾向路线 B", { exact: true }),
     ).toBeVisible();
-    await expect(
-      dialog.getByRole("button", { name: "用 Luna 运行快速复核", exact: true }),
-    ).toHaveCount(0);
-    await expect(dialog.getByRole("button", { name: "重新请求复核", exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "用 Luna 快速复核", exact: true })).toHaveCount(
+      0,
+    );
+    await expect(dialog.getByRole("button", { name: "重新复核", exact: true })).toHaveCount(0);
   }
   expect(posts).toBe(1);
   await expect.poll(() => reads).toBeGreaterThanOrEqual(3);
@@ -256,9 +258,11 @@ test("explicit UI fixture: uncertain review blocks repeats and historical unknow
   });
   await page.getByRole("button", { name: "快速复核", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "快速复核 · Decisions", exact: true });
-  await dialog.getByRole("button", { name: "用 Luna 运行快速复核", exact: true }).click();
-  await expect(dialog).toContainText("调用结果与费用待确认，已保留预留，暂停再次发送。");
-  await expect(dialog.getByRole("button", { name: /运行快速复核|重新请求复核/ })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "用 Luna 快速复核", exact: true }).click();
+  await expect(dialog).toContainText(
+    "调用结果和费用还未确认，预留费用暂不释放，也暂不允许再次发起复核。",
+  );
+  await expect(dialog.getByRole("button", { name: /用 Luna 快速复核|重新复核/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await page.getByRole("combobox", { name: "选择推演版本" }).selectOption(first.id);
   await page.getByRole("button", { name: "快速复核", exact: true }).click();
@@ -269,13 +273,13 @@ test("explicit UI fixture: uncertain review blocks repeats and historical unknow
   ).toBeVisible();
   await expect(dialog.getByText("本项未作判断", { exact: true })).toHaveCount(3);
   await expect(dialog).not.toContainText("测试：响应未完整收到");
-  await expect(dialog.getByRole("button", { name: /运行快速复核|重新请求复核/ })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: /用 Luna 快速复核|重新复核/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await page.getByRole("combobox", { name: "选择推演版本" }).selectOption(next.id);
   await page.getByRole("button", { name: "快速复核", exact: true }).click();
   await expect(dialog).toContainText(next.verdict!.headline);
-  await expect(dialog).toContainText("调用结果与费用待确认");
-  await expect(dialog.getByRole("button", { name: /运行快速复核|重新请求复核/ })).toHaveCount(0);
+  await expect(dialog).toContainText("调用结果和费用还未确认");
+  await expect(dialog.getByRole("button", { name: /用 Luna 快速复核|重新复核/ })).toHaveCount(0);
   expect(postedVersions).toEqual([next.id]);
   expect(readVersions).toContain(first.id);
   expect(readVersions).toContain(next.id);

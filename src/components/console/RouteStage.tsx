@@ -859,7 +859,7 @@ export function RouteStage({
                   data-claim={`${id}:${claimId}`}
                   className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
                   disabled={readOnly || !after}
-                  title={after ? "向这条判断发起挑战" : "这条主张已撤回"}
+                  title={after ? "质疑这条判断" : "这条主张已撤回"}
                   onClick={() => onClaim(view, claimId)}
                 >
                   <em>

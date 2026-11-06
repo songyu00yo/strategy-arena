@@ -78,7 +78,7 @@ function configuration() {
     );
   const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS ?? 60000);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 180000)
-    throw new ArenaError("Decisions超时配置无效。", 503, "DECISIONS_INVALID_CONFIG");
+    throw new ArenaError("Decisions 超时配置无效。", 503, "DECISIONS_INVALID_CONFIG");
   const config = {
     protocolVersion: PROTOCOL_VERSION,
     endpoint: `${endpoint.toString().replace(/\/$/, "")}/decisions`,
@@ -473,7 +473,7 @@ export async function runDecisionReview(
         "REVIEW_VERSION_NOT_TERMINAL",
       );
     if (input.routes.some((route, index) => !route || route.id !== ROUTE_IDS[index]))
-      throw new ArenaError("快速复核需要A、B、C三条真实最终路线。", 409, "REVIEW_ROUTES_REQUIRED");
+      throw new ArenaError("快速复核需要 A、B、C 三条真实的最终路线。", 409, "REVIEW_ROUTES_REQUIRED");
     const inputHash = hash(input.data);
     const duplicate = db()
       .prepare(
@@ -527,7 +527,7 @@ export async function runDecisionReview(
     const serializedBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
     if (serializedBytes > INPUT_BYTE_LIMIT)
       throw new ArenaError(
-        "本版本的快速复核输入超过20万字节应用上限；未发送请求，也不会静默截断硬限制或证据。",
+        "本版本的快速复核输入超过应用的 20 万字节上限。请求未发送，硬限制和证据也未被自动截断。",
         413,
         "DECISIONS_INPUT_TOO_LARGE",
       );

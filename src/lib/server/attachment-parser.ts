@@ -38,7 +38,7 @@ function addChunk(result: ParsedAttachment, location: string, text: string) {
   if (!text.trim()) return;
   const size = extractedSizes.get(result) ?? 0;
   if (size + text.length > MAX_TEXT)
-    fail("extraction_limit", "提取文字超过 20 万字，请拆分材料后上传。");
+    fail("extraction_limit", "提取的文字超过 20 万字，请拆分材料后上传。");
   result.chunks.push({ location, text });
   extractedSizes.set(result, size + text.length);
 }
@@ -48,12 +48,12 @@ function decodeText(bytes: Buffer) {
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    return fail("invalid_encoding", "文字文件须使用 UTF-8 编码。");
+    return fail("invalid_encoding", "文字文件需要使用 UTF-8 编码。");
   }
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
     fail("invalid_format", "文件内容不是受支持的文字格式。");
   }
-  if (text.length > MAX_TEXT) fail("extraction_limit", "提取文字超过 20 万字，请拆分材料后上传。");
+  if (text.length > MAX_TEXT) fail("extraction_limit", "提取的文字超过 20 万字，请拆分材料后上传。");
   return text;
 }
 
@@ -199,7 +199,7 @@ async function parsePdf(bytes: Buffer, pages?: number[]): Promise<ParsedAttachme
       new Set(selected).size !== selected.length ||
       selected.some((page) => !Number.isInteger(page) || page < 1 || page > pageCount)
     ) {
-      fail("invalid_pages", "页码须在文件范围内、不重复，且每次最多选择 20 页。");
+      fail("invalid_pages", "请选择文件范围内的页码，不要重复，每次最多选择 20 页。");
     }
     const result: ParsedAttachment = {
       kind: "document",
@@ -331,7 +331,7 @@ export async function parseAttachment(
         );
         return result;
       }
-      fail("format_mismatch", "文件不是与扩展名一致的 DOCX 或 XLSX 文件。");
+      fail("format_mismatch", "文件实际格式与 DOCX 或 XLSX 扩展名不一致。");
     }
     if ([".txt", ".md", ".csv"].includes(extension)) {
       const text = decodeText(bytes);

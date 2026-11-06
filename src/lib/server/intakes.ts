@@ -107,9 +107,9 @@ function read(id: string, owner: string): PrivateDraft {
 }
 function mutable(draft: PrivateDraft, revision?: number) {
   if (draft.status === "submitted")
-    throw new ArenaError("此草稿已创建讨论，请到讨论中修改条件。", 409, "INTAKE_SUBMITTED");
+    throw new ArenaError("这份草稿已创建讨论，请在讨论中修改条件。", 409, "INTAKE_SUBMITTED");
   if (draft.status === "analyzing")
-    throw new ArenaError("正在读取和整理材料，请等待本次处理结束。", 409, "INTAKE_BUSY");
+    throw new ArenaError("正在读取和整理材料，请等本次处理结束。", 409, "INTAKE_BUSY");
   if (draft.status === "uncertain")
     throw new ArenaError(
       "上次模型请求结果待确认，暂不能再次发送，请运行者核对原请求与费用记录。",
@@ -370,7 +370,7 @@ export function createIntake(
       )
       .get(owner) as { count: number };
     if (count.count >= 20)
-      throw new ArenaError("未完成草稿已达20份，请稍后再试。", 429, "INTAKE_QUOTA");
+      throw new ArenaError("未完成的草稿已达 20 份，请稍后再试。", 429, "INTAKE_QUOTA");
     const draft: PrivateDraft = {
       id: id(),
       revision: 0,
@@ -426,7 +426,7 @@ export function updateIntake(
           "MIXED_SUMMARY_UPDATE",
         );
       if (draft.status !== "summary" || !draft.challenge)
-        throw new ArenaError("当前任务尚未生成可编辑摘要。", 409, "SUMMARY_REQUIRED");
+        throw new ArenaError("当前任务还没有可编辑的摘要。", 409, "SUMMARY_REQUIRED");
       const fields = { ...draft.summaryEdits?.fields };
       for (const key of Object.keys(input.summary.challenge) as (keyof Challenge)[]) {
         if (
@@ -455,7 +455,7 @@ export function updateIntake(
     const changedGoal = input.goal !== undefined && input.goal !== draft.goal;
     const changedModel = input.modelMode !== undefined && input.modelMode !== draft.modelMode;
     if ((changedGoal || changedModel) && input.answers?.length)
-      throw new ArenaError("请先保存目标或模型变化，再回答最新问题。", 409, "STALE_QUESTIONS");
+      throw new ArenaError("请先保存对目标或模型的修改，再回答最新问题。", 409, "STALE_QUESTIONS");
     if (input.answers) {
       if (draft.status !== "questions")
         throw new ArenaError("当前没有等待回答的问题。", 409, "STALE_QUESTIONS");
@@ -468,7 +468,7 @@ export function updateIntake(
         if (answer.state === "answered") {
           const values = Array.isArray(answer.value) ? answer.value : [answer.value];
           if (!values.length || values.some((value) => !value.trim()))
-            throw new ArenaError("请填写答案，或选择不知道、跳过。", 400, "INVALID_ANSWER");
+            throw new ArenaError("请填写答案，或选择“不知道”或“跳过”。", 400, "INVALID_ANSWER");
           if (question.type === "multiple") {
             if (
               !Array.isArray(answer.value) ||
@@ -529,7 +529,7 @@ function frozenConfiguration(draft: PrivateDraft) {
       "CONFIGURATION_CHANGED",
     );
   if (!config.configured)
-    throw new ArenaError("所选模型尚未配置，请运行者完成配置。", 503, "MODEL_NOT_CONFIGURED");
+    throw new ArenaError("所选模型尚未配置，请联系管理员完成配置。", 503, "MODEL_NOT_CONFIGURED");
   draft.config = config;
   draft.configHash = hash;
   return config;
@@ -725,14 +725,14 @@ export async function analyzeIntake(
     }
     mutable(draft, input.revision);
     if (draft.goal.trim().length < 2)
-      throw new ArenaError("请先写下要解决的问题，至少两个字。", 400, "GOAL_REQUIRED");
+      throw new ArenaError("请先写下要解决的问题，至少写两个字。", 400, "GOAL_REQUIRED");
     if (
       draft.attachments.some(
         (attachment) => attachment.state === "reading" || attachment.state === "needs_pages",
       )
     )
       throw new ArenaError(
-        "请先等待文件读取完成，并选择超长文件的页码。",
+        "请等待文件读取完成；超长文件需要先选择页码。",
         409,
         "ATTACHMENTS_PENDING",
       );
@@ -969,7 +969,7 @@ export async function addIntakeAttachment(
     .replace(/[\x00-\x1f\x7f]/g, "")
     .slice(0, 200);
   if (!name || !bytes.length || bytes.length > MAX_FILE)
-    throw new ArenaError("文件名无效、文件为空或超过10 MiB。", 400, "ATTACHMENT_LIMIT");
+    throw new ArenaError("文件名无效、文件为空，或大小超过 10 MiB。", 400, "ATTACHMENT_LIMIT");
   const attachment = atomic(() => {
     const draft = read(draftId, owner);
     recoverStale(draft);
@@ -979,7 +979,7 @@ export async function addIntakeAttachment(
       attachments.length >= MAX_FILES ||
       attachments.reduce((sum, row) => sum + row.size, 0) + bytes.length > MAX_TOTAL
     )
-      throw new ArenaError("每份任务最多5个文件，总大小最多30 MiB。", 413, "ATTACHMENT_LIMIT");
+      throw new ArenaError("每份任务最多上传 5 个文件，总大小最多 30 MiB。", 413, "ATTACHMENT_LIMIT");
     const pending = db()
       .prepare(
         "SELECT COUNT(*) AS count FROM intake_attachments a JOIN intake_drafts d ON d.id=a.draft_id WHERE d.owner=? AND json_extract(a.body,'$.state')='reading'",
@@ -987,7 +987,7 @@ export async function addIntakeAttachment(
       .get(owner) as { count: number };
     if (pending.count >= 5)
       throw new ArenaError(
-        "同时读取的文件过多，请等待已上传文件处理完成。",
+        "正在读取的文件过多，请等已上传的文件处理完成。",
         429,
         "ATTACHMENT_BUSY",
       );
@@ -1028,7 +1028,7 @@ export async function selectIntakePages(
     new Set(pages).size !== pages.length ||
     pages.some((page) => !Number.isSafeInteger(page) || page < 1)
   )
-    throw new ArenaError("请提供不重复的1至20个有效页码。", 400, "INVALID_PAGES");
+    throw new ArenaError("请选择 1 至 20 个有效页码，不要重复。", 400, "INVALID_PAGES");
   const { attachment, bytes } = atomic(() => {
     const draft = read(draftId, owner);
     recoverStale(draft);
@@ -1039,7 +1039,7 @@ export async function selectIntakePages(
     if (!row) throw new ArenaError("未找到此材料。", 404, "NOT_FOUND");
     const attachment = JSON.parse(row.body) as StoredAttachment;
     if (!/\.pdf$/i.test(attachment.name) || attachment.state === "reading")
-      throw new ArenaError("此文件当前不能选择PDF页码。", 409, "INVALID_PAGES");
+      throw new ArenaError("这个文件当前无法选择 PDF 页码。", 409, "INVALID_PAGES");
     attachment.state = "reading";
     attachment.startedAt = Date.now();
     delete attachment.parsed;

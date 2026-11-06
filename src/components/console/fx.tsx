@@ -733,7 +733,7 @@ export function LiveRecord({
     <div
       className={`c-live ${directed ? "arrive" : ""}`}
       role="region"
-      aria-label="这一步详情"
+      aria-label="这一步的详情"
       style={
         {
           "--route": (ROUTE_COLOR[beat.agent] ?? "11,13,16").replaceAll(",", " "),

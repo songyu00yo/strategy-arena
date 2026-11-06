@@ -93,5 +93,5 @@ test("explicit UI fixture: material labels and previews distinguish local text, 
   await expect(legacy).not.toContainText("· 原文");
   await expect(legacy).not.toContainText("模型转录，需核对原图");
   await legacy.click();
-  await expect(preview).toContainText("此片段缺少明确的来源记录，请与原材料核对");
+  await expect(preview).toContainText("这段内容缺少明确的来源记录，请与原材料核对");
 });

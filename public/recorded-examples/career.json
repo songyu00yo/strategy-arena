@@ -1,0 +1,1090 @@
+{
+  "metadata": {
+    "slug": "career",
+    "title": "换工作时，收入和家庭照护怎么取舍？",
+    "direction": "工作",
+    "question": "两周内决定留在当前公司、接受外地工作或协商远程，比较收入与家庭照护的影响。",
+    "summary": "有条件优先协商远程，同时核实留任的照护安排。",
+    "modelId": "gpt-6.1-terra",
+    "generatedAt": "2026-11-06T12:17:39.861Z",
+    "sourceCommit": "1d1f3f6b38eaa6acd36d45d67097ae69a7ccbff2",
+    "qualityNote": "当时有条件建议先协商远程，远程许可和照护安排仍需确认。这是经 AI 审查的初版记录，后续存在问题的版本未收录。",
+    "versionCount": 1,
+    "sourceFile": "artifacts/terra-cross-domain-1d1f3f6.json",
+    "sourceFileSha256": "9d79e5e5a1e526d1dfc14cf18dac2eea2d3b51e4a5007b48b0b4f1ee79e99977",
+    "sourceCapturedAt": "2026-11-06T12:21:17.189Z",
+    "sourceVersionIds": ["698a29dc-2511-456c-bd7c-d4544a526541"],
+    "sourceVersionPointer": "/cases/0/snapshot/versions/0",
+    "sourceVersionContentSha256": "d71bb140b59eb6427db160f826b441dd186202eef86fce61e5e93d90fb6a7368",
+    "inputProvenance": "synthetic-task-input",
+    "outputProvenance": "real-provider-output",
+    "redactions": [
+      "owner and session identities omitted",
+      "operation and billing attempt IDs omitted",
+      "provider response IDs replaced with [redacted]",
+      "runtime configurations and private paths omitted",
+      "intake transport details omitted; submitted challenge preserved",
+      "event data limited to sanitized original usage",
+      "step IDs replaced with recording-local labels"
+    ]
+  },
+  "arena": {
+    "id": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+    "activeVersionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+    "createdAt": "2026-11-06T12:17:39.860Z",
+    "versions": [
+      {
+        "id": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "number": 1,
+        "challenge": {
+          "goal": "两周内决定留在当前公司、接受外地工作或协商远程，比较收入与家庭照护的影响。",
+          "constraints": "必须两周内书面答复。不能中断父母的日常照护。",
+          "preferences": "家庭稳定优先，其次是可支配收入。",
+          "options": ["留任", "接受外地工作", "协商远程"],
+          "materials": "【合成验收输入，非用户反馈】现在税前月薪 10000 元，新邀约税前 13000 元。新城市月租约 3500 元，当前 2000 元。税费、搬家费用和远程许可尚未核实。没有其他照护者的承诺。",
+          "domain": "work",
+          "budget": 15000,
+          "timeHours": 20
+        },
+        "status": "completed",
+        "stage": "judge",
+        "strategies": [
+          {
+            "id": "A",
+            "title": "以留任为照护基准",
+            "thesis": "优先核实留任能否持续保障照护，再与外地和远程的实际可支配收入及照护安排比较；两周内书面答复，关键条件未知前不承诺可行。",
+            "steps": [
+              "盘点父母每日照护需求及现有留任安排，确认未来两周和之后是否能持续衔接。",
+              "核实留任、外地及远程的税后收入、住房和交通等费用；询问远程许可及书面答复期限。",
+              "核实外地或远程期间的照护安排及相关人员的明确承诺；没有可靠衔接时不选择会中断照护的安排。",
+              "按家庭稳定优先、可支配收入其次比较三项；预留等待回复和复核时间，两周内提交书面答复。"
+            ],
+            "claims": [
+              {
+                "id": "A-claim-1",
+                "text": "当前税前月薪为10000元，外地邀约为13000元；两地月租分别约2000元和3500元。",
+                "status": "unknown",
+                "sourceIds": []
+              },
+              {
+                "id": "A-claim-2",
+                "text": "仅比较税前工资与房租，外地每月多1500元；税费、搬家及其他费用未计入，不能视为实际收入差。",
+                "status": "estimate",
+                "sourceIds": []
+              },
+              {
+                "id": "A-claim-3",
+                "text": "留任能否持续覆盖父母日常照护尚待确认；其他照护者目前没有承诺。",
+                "status": "unknown",
+                "sourceIds": []
+              }
+            ],
+            "resources": "依靠现有照护安排及向雇主、相关人员询问；税费、交通、搬家等费用与耗时未知，须核实后计入总预算15000元及总工时20小时。",
+            "firstAction": "列出父母每日照护需求和目前负责方式，确认留任下是否存在照护空档。",
+            "failureCondition": "如留任不能保证照护连续，不能将其作为可行结论；若两周内三项均无法确认满足照护与书面答复要求，说明无法确定可行方案并请求必要条件调整。",
+            "estimatedCost": null,
+            "estimatedHours": null
+          },
+          {
+            "id": "B",
+            "title": "分步核实外地工作，照护落实前不接受",
+            "thesis": "先核实连续照护和到手收入，再与留任、远程比较；没有可靠照护安排时，不能接受须搬迁的工作。",
+            "steps": [
+              "确认父母每日照护需求、现有安排及搬迁后的缺口，了解可承担者的意愿、能力和费用。",
+              "向新雇主核实书面薪酬、工作地点、入职期限和远程可能性；向现公司核实留任及远程条件。",
+              "核算三条路线税后收入，扣除住房、双城生活、照护、搬家及其他新增费用；费用未知时保留缺口。",
+              "在两周期限前预留时间检查照护衔接、比较结果并书面答复；若照护无法落实，不接受需搬迁的邀约。"
+            ],
+            "claims": [
+              {
+                "id": "B-claim-1",
+                "text": "现薪税前每月10000元，新邀约13000元；新城市月租约3500元，当前约2000元。",
+                "status": "unknown",
+                "sourceIds": []
+              },
+              {
+                "id": "B-claim-2",
+                "text": "税前工资差减去租金差为每月1500元，未计税费、照护、搬家及其他开支，不能视为可支配收入增量。",
+                "status": "estimate",
+                "sourceIds": []
+              },
+              {
+                "id": "B-claim-3",
+                "text": "其他照护者尚无承诺，远程许可、税费和搬家费用均待核实。",
+                "status": "unknown",
+                "sourceIds": []
+              }
+            ],
+            "resources": "现有20小时和15000元为总上限；咨询、照护及搬家费用和各环节工时未知，须先报价并核算，不预设新增照护者。",
+            "firstAction": "盘点父母每天的照护任务和不可中断时段，确认外地工作会造成的缺口。",
+            "failureCondition": "两周内不能落实连续照护或无法取得足够信息比较时，不接受须搬迁的邀约；按期限就留任或远程作书面答复。若需超预算或超工时，须先获用户明确同意。",
+            "estimatedCost": null,
+            "estimatedHours": null
+          },
+          {
+            "id": "C",
+            "title": "协商远程并保留留任备选",
+            "thesis": "先争取新工作远程及照护时间安排，以家庭稳定优先；许可、税后收入和照护连续性均待核实，不能预判可行。",
+            "steps": [
+              "盘点父母每日照护时段、现有承担方式和两周答复期限，确认远程工作能否兼顾。",
+              "向新雇主书面询问远程地点、到岗频率、薪酬、工作时段及答复期限，并确认是否可书面承诺。",
+              "核实三条路线的税后收入、住房及搬迁等费用；外地路线须另核实持续照护安排，不将无承诺的照护者计入。",
+              "按家庭稳定优先、可支配收入其次比较；在期限前书面答复，若远程未获确认且外地照护无法保障，优先考虑留任，但先核实留任条件。"
+            ],
+            "claims": [
+              {
+                "id": "C-claim-1",
+                "text": "当前及新邀约税前月薪分别为10000元和13000元；新城市及当前月租约为3500元和2000元。",
+                "status": "unknown",
+                "sourceIds": []
+              },
+              {
+                "id": "C-claim-2",
+                "text": "仅按税前工资与月租之差粗算，新工作每月多1500元；税费、搬迁及其他费用尚未计入。",
+                "status": "estimate",
+                "sourceIds": []
+              },
+              {
+                "id": "C-claim-3",
+                "text": "远程许可、照护安排与留任条件尚未核实，无法确认任一路线最终可行。",
+                "status": "unknown",
+                "sourceIds": []
+              }
+            ],
+            "resources": "现有照护安排、雇主书面沟通及费用资料；总预算15000元、总工时20小时，具体支出和工时尚待核算。",
+            "firstAction": "盘点每日照护时段及现有承担方式，并确认书面答复截止日期。",
+            "failureCondition": "若两周内无法确认远程许可和连续照护，也无法确认留任条件，应在截止前明确风险并争取延期；延期须获对方同意，且不得中断照护。",
+            "estimatedCost": null,
+            "estimatedHours": null
+          }
+        ],
+        "attacks": [
+          {
+            "id": "attack-A",
+            "from": "A",
+            "targetStrategyId": "C",
+            "targetClaimId": "C-claim-2",
+            "claimQuote": "仅按税前工资与月租之差粗算，新工作每月多1500元；税费、搬迁及其他费用尚未计入。",
+            "reason": "1500元仅适用于按外地月租比较的粗算；若新工作获准远程且无需搬家，不能直接沿用该租金差。照护费用也可能改变比较。",
+            "impact": "核算远程与外地两条路线时应分别使用实际居住地、照护安排和费用，避免用同一粗算数决定选择。",
+            "verification": "向新雇主核实远程地点和到岗频率，并分别核实住房、照护及其他费用；当前尚未验证。",
+            "requests": [
+              {
+                "tool": "search_materials",
+                "query": "远程许可、新城市及当前月租、照护安排和费用"
+              }
+            ],
+            "status": "supported"
+          },
+          {
+            "id": "attack-B",
+            "from": "B",
+            "targetStrategyId": "A",
+            "targetClaimId": "A-claim-3",
+            "claimQuote": "留任能否持续覆盖父母日常照护尚待确认；其他照护者目前没有承诺。",
+            "reason": "留任也未必能覆盖工作时段及突发照护需求；没有替代照护承诺时，不能把留任默认视为安全退路。",
+            "impact": "若留任存在照护空档，不能优先选留任；须核实三条路线的连续照护，并在期限前明确无法确认的风险。",
+            "verification": "盘点父母日常照护时段、当前承担方式及工作时间冲突，向相关人员核实可持续承担的书面承诺。",
+            "requests": [
+              {
+                "tool": "search_materials",
+                "query": "父母日常照护、现有承担方式、工作时间及其他照护者承诺"
+              }
+            ],
+            "status": "supported"
+          },
+          {
+            "id": "attack-C",
+            "from": "C",
+            "targetStrategyId": "B",
+            "targetClaimId": "B-claim-3",
+            "claimQuote": "其他照护者尚无承诺，远程许可、税费和搬家费用均待核实。",
+            "reason": "留任及远程的照护连续性也未确认；B在外地不可行时要求就留任或远程答复，可能误把未知选项当成可行退路。",
+            "impact": "先核实留任和远程各自的照护安排；若均无法确认，不应直接选定，而应期限前书面说明风险并争取延期。",
+            "verification": "盘点父母照护时段与现有承担方式，核实工作安排及相关人员能否持续照护。",
+            "requests": [
+              {
+                "tool": "search_materials",
+                "query": "父母日常照护、现有承担方式、留任及远程工作安排"
+              }
+            ],
+            "status": "supported"
+          }
+        ],
+        "evidence": [
+          {
+            "id": "E-e6c69a26-057d-452c-aae2-2785737f7772",
+            "attackId": "attack-A",
+            "sourceIds": ["M-bec1c355c1-0"],
+            "expression": null,
+            "result": null,
+            "assumptions": "以下为原文命中；不能证明材料本身真实或适用于当前情景。",
+            "createdAt": "2026-11-06T12:18:16.593Z",
+            "tool": "search_materials",
+            "status": "found",
+            "title": "材料检索：远程许可、新城市及当前月租、照护安排和费用",
+            "content": "[M-bec1c355c1-0] 第 1 行 / 字符 0–95\n【合成验收输入，非用户反馈】现在税前月薪 10000 元，新邀约税前 13000 元。新城市月租约 3500 元，当前 2000 元。税费、搬家费用和远程许可尚未核实。没有其他照护者的承诺。",
+            "source": "用户提供的文字材料 / BM25"
+          },
+          {
+            "id": "E-d71742d6-24d2-461b-95ce-f05b12ceb12d",
+            "attackId": "attack-B",
+            "sourceIds": ["M-bec1c355c1-0"],
+            "expression": null,
+            "result": null,
+            "assumptions": "以下为原文命中；不能证明材料本身真实或适用于当前情景。",
+            "createdAt": "2026-11-06T12:18:16.593Z",
+            "tool": "search_materials",
+            "status": "found",
+            "title": "材料检索：父母日常照护、现有承担方式、工作时间及其他照护者承诺",
+            "content": "[M-bec1c355c1-0] 第 1 行 / 字符 0–95\n【合成验收输入，非用户反馈】现在税前月薪 10000 元，新邀约税前 13000 元。新城市月租约 3500 元，当前 2000 元。税费、搬家费用和远程许可尚未核实。没有其他照护者的承诺。",
+            "source": "用户提供的文字材料 / BM25"
+          },
+          {
+            "id": "E-b1e7e69c-2213-49de-99f0-b33c4676d417",
+            "attackId": "attack-C",
+            "sourceIds": ["M-bec1c355c1-0"],
+            "expression": null,
+            "result": null,
+            "assumptions": "以下为原文命中；不能证明材料本身真实或适用于当前情景。",
+            "createdAt": "2026-11-06T12:18:16.593Z",
+            "tool": "search_materials",
+            "status": "found",
+            "title": "材料检索：父母日常照护、现有承担方式、留任及远程工作安排",
+            "content": "[M-bec1c355c1-0] 第 1 行 / 字符 0–95\n【合成验收输入，非用户反馈】现在税前月薪 10000 元，新邀约税前 13000 元。新城市月租约 3500 元，当前 2000 元。税费、搬家费用和远程许可尚未核实。没有其他照护者的承诺。",
+            "source": "用户提供的文字材料 / BM25"
+          },
+          {
+            "id": "E-5801dc65-5787-47e0-90a6-f013a2a534e4",
+            "attackId": "constraint-A",
+            "sourceIds": [],
+            "expression": null,
+            "result": null,
+            "assumptions": "只比较已给出的数字，不证明估计准确；其他文字限制仍需核实。",
+            "createdAt": "2026-11-06T12:18:16.593Z",
+            "tool": "constraint_check",
+            "status": "unavailable",
+            "title": "A 路线预算检查",
+            "content": "限制 15000 元，但该方案没有可比较的估计，仍待核验。",
+            "source": "用户限制与策略估计比较"
+          },
+          {
+            "id": "E-6f900d54-67d8-4d76-a639-668976b8b5f9",
+            "attackId": "constraint-A",
+            "sourceIds": [],
+            "expression": null,
+            "result": null,
+            "assumptions": "只比较已给出的数字，不证明估计准确；其他文字限制仍需核实。",
+            "createdAt": "2026-11-06T12:18:16.593Z",
+            "tool": "constraint_check",
+            "status": "unavailable",
+            "title": "A 路线用时检查",
+            "content": "限制 20 小时，但该方案没有可比较的估计，仍待核验。",
+            "source": "用户限制与策略估计比较"
+          },
+          {
+            "id": "E-9d4996ce-bc03-4c85-ad27-399c0b3cd87c",
+            "attackId": "constraint-B",
+            "sourceIds": [],
+            "expression": null,
+            "result": null,
+            "assumptions": "只比较已给出的数字，不证明估计准确；其他文字限制仍需核实。",
+            "createdAt": "2026-11-06T12:18:16.594Z",
+            "tool": "constraint_check",
+            "status": "unavailable",
+            "title": "B 路线预算检查",
+            "content": "限制 15000 元，但该方案没有可比较的估计，仍待核验。",
+            "source": "用户限制与策略估计比较"
+          },
+          {
+            "id": "E-4d2ac01c-412f-458d-8ec8-7028ce42dce0",
+            "attackId": "constraint-B",
+            "sourceIds": [],
+            "expression": null,
+            "result": null,
+            "assumptions": "只比较已给出的数字，不证明估计准确；其他文字限制仍需核实。",
+            "createdAt": "2026-11-06T12:18:16.594Z",
+            "tool": "constraint_check",
+            "status": "unavailable",
+            "title": "B 路线用时检查",
+            "content": "限制 20 小时，但该方案没有可比较的估计，仍待核验。",
+            "source": "用户限制与策略估计比较"
+          },
+          {
+            "id": "E-b8a6bb40-03f5-46a7-ade2-603e8aa82d1a",
+            "attackId": "constraint-C",
+            "sourceIds": [],
+            "expression": null,
+            "result": null,
+            "assumptions": "只比较已给出的数字，不证明估计准确；其他文字限制仍需核实。",
+            "createdAt": "2026-11-06T12:18:16.594Z",
+            "tool": "constraint_check",
+            "status": "unavailable",
+            "title": "C 路线预算检查",
+            "content": "限制 15000 元，但该方案没有可比较的估计，仍待核验。",
+            "source": "用户限制与策略估计比较"
+          },
+          {
+            "id": "E-feccdd33-73bd-430f-8fb5-a7f6852505e6",
+            "attackId": "constraint-C",
+            "sourceIds": [],
+            "expression": null,
+            "result": null,
+            "assumptions": "只比较已给出的数字，不证明估计准确；其他文字限制仍需核实。",
+            "createdAt": "2026-11-06T12:18:16.594Z",
+            "tool": "constraint_check",
+            "status": "unavailable",
+            "title": "C 路线用时检查",
+            "content": "限制 20 小时，但该方案没有可比较的估计，仍待核验。",
+            "source": "用户限制与策略估计比较"
+          }
+        ],
+        "revisions": [
+          {
+            "strategyId": "A",
+            "strategy": {
+              "id": "A",
+              "title": "核实留任的照护连续性",
+              "thesis": "以留任为比较基准，但不预设其可行；家庭稳定优先，再比较三项实际可支配收入，两周内书面答复。",
+              "steps": [
+                "盘点每日及突发照护需求、现有承担方式，与留任工作时段逐一比对，确认缺口及现有安排能否持续。",
+                "向现雇主核实留任薪酬和工作时段；分别询问新雇主外地及远程条件，并核实各路线照护衔接。",
+                "分别核算三条路线税后收入及实际住房、交通、照护和搬迁费用；费用或许可未知时保留缺口。",
+                "预留等待、复核及缓冲，在两周内书面答复；若三项均不能确认连续照护，说明无法选定并争取对方同意调整期限。"
+              ],
+              "claims": [
+                {
+                  "id": "A-claim-1",
+                  "text": "材料给出当前和新邀约税前月薪分别为10000元和13000元，两地月租约为2000元和3500元。",
+                  "status": "supported",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                },
+                {
+                  "id": "A-claim-2",
+                  "text": "外地租房情形下，税前工资差减租金差为每月1500元；未计税费及其他费用，远程须另算。",
+                  "status": "estimate",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                },
+                {
+                  "id": "A-claim-3",
+                  "text": "留任是否持续覆盖日常及突发照护未知；材料称没有其他照护者承诺。",
+                  "status": "unknown",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                }
+              ],
+              "resources": "现有照护安排及雇主沟通；总预算15000元、总工时20小时，支出和各环节耗时含等待、重试与缓冲尚待核算。",
+              "firstAction": "盘点父母每日及突发照护需求、现有承担方式，并逐项对照留任工作时段。",
+              "failureCondition": "留任有无法解决的照护空档或连续性未确认时，不将其视为可行退路；所有路线均未确认时按期书面说明风险，不中断照护。",
+              "estimatedCost": null,
+              "estimatedHours": null
+            },
+            "responses": [
+              {
+                "attackId": "attack-B",
+                "decision": "accept",
+                "reason": "材料仅说明没有其他照护者承诺，未证明留任覆盖工作及突发照护时段，不能默认其安全。",
+                "evidenceIds": ["E-d71742d6-24d2-461b-95ce-f05b12ceb12d"],
+                "change": "增加留任工作时段与日常、突发照护逐项比对；有未解决缺口或连续性未确认时不视为可行退路。"
+              }
+            ],
+            "summary": "保留留任基准，增加照护时段和突发需求核查；费用及工时仍待核算。",
+            "changed": true
+          },
+          {
+            "strategyId": "B",
+            "strategy": {
+              "id": "B",
+              "title": "分步核实外地工作与照护衔接",
+              "thesis": "家庭稳定优先，先核实外地工作期间的连续照护和到手收入，再分别比较留任与远程；照护未落实前不接受搬迁邀约。",
+              "steps": [
+                "盘点父母日常及突发照护需求、现有承担方式，核实搬迁后的缺口及现有人员能否持续承担，不预设新增照护者。",
+                "向新雇主核实外地薪酬、工作地点和入职期限，并询问远程条件；向现雇主核实留任工作时段及条件。",
+                "分别核实留任、远程的照护连续性；按各自居住地核算税后收入、住房、交通、照护及搬家等费用，未知项保留缺口。",
+                "核算准备、咨询、等待、重试、检查及缓冲的总费用和工时；两周内书面答复，只有照护可靠衔接且条件足够明确时才选定路线。"
+              ],
+              "claims": [
+                {
+                  "id": "B-claim-1",
+                  "text": "材料给出当前及新邀约税前月薪分别为10000元和13000元，两地月租约为2000元和3500元。",
+                  "status": "supported",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                },
+                {
+                  "id": "B-claim-2",
+                  "text": "外地租房情形下税前工资差减租金差为每月1500元，未计税费及其他开支；远程须按实际居住条件另算。",
+                  "status": "estimate",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                },
+                {
+                  "id": "B-claim-3",
+                  "text": "材料称其他照护者没有承诺；各路线照护连续性、远程许可、税费和搬家费用均待核实。",
+                  "status": "unknown",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                }
+              ],
+              "resources": "总预算15000元、总工时20小时；现有照护安排及雇主沟通为基础，各环节费用、等待和工时尚需核算，不能预设新增人员。",
+              "firstAction": "盘点父母每日及突发照护任务、现有承担方式，并对照搬迁后可能出现的缺口。",
+              "failureCondition": "照护未落实或信息不足时不接受搬迁；留任和远程也未确认时不默认可行，按期书面说明风险并争取延期。延期须对方同意，照护仍不得中断；超预算或工时须分别获用户明确同意。",
+              "estimatedCost": null,
+              "estimatedHours": null
+            },
+            "responses": [
+              {
+                "attackId": "attack-C",
+                "decision": "accept",
+                "reason": "材料未证明留任或远程能连续覆盖照护，也没有其他照护者承诺，不能将其默认作可行退路。",
+                "evidenceIds": ["E-b1e7e69c-2213-49de-99f0-b33c4676d417"],
+                "change": "增加留任与远程各自的照护衔接核查；均未确认时不选定，按期书面说明风险并争取延期。"
+              }
+            ],
+            "summary": "保留外地工作核实路线，增加其他选项的照护核查；费用和工时仍未知。",
+            "changed": true
+          },
+          {
+            "strategyId": "C",
+            "strategy": {
+              "id": "C",
+              "title": "协商远程，核实照护与收入",
+              "thesis": "争取新工作远程及可兼顾照护的工作时段；家庭稳定优先，再比较各路线可支配收入，条件未核实前不预判可行。",
+              "steps": [
+                "盘点父母日常及突发照护时段、现有承担方式和书面答复截止日，逐项核对工作时段冲突。",
+                "向新雇主书面协商远程地点、到岗频率、薪酬、工作时段和生效条件，争取书面确认；核实留任条件。",
+                "分别核实三条路线的照护衔接及税后收入，按各自实际居住地计入住房、交通、照护和搬迁等费用；不预设新增照护者。",
+                "核算准备、沟通、等待、重试、检查及缓冲的总投入；两周内书面答复。各路线照护均未确认时说明风险并争取延期。"
+              ],
+              "claims": [
+                {
+                  "id": "C-claim-1",
+                  "text": "材料给出当前及新邀约税前月薪分别为10000元和13000元，新城市及当前月租约为3500元和2000元。",
+                  "status": "supported",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                },
+                {
+                  "id": "C-claim-2",
+                  "text": "外地租房情形下，税前工资差减租金差为每月1500元，未计税费及其他费用；远程须按实际居住条件另算。",
+                  "status": "estimate",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                },
+                {
+                  "id": "C-claim-3",
+                  "text": "远程许可、各路线照护连续性及留任条件尚未核实；材料称没有其他照护者的承诺。",
+                  "status": "unknown",
+                  "sourceIds": ["M-bec1c355c1-0"]
+                }
+              ],
+              "resources": "依靠现有照护安排、雇主书面沟通及费用资料；总预算15000元、总工时20小时，各环节费用与耗时含等待和缓冲尚待核算。",
+              "firstAction": "盘点每日及突发照护需求、现有承担方式，并确认书面答复截止日期。",
+              "failureCondition": "远程许可或照护连续性未确认时不接受远程安排；留任也须核实。均无法确认时按期说明风险并争取延期，不中断照护；延期须对方同意。",
+              "estimatedCost": null,
+              "estimatedHours": null
+            },
+            "responses": [
+              {
+                "attackId": "attack-A",
+                "decision": "accept",
+                "reason": "材料仅给出两地租金，远程许可及实际居住条件未知，外地租金差不能直接用于远程比较。",
+                "evidenceIds": ["E-e6c69a26-057d-452c-aae2-2785737f7772"],
+                "change": "分别按远程和外地的实际居住地、到岗频率及照护安排核算费用；将1500元限定为外地租房粗算。"
+              }
+            ],
+            "summary": "保留远程协商机制，分开核算远程与外地费用，并核实各路线照护连续性。",
+            "changed": true
+          }
+        ],
+        "verdict": {
+          "outcome": "recommendation",
+          "preferred": "C",
+          "headline": "有条件优先协商远程，同时核实留任",
+          "rationale": "远程可能兼顾家庭稳定与新薪酬，但许可和照护连续性均未确认；A以留任为基准，B侧重外地，均可作为备选核查路线。",
+          "conditions": [
+            "先确认远程地点、到岗频率、工作时段及书面许可，并核实现有照护安排持续覆盖。",
+            "分别核算三项税后收入与实际费用；总投入不得超过15000元和20小时。",
+            "两周内必须书面答复；延期须对方同意，且不能中断照护。"
+          ],
+          "uncertainties": [
+            "各路线的照护连续性、税费、搬家及其他费用均未核实；工时和总费用尚无完整估算。",
+            "材料为合成输入，税前工资和租金仅作为比较假设，须核实；外地粗算每月多1500元不能代表实际可支配收入。"
+          ],
+          "nextActions": [
+            "盘点每日和突发照护需求、现有承担方式及工作时段冲突，并确认书面答复截止日。",
+            "向新雇主书面询问远程条件，同时核实留任条件和各路线照护衔接。",
+            "分别核算各路线收入费用及全部准备、等待、重试、复核和缓冲投入，再按家庭稳定优先比较。"
+          ],
+          "exitCondition": "远程许可或照护未确认时不接受远程；留任及外地亦不得默认可行。若均无法确认，按期书面说明风险并争取同意延期，保持照护不中断。",
+          "evidenceIds": [
+            "E-e6c69a26-057d-452c-aae2-2785737f7772",
+            "E-b8a6bb40-03f5-46a7-ade2-603e8aa82d1a",
+            "E-feccdd33-73bd-430f-8fb5-a7f6852505e6"
+          ],
+          "comparisons": [
+            {
+              "strategyId": "A",
+              "status": "unknown",
+              "reason": "关键限制缺少可核验的资源估计，尚不能确认满足。"
+            },
+            {
+              "strategyId": "B",
+              "status": "unknown",
+              "reason": "关键限制缺少可核验的资源估计，尚不能确认满足。"
+            },
+            {
+              "strategyId": "C",
+              "status": "unknown",
+              "reason": "关键限制缺少可核验的资源估计，尚不能确认满足。"
+            }
+          ],
+          "attackFindings": [
+            {
+              "attackId": "attack-A",
+              "status": "supported",
+              "reason": "材料未确认远程许可或实际居住地，外地租金差不能直接用于远程核算；修订已分别计算。",
+              "evidenceIds": ["E-e6c69a26-057d-452c-aae2-2785737f7772"]
+            },
+            {
+              "attackId": "attack-B",
+              "status": "supported",
+              "reason": "材料未说明留任照护能否持续，不能默认其安全；修订增加照护时段核查。",
+              "evidenceIds": ["E-d71742d6-24d2-461b-95ce-f05b12ceb12d"]
+            },
+            {
+              "attackId": "attack-C",
+              "status": "supported",
+              "reason": "留任及远程的照护连续性均缺乏资料，不能默认可行；修订要求分别核实。",
+              "evidenceIds": ["E-b1e7e69c-2213-49de-99f0-b33c4676d417"]
+            }
+          ]
+        },
+        "costCny": 0,
+        "reservedCny": 0,
+        "createdAt": "2026-11-06T12:17:39.861Z",
+        "changeReason": "首次讨论",
+        "parentVersionId": null,
+        "error": null,
+        "modelSelection": {
+          "requestedMode": "gpt-6.1-terra",
+          "provider": "openai",
+          "modelId": "gpt-6.1-terra",
+          "currency": "USD",
+          "policyVersion": "cost-first-1.0.0",
+          "reason": "使用 GPT 6.1 Terra，这是当前默认模型。"
+        },
+        "costUsd": 0.082486,
+        "reservedUsd": 0
+      }
+    ],
+    "steps": [
+      {
+        "id": "recorded-step-1",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "propose",
+        "role": "A",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:17:39.876Z",
+        "finishedAt": "2026-11-06T12:17:48.520Z"
+      },
+      {
+        "id": "recorded-step-2",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "propose",
+        "role": "B",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:17:48.534Z",
+        "finishedAt": "2026-11-06T12:17:55.751Z"
+      },
+      {
+        "id": "recorded-step-3",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "propose",
+        "role": "C",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:17:55.766Z",
+        "finishedAt": "2026-11-06T12:18:03.477Z"
+      },
+      {
+        "id": "recorded-step-4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "attack",
+        "role": "A",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:03.497Z",
+        "finishedAt": "2026-11-06T12:18:07.963Z"
+      },
+      {
+        "id": "recorded-step-5",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "attack",
+        "role": "B",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:07.984Z",
+        "finishedAt": "2026-11-06T12:18:12.390Z"
+      },
+      {
+        "id": "recorded-step-6",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "attack",
+        "role": "C",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:12.405Z",
+        "finishedAt": "2026-11-06T12:18:16.582Z"
+      },
+      {
+        "id": "recorded-step-7",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "verify",
+        "role": "tools",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:16.591Z",
+        "finishedAt": "2026-11-06T12:18:16.594Z"
+      },
+      {
+        "id": "recorded-step-8",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "revise",
+        "role": "A",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:16.606Z",
+        "finishedAt": "2026-11-06T12:18:25.772Z"
+      },
+      {
+        "id": "recorded-step-9",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "revise",
+        "role": "B",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:25.789Z",
+        "finishedAt": "2026-11-06T12:18:36.216Z"
+      },
+      {
+        "id": "recorded-step-10",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "revise",
+        "role": "C",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:36.240Z",
+        "finishedAt": "2026-11-06T12:18:46.053Z"
+      },
+      {
+        "id": "recorded-step-11",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "stage": "judge",
+        "role": "judge",
+        "status": "completed",
+        "error": null,
+        "startedAt": "2026-11-06T12:18:46.069Z",
+        "finishedAt": "2026-11-06T12:18:57.032Z"
+      }
+    ],
+    "events": [
+      {
+        "seq": 243,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "version_created",
+        "stage": "propose",
+        "actor": null,
+        "message": "已创建第 1 个版本。",
+        "data": null,
+        "createdAt": "2026-11-06T12:17:39.862Z"
+      },
+      {
+        "seq": 244,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "model_selected",
+        "stage": null,
+        "actor": null,
+        "message": "本版本选择 gpt-6.1-terra：使用 GPT 6.1 Terra，这是当前默认模型。",
+        "data": null,
+        "createdAt": "2026-11-06T12:17:39.862Z"
+      },
+      {
+        "seq": 245,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "propose",
+        "actor": "A",
+        "message": "A 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:17:39.876Z"
+      },
+      {
+        "seq": 246,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "propose",
+        "actor": "A",
+        "message": "A 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 2408,
+            "outputTokens": 513,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.004973,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 8634
+          }
+        },
+        "createdAt": "2026-11-06T12:17:48.520Z"
+      },
+      {
+        "seq": 247,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "propose",
+        "actor": "B",
+        "message": "B 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:17:48.534Z"
+      },
+      {
+        "seq": 248,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "propose",
+        "actor": "B",
+        "message": "B 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 2410,
+            "outputTokens": 517,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.004995,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 7176
+          }
+        },
+        "createdAt": "2026-11-06T12:17:55.751Z"
+      },
+      {
+        "seq": 249,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "propose",
+        "actor": "C",
+        "message": "C 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:17:55.766Z"
+      },
+      {
+        "seq": 250,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "propose",
+        "actor": "C",
+        "message": "C 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 2410,
+            "outputTokens": 515,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.004985,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 7695
+          }
+        },
+        "createdAt": "2026-11-06T12:18:03.477Z"
+      },
+      {
+        "seq": 251,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "attack",
+        "actor": "A",
+        "message": "A 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:03.497Z"
+      },
+      {
+        "seq": 252,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "attack",
+        "actor": "A",
+        "message": "A 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 4465,
+            "outputTokens": 272,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.005825,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 4450
+          }
+        },
+        "createdAt": "2026-11-06T12:18:07.963Z"
+      },
+      {
+        "seq": 253,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "attack",
+        "actor": "B",
+        "message": "B 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:07.984Z"
+      },
+      {
+        "seq": 254,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "attack",
+        "actor": "B",
+        "message": "B 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 4690,
+            "outputTokens": 222,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.0058,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 4395
+          }
+        },
+        "createdAt": "2026-11-06T12:18:12.390Z"
+      },
+      {
+        "seq": 255,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "attack",
+        "actor": "C",
+        "message": "C 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:12.405Z"
+      },
+      {
+        "seq": 256,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "attack",
+        "actor": "C",
+        "message": "C 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 4908,
+            "outputTokens": 220,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.006008,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 4167
+          }
+        },
+        "createdAt": "2026-11-06T12:18:16.582Z"
+      },
+      {
+        "seq": 257,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "verify",
+        "actor": "tools",
+        "message": "tools 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:16.591Z"
+      },
+      {
+        "seq": 258,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "verify",
+        "actor": "tools",
+        "message": "tools 已完成。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:16.594Z"
+      },
+      {
+        "seq": 259,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "revise",
+        "actor": "A",
+        "message": "A 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:16.607Z"
+      },
+      {
+        "seq": 260,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "revise",
+        "actor": "A",
+        "message": "A 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 7421,
+            "outputTokens": 716,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.011001,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 9154
+          }
+        },
+        "createdAt": "2026-11-06T12:18:25.772Z"
+      },
+      {
+        "seq": 261,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "revise",
+        "actor": "B",
+        "message": "B 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:25.789Z"
+      },
+      {
+        "seq": 262,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "revise",
+        "actor": "B",
+        "message": "B 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 8124,
+            "outputTokens": 784,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.012044,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 10411
+          }
+        },
+        "createdAt": "2026-11-06T12:18:36.217Z"
+      },
+      {
+        "seq": 263,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "revise",
+        "actor": "C",
+        "message": "C 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:36.240Z"
+      },
+      {
+        "seq": 264,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "revise",
+        "actor": "C",
+        "message": "C 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 8892,
+            "outputTokens": 756,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.012672,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 9800
+          }
+        },
+        "createdAt": "2026-11-06T12:18:46.054Z"
+      },
+      {
+        "seq": 265,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_started",
+        "stage": "judge",
+        "actor": "judge",
+        "message": "judge 开始执行。",
+        "data": null,
+        "createdAt": "2026-11-06T12:18:46.069Z"
+      },
+      {
+        "seq": 266,
+        "arenaId": "d56810f0-0d1f-4bfc-8bcf-65ac3aa61bf4",
+        "versionId": "698a29dc-2511-456c-bd7c-d4544a526541",
+        "type": "step_completed",
+        "stage": "judge",
+        "actor": "judge",
+        "message": "judge 已完成。",
+        "data": {
+          "usage": {
+            "inputTokens": 10138,
+            "outputTokens": 809,
+            "cachedInputTokens": 0,
+            "estimatedCny": 0,
+            "estimatedUsd": 0.014183,
+            "currency": "USD",
+            "provider": "openai",
+            "model": "gpt-6.1-terra",
+            "responseId": "[redacted]",
+            "durationMs": 10950
+          }
+        },
+        "createdAt": "2026-11-06T12:18:57.033Z"
+      }
+    ],
+    "model": {
+      "id": "gpt-6.1-terra",
+      "configured": false,
+      "promptVersion": "1.2.3",
+      "schemaVersion": "1.0.0"
+    }
+  }
+}

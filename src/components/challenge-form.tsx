@@ -251,7 +251,7 @@ export function ChallengeForm({
       return;
     }
     if (editing && !reason.trim()) {
-      setError("请说明这次修改了什么，让新一轮有据可循。");
+      setError("请说明这次修改了什么，作为新一轮推演的依据。");
       return;
     }
     setError("");
@@ -451,7 +451,7 @@ export function ChallengeForm({
           </div>
           <label className={`field ${materialsGlow.className}`} style={materialsGlow.style}>
             <span>
-              参考材料 <small>核验以你提供的文本为基础</small>
+              参考材料 <small>根据你提供的文本核验</small>
             </span>
             <textarea
               data-fill="materials"

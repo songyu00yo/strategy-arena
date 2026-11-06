@@ -85,14 +85,14 @@ export function RouteChart({
   return (
     <section className="c-compare" aria-label="三路对比">
       <h2>
-        三路对比 <span>工时和费用是估算，竖线是你的上限，点路线看详情</span>
+        三路对比 <span>工时和费用均为估算，竖线表示你的上限，点击路线查看详情</span>
       </h2>
       <div className="c-chart">
         <div className="head" aria-hidden="true">
           <span>路线</span>
           <span>工时</span>
           <span>费用</span>
-          <span>被质疑结果</span>
+          <span>质疑结果</span>
           <span>裁判</span>
         </div>
         {routes.map(({ id, view, upheld, refuted, open }) => {

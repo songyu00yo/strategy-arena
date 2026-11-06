@@ -3,8 +3,10 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } f
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { nameOf, outputOf, type Beat } from "./beats";
-import { Chars, Decode, Dust, motionHeld, reducedMotion, ROUTE_COLOR } from "./effects";
+import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
 import { STAGE_LABELS, type Stage } from "@/lib/contracts";
+
+import { createMotionLoop, createMotionScope } from "./motion-runtime";
 
 const reduced = reducedMotion;
 
@@ -40,20 +42,24 @@ export function Intro({
       onReveal();
       return onDone();
     }
+    const scope = createMotionScope();
     if (count < lines.length) {
-      const timer = setTimeout(() => setCount(count + 1), count === 0 ? 800 : 130);
-      return () => clearTimeout(timer);
+      scope.later(count === 0 ? 800 : 130, () => setCount(count + 1));
+      return () => scope.dispose();
     }
-    const timer = setTimeout(() => {
+    scope.later(320, () => {
       onReveal();
-      const open = box.current?.animate(
-        [{ clipPath: "inset(0 0 0 0)" }, { clipPath: "inset(50% 0 50% 0)" }],
-        { duration: 520, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
-      );
+      const open =
+        box.current &&
+        scope.animate(
+          box.current,
+          [{ clipPath: "inset(0 0 0 0)" }, { clipPath: "inset(50% 0 50% 0)" }],
+          { duration: 520, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
+        );
       if (open) open.onfinish = onDone;
       else onDone();
-    }, 320);
-    return () => clearTimeout(timer);
+    });
+    return () => scope.dispose();
   }, [count, lines.length, onDone, onReveal]);
   useEffect(() => {
     const skip = () => {
@@ -109,12 +115,14 @@ export function Chapter({ stage }: { stage: Stage }) {
   useEffect(() => {
     const el = word.current;
     if (!el || reduced()) return;
-    const timer = setTimeout(() => {
+    const scope = createMotionScope();
+    scope.later(360, () => {
       const to = document.querySelector(".c-time .seg.here span")?.getBoundingClientRect();
       const from = el.getBoundingClientRect();
       if (!to) return;
       const scale = Math.max(0.04, to.height / from.height);
-      el.animate(
+      scope.animate(
+        el,
         [
           { transform: "none", opacity: 1 },
           {
@@ -126,8 +134,8 @@ export function Chapter({ stage }: { stage: Stage }) {
         ],
         { duration: 420, easing: "cubic-bezier(.7,0,.15,1)", fill: "forwards" },
       );
-    }, 360);
-    return () => clearTimeout(timer);
+    });
+    return () => scope.dispose();
   }, []);
   return (
     <div className="c-chapter" aria-hidden="true">
@@ -147,9 +155,11 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
     const pick = document
       .querySelector(`[data-board="${verdict.preferred ?? "B"}"]`)
       ?.getBoundingClientRect();
+    const scope = createMotionScope();
     const x = pick ? pick.left + pick.width / 2 : innerWidth / 2;
     const y = pick ? pick.top + pick.height / 2 : innerHeight / 2;
-    el.animate(
+    const entrance = scope.animate(
+      el,
       [
         { clipPath: `circle(0px at ${x}px ${y}px)` },
         { clipPath: `circle(150vmax at ${x}px ${y}px)` },
@@ -163,20 +173,27 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
       const inset = panel
         ? `inset(${panel.top}px ${innerWidth - panel.right}px ${innerHeight - panel.bottom}px ${panel.left}px)`
         : "inset(50%)";
-      closing = el.animate(
+      const currentClip = getComputedStyle(el).clipPath;
+      const entered = entrance.playState === "finished";
+      const panelX = panel ? panel.left + panel.width / 2 : innerWidth / 2;
+      const panelY = panel ? panel.top + panel.height / 2 : innerHeight / 2;
+      const endClip = entered ? inset : `circle(0px at ${panelX}px ${panelY}px)`;
+      entrance.cancel();
+      closing = scope.animate(
+        el,
         [
-          { clipPath: "inset(0 0 0 0)", opacity: 1 },
-          { clipPath: inset, opacity: 1, offset: 0.85 },
-          { clipPath: inset, opacity: 0 },
+          { clipPath: entered ? "inset(0px)" : currentClip, opacity: 1 },
+          { clipPath: endClip, opacity: 1, offset: 0.85 },
+          { clipPath: endClip, opacity: 0 },
         ],
         { duration: 800, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
       );
       closing.onfinish = onDone;
     };
-    const timer = setTimeout(close, 2500);
+    scope.later(2500, close);
     addEventListener("keydown", close);
     return () => {
-      clearTimeout(timer);
+      scope.dispose();
       removeEventListener("keydown", close);
     };
     // Runs once: a poll that refreshes the record must not restart the verdict's timing.
@@ -311,11 +328,13 @@ export function RecordWall({
   shown,
   currentId,
   events,
+  directed = false,
 }: {
   version: ArenaVersion;
   shown: Beat[];
   currentId?: string;
   events: ArenaEvent[];
+  directed?: boolean;
 }) {
   const stage = useRef<HTMLDivElement>(null);
   const panels = useRef(new Map<string, Panel>());
@@ -331,7 +350,7 @@ export function RecordWall({
     if (!host) return;
     const counts = [0, 0, 0, 0];
     const list = latest.current;
-    const animate = settled.current && !reduced();
+    const animate = directed && settled.current && !reduced();
     settled.current = true;
     list.forEach((record, i) => {
       const col = counts[record.row]++;
@@ -349,7 +368,8 @@ export function RecordWall({
         head.append(name, meta);
         const body = document.createElement("div");
         body.className = "body";
-        const rows = record.lines.map((line) => {
+        const displayLines = record.lines.slice(0, 10);
+        const rows = displayLines.map((line) => {
           const row = document.createElement("div");
           row.textContent = animate ? "" : line;
           body.appendChild(row);
@@ -361,15 +381,19 @@ export function RecordWall({
           el,
           x: (col - 2.2) * 372 + (record.row % 2) * 70,
           y: (record.row - 1.5) * 188,
-          z: -1100,
+          z: animate ? -700 : -300,
           aim: -300,
-          lines: record.lines,
+          lines: displayLines,
           row: 0,
           ch: 0,
           typing: animate,
           rows,
         };
         panels.current.set(record.id, panel);
+      }
+      if (!directed) {
+        panel.typing = false;
+        panel.rows.forEach((row, i) => (row.textContent = panel!.lines[i]));
       }
       panel.aim = focus ? -170 : -250 - Math.min(rank, 14) * 44; // Three planes of depth, so the wall reads as stacked windows and not a flat sheet.
       const plane = rank < 4 ? "near" : rank < 10 ? "mid" : "far";
@@ -386,7 +410,7 @@ export function RecordWall({
         panel.el.remove();
         panels.current.delete(id);
       }
-  }, [signature, currentId]);
+  }, [signature, currentId, directed]);
   // The wall fills the same share of the stage on any screen.
   useEffect(() => {
     const fit = () => {
@@ -410,44 +434,24 @@ export function RecordWall({
       }
       return;
     }
-    let frame = 0;
-    let last = performance.now();
     let budget = 0;
-    let nextRetype = last + 2600;
-    const tick = (t: number) => {
-      const dt = Math.min(64, t - last);
-      last = t;
-      if (motionHeld()) {
-        frame = requestAnimationFrame(tick);
-        return;
-      }
-      budget += dt;
-      // Typing wakes at a text-like pace, not every frame, and adds a few characters at a time.
+    const loop = createMotionLoop((_time, dt) => {
+      budget += dt * 1000;
       const typing = budget >= 48;
       const steps = typing ? 3 : 0;
       if (typing) budget = 0;
-      // Rewrite one settled panel at a time, so the wall stays alive and never goes blank.
-      if (t > nextRetype) {
-        nextRetype = t + 1500;
-        const idle = [...all.values()].filter((p) => !p.typing && p.lines.length);
-        const pick = idle[Math.floor(Math.random() * idle.length)];
-        if (pick) {
-          pick.typing = true;
-          pick.row = 0;
-          pick.ch = 0;
-          pick.rows.forEach((row) => (row.textContent = ""));
-        }
-      }
+      let moving = false;
       for (const p of all.values()) {
-        // Panels only move while settling into depth; a still layer costs nothing.
         if (Math.abs(p.aim - p.z) > 0.5) {
-          p.z += (p.aim - p.z) * Math.min(1, dt * 0.004);
+          p.z += (p.aim - p.z) * Math.min(1, dt * (directed ? 6 : 10));
           place(p);
+          moving = true;
         } else if (p.z !== p.aim) {
           p.z = p.aim;
           place(p);
         }
         if (!p.typing) continue;
+        moving = true;
         for (let n = 0; n < steps && p.typing; n++) {
           if (p.row >= p.lines.length) {
             p.typing = false;
@@ -461,11 +465,10 @@ export function RecordWall({
           }
         }
       }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [signature]);
+      return moving;
+    });
+    return () => loop.dispose();
+  }, [signature, currentId, directed]);
   return (
     <div className="c-wall" aria-hidden="true">
       <div className="c-stage" ref={stage} />
@@ -497,6 +500,7 @@ export function ChainDeck({
   beats,
   index,
   directed,
+  seeking = false,
   lead,
   reviewing,
   onStep,
@@ -505,6 +509,7 @@ export function ChainDeck({
   beats: Beat[];
   index: number;
   directed: boolean;
+  seeking?: boolean;
   lead: number;
   reviewing: boolean;
   onStep: (index: number) => void;
@@ -518,7 +523,9 @@ export function ChainDeck({
   const running = current?.stage === "attack" ? 1 : current?.stage === "verify" ? 2 : 3;
   useEffect(() => {
     if (!front.current || !directed || reduced()) return;
-    front.current.animate(
+    const scope = createMotionScope();
+    scope.animate(
+      front.current,
       [
         {
           translate: "90px 12px",
@@ -530,6 +537,7 @@ export function ChainDeck({
       ],
       { duration: 520, delay: lead + 40, easing: "cubic-bezier(.16,1.05,.3,1)", fill: "backwards" },
     );
+    return () => scope.dispose();
     // Only a new step brings a card in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id]);
@@ -670,7 +678,7 @@ export function ChainDeck({
                     <span>
                       <Decode
                         text={text}
-                        active={directed && r === running}
+                        active={directed && !seeking && r === running}
                         delay={lead + (r === 0 ? 700 : 300)}
                       />
                     </span>
@@ -703,6 +711,7 @@ export function LiveRecord({
   beat,
   index,
   directed,
+  seeking = false,
   lead,
   onEvidence,
 }: {
@@ -710,6 +719,7 @@ export function LiveRecord({
   beat: Beat | null;
   index: number;
   directed: boolean;
+  seeking?: boolean;
   lead: number;
   onEvidence: (attack: Attack) => void;
 }) {
@@ -717,7 +727,6 @@ export function LiveRecord({
   const lines = linesOf(version, beat);
   return (
     <div
-      key={beat.id}
       className={`c-live ${directed ? "arrive" : ""}`}
       role="region"
       aria-label="这一步详情"
@@ -744,7 +753,7 @@ export function LiveRecord({
       <div className="body">
         {lines.map((line, i) => (
           <div key={`${i}:${line}`}>
-            <Decode text={line} active={directed} delay={lead + 160 + i * 110} />
+            <Decode text={line} active={directed && !seeking} delay={lead + 160 + i * 110} />
           </div>
         ))}
       </div>

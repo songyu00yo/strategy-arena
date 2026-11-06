@@ -1,5 +1,12 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   STAGES,
   STAGE_LABELS,
@@ -15,6 +22,9 @@ import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
 import { RouteStage } from "./RouteStage";
 import { StepCard } from "./StepCard";
+import { ResultRegion } from "./ResultRegion";
+import { acquireMotionHold, createMotionScope, motionNow, useMotionPaused } from "./motion-runtime";
+import "./console-motion.css";
 import { beatsOf, clock, nameOf, usageOf } from "./beats";
 
 /** Joins sentences without doubling their end marks. */
@@ -77,10 +87,14 @@ export function ArenaConsole({
   const [intro, setIntro] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [motion, setMotion] = useState(false);
+  const [seeking, setSeeking] = useState(false);
+  const [playbackPaused, setPlaybackPaused] = useState(false);
   const [filmDone, setFilmDone] = useState(false);
   const [stepwise, setStepwise] = useState(false);
   const [wholeResult, setWholeResult] = useState(false);
   const [openStep, setOpenStep] = useState<number | null>(null);
+  const paused = useMotionPaused();
+  const nowPanel = useRef<HTMLElement>(null);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
@@ -117,63 +131,87 @@ export function ArenaConsole({
   const stage = current?.stage;
   // The first step of a stage waits for its word to land, so the two never collide.
   const firstOfStage = !!stage && stage !== "judge" && beats[index - 1]?.stage !== stage;
-  const lead = playing && firstOfStage ? 560 / speed : 0;
-  // Each step's clock starts when the step does, so a new result arriving never restarts it.
-  const shotClock = useRef({ index: -1, at: 0 });
+  const lead = playing && !seeking && firstOfStage ? 560 / speed : 0;
+  // Count only active playback time. Data refreshes and overlays must not spend the remaining shot.
+  const shotClock = useRef({ id: "", elapsed: 0 });
+  useLayoutEffect(() => {
+    if (playbackPaused) return acquireMotionHold();
+  }, [playbackPaused]);
   useEffect(() => {
-    // Reading a step holds playback, so nothing moves on behind the card.
-    if (!playing || !stage || openStep !== null) return;
-    // Step by step: the viewer moves on when ready. Only the last step still finishes by itself.
+    if (!playing || !stage || paused || openStep !== null || (intro && !revealed)) return;
     if (stepwise && index < last) return;
-    // Only a game already complete at first sight skips ahead; one being watched walks to its end.
-    const behind = !live && startedLive.current && index <= 1 && last - index > 2;
-    if (intro && !revealed && !behind) return;
-    const now = performance.now();
-    if (shotClock.current.index !== index) shotClock.current = { index, at: now };
-    // In a live game, steps shorten while results wait in line, so the screen catches up without a jump.
-    // A replay the viewer asked for keeps its full pace.
+    const id = current?.id ?? "";
+    if (shotClock.current.id !== id) shotClock.current = { id, elapsed: 0 };
+    const clock = shotClock.current;
+    const began = motionNow();
     const backlog = last - index;
-    const full = SHOT_MS[stage] / speed + lead;
+    const full = SHOT_MS[stage] + (firstOfStage ? 560 : 0);
     const hold =
-      backlog > 0 && startedLive.current ? Math.max(650 / speed, full / (1 + backlog * 0.5)) : full;
+      backlog > 0 && startedLive.current ? Math.max(650, full / (1 + backlog * 0.5)) : full;
     const timer = setTimeout(
       () => {
-        if (behind) {
-          setIntro(false);
-          setMotion(false);
-          setPlaying(false);
-          setCursor(null);
-          return;
-        }
         if (index < last) return setCursor(live || index + 1 < last ? index + 1 : null);
         if (live) return;
         setPlaying(false);
+        setMotion(false);
         setCursor(null);
       },
-      behind ? 0 : Math.max(0, hold - (now - shotClock.current.at)),
+      Math.max(0, hold - clock.elapsed) / speed,
     );
-    return () => clearTimeout(timer);
-  }, [playing, index, last, stage, speed, live, intro, revealed, lead, stepwise, openStep]);
+    return () => {
+      clearTimeout(timer);
+      clock.elapsed += (motionNow() - began) * speed;
+    };
+  }, [
+    playing,
+    current?.id,
+    index,
+    last,
+    stage,
+    speed,
+    live,
+    intro,
+    revealed,
+    firstOfStage,
+    stepwise,
+    openStep,
+    paused,
+  ]);
 
   const goTo = useCallback(
     (i: number) => {
+      const target = Math.max(0, Math.min(i, last));
+      if (last < 0 || target === index) return;
       startedLive.current = false;
-      // In step-by-step viewing, moving on is the point; anything else leaves playback.
-      setPlaying((p) => p && stepwise && i === index + 1);
-      setMotion(i === index + 1);
-      setFilmDone(false);
-      setCursor(i >= last ? null : Math.max(i, 0));
+      setIntro(false);
+      // A seek performs the chosen shot directly; interruptions replace its choreography.
+      setPlaying((p) => p && stepwise && target === index + 1);
+      setPlaybackPaused(false);
+      setSeeking(true);
+      setMotion(true);
+      setFilmDone(true);
+      shotClock.current = { id: "", elapsed: 0 };
+      setCursor(target >= last ? null : target);
     },
     [last, index, stepwise],
   );
-  const replay = () => {
+  const replay = useCallback(() => {
     startedLive.current = false;
-    if (playing) return setPlaying(false);
+    if (playing) {
+      setPlaybackPaused(true);
+      return setPlaying(false);
+    }
+    setPlaybackPaused(false);
+    setSeeking(false);
     setMotion(true);
-    setFilmDone(false);
-    if (index >= last) setCursor(0);
+    if (!playbackPaused) setFilmDone(false);
+    if (index >= last && !playbackPaused) {
+      shotClock.current = { id: "", elapsed: 0 };
+      setCursor(0);
+    }
     setPlaying(true);
-  };
+  }, [playing, index, last, playbackPaused]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -193,19 +231,12 @@ export function ArenaConsole({
         goTo(0);
       } else if (e.key === " " && target?.tagName !== "BUTTON") {
         e.preventDefault();
-        setPlaying((p) => {
-          if (!p) {
-            setMotion(true);
-            setFilmDone(false);
-            if (cursor === null) setCursor(0);
-          }
-          return !p;
-        });
+        replay();
       }
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [goTo, index, last, cursor]);
+  }, [goTo, index, last, replay]);
 
   // A replay reveals the log in step with the boards. Nothing is invented for the gap.
   const logged =
@@ -218,7 +249,7 @@ export function ArenaConsole({
   const count = (status: Attack["status"]) => checked.filter((a) => a.status === status).length;
   const tokens = used.reduce((t, u) => t + u.inputTokens + u.outputTokens, 0);
   const peak = Math.max(1, ...used.map((u) => u.inputTokens + u.outputTokens));
-  const verdict = seen.has("judge") ? version.verdict : null;
+  const verdict = version.verdict;
   const directed = motion;
   // The result takes the lead once the game has reached it. Looking back at a step hides it.
   const atResult = !!verdict && index === last;
@@ -243,9 +274,63 @@ export function ArenaConsole({
     [demo ? "Token（预设）" : "Token", tokens, ""],
   ];
 
+  // Keep controls mounted. Interruptions start from the displayed pose, not the start keyframe.
+  useLayoutEffect(() => {
+    const nodes = [
+      ...(nowPanel.current?.querySelectorAll<HTMLElement>(
+        ":scope > .fl, :scope > .big, :scope > p",
+      ) ?? []),
+    ];
+    if (!seeking || reducedMotion()) {
+      nodes.forEach((node) => {
+        node.style.opacity = "";
+        node.style.transform = "";
+      });
+      return;
+    }
+    const scope = createMotionScope();
+    const starts = nodes.map((node) => ({
+      opacity: node.style.opacity || "0.35",
+      transform: node.style.transform || "translateY(16px)",
+    }));
+    const animations = nodes.map((node, i) => {
+      const animation = scope.animate(node, [starts[i], { opacity: 1, transform: "none" }], {
+        duration: 560,
+        easing: "cubic-bezier(.16,1,.3,1)",
+        fill: "both",
+      });
+      animation.onfinish = () => {
+        node.style.opacity = "";
+        node.style.transform = "";
+        animation.cancel();
+      };
+      return animation;
+    });
+    return () => {
+      const displayed = nodes.map((node) => {
+        const style = getComputedStyle(node);
+        return { opacity: style.opacity, transform: style.transform };
+      });
+      animations.forEach((animation, i) => {
+        const interrupted = animation.playState === "running";
+        animation.cancel();
+        if (interrupted) Object.assign(nodes[i].style, displayed[i]);
+      });
+      scope.dispose();
+    };
+  }, [current?.id, seeking]);
+
   return (
-    <div className={`c-root ${playing ? "theater" : ""} ${atResult ? "at-result" : ""}`}>
-      <RecordWall version={version} shown={shown} currentId={current?.id} events={logged} />
+    <div
+      className={`c-root ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
+    >
+      <RecordWall
+        version={version}
+        shown={shown}
+        currentId={current?.id}
+        events={logged}
+        directed={directed && !seeking}
+      />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
         <div className="c-conditions">{conditions}</div>
@@ -288,66 +373,66 @@ export function ArenaConsole({
               <div key={label} className={tone} data-state={METRIC_STATE[label]}>
                 <dt>{label}</dt>
                 <dd>
-                  <Roll value={value} delay={rollDelay} />
+                  <Roll value={value} delay={rollDelay} animate={directed && !seeking} />
                 </dd>
               </div>
             ))}
           </dl>
         </div>
-        {atResult && verdict && (
-          <section
-            className={`c-result ${directed ? "arrive" : ""} ${wholeResult ? "whole" : ""}`}
-            aria-label="结论"
-            id="verdict"
-          >
-            <div className="lead">
-              <div className="tag">
-                <b
-                  className={verdict.preferred ? "pick" : "none"}
-                  style={
-                    verdict.preferred
-                      ? ({
-                          "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
-                        } as CSSProperties)
-                      : undefined
-                  }
-                >
-                  {verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
-                </b>
-                <span>{OUTCOME[verdict.outcome]}</span>
+        {verdict && (
+          <ResultRegion open={atResult} expanded={wholeResult}>
+            <section
+              className={`c-result ${wholeResult ? "whole" : ""}`}
+              aria-label="结论"
+              id="verdict"
+            >
+              <div className="lead">
+                <div className="tag">
+                  <b
+                    className={verdict.preferred ? "pick" : "none"}
+                    style={
+                      verdict.preferred
+                        ? ({
+                            "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
+                          } as CSSProperties)
+                        : undefined
+                    }
+                  >
+                    {verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
+                  </b>
+                  <span>{OUTCOME[verdict.outcome]}</span>
+                </div>
+                <h2>{verdict.headline}</h2>
+                <p>{verdict.rationale}</p>
               </div>
-              <h2>
-                <Chars text={verdict.headline} active={directed} delay={500} />
-              </h2>
-              <p>{verdict.rationale}</p>
-            </div>
-            <div className="act">
-              <div className="first">
-                <small>现在第一步</small>
-                <strong>{verdict.nextActions[0]}</strong>
+              <div className="act">
+                <div className="first">
+                  <small>现在第一步</small>
+                  <strong>{verdict.nextActions[0]}</strong>
+                </div>
+                <dl>
+                  <div>
+                    <dt>前提</dt>
+                    <dd>{listOf(verdict.conditions) || "未给出"}</dd>
+                  </div>
+                  <div>
+                    <dt>仍需确认</dt>
+                    <dd>{listOf(verdict.uncertainties) || "未列出"}</dd>
+                  </div>
+                  <div>
+                    <dt>退出条件</dt>
+                    <dd>{verdict.exitCondition}</dd>
+                  </div>
+                </dl>
+                {verdict.nextActions.length > 1 && (
+                  <p className="more">接着做：{listOf(verdict.nextActions.slice(1))}</p>
+                )}
+                <button type="button" onClick={() => setWholeResult((w) => !w)}>
+                  {wholeResult ? "收起结论" : "看完整结论"}
+                </button>
               </div>
-              <dl>
-                <div>
-                  <dt>前提</dt>
-                  <dd>{listOf(verdict.conditions) || "未给出"}</dd>
-                </div>
-                <div>
-                  <dt>仍需确认</dt>
-                  <dd>{listOf(verdict.uncertainties) || "未列出"}</dd>
-                </div>
-                <div>
-                  <dt>退出条件</dt>
-                  <dd>{verdict.exitCondition}</dd>
-                </div>
-              </dl>
-              {verdict.nextActions.length > 1 && (
-                <p className="more">接着做：{listOf(verdict.nextActions.slice(1))}</p>
-              )}
-              <button type="button" onClick={() => setWholeResult((w) => !w)}>
-                {wholeResult ? "收起结论" : "看完整结论"}
-              </button>
-            </div>
-          </section>
+            </section>
+          </ResultRegion>
         )}
         <main className="c-main">
           <RouteStage
@@ -357,7 +442,8 @@ export function ArenaConsole({
             index={index}
             speed={speed}
             directed={directed}
-            camera={cursor !== null || playing}
+            seeking={seeking}
+            camera={playing || seeking}
             lead={lead}
             located={selectedAttack}
             reviewing={reviewing}
@@ -368,7 +454,7 @@ export function ArenaConsole({
             onClaim={onClaim}
           />
           <div className="c-rail">
-            <section className="c-now" key={current?.id} aria-label="正在发生">
+            <section className="c-now" ref={nowPanel} aria-label="正在发生">
               <div className="fl">
                 {current ? (
                   <>
@@ -390,7 +476,7 @@ export function ArenaConsole({
               <div className="big">
                 <Chars
                   text={current ? current.title : "等待第一步"}
-                  active={directed}
+                  active={directed && !seeking}
                   delay={180}
                 />
               </div>
@@ -416,7 +502,7 @@ export function ArenaConsole({
                   ←
                 </button>
                 <button type="button" disabled={beats.length < 2} onClick={replay}>
-                  {playing ? "暂停放映" : "从头放映"}
+                  {playing ? "暂停放映" : index < last || playbackPaused ? "继续放映" : "从头放映"}
                 </button>
                 <button
                   type="button"
@@ -440,7 +526,10 @@ export function ArenaConsole({
                   aria-pressed={stepwise}
                   title="每一步停住，按 → 或“下一步”继续"
                   className={stepwise ? "on" : ""}
-                  onClick={() => setStepwise((v) => !v)}
+                  onClick={() => {
+                    if (stepwise && playing) setSeeking(false);
+                    setStepwise(!stepwise);
+                  }}
                 >
                   逐步看
                 </button>
@@ -511,7 +600,7 @@ export function ArenaConsole({
           </section>
         </div>
       </div>
-      {playing && current && current.stage !== "judge" && (
+      {playing && directed && !seeking && current && current.stage !== "judge" && (
         <Chapter key={current.stage} stage={current.stage} />
       )}
       {verdict && directed && !filmDone && current?.id === "judge" && (

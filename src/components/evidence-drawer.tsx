@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { leaveAs } from "@/components/console/effects";
+import { reducedMotion } from "@/components/console/effects";
+import { useOverlayMotion } from "./overlay-motion";
+import "./overlay-motion.css";
 import {
   ArrowRight,
   FileSearch,
@@ -64,23 +66,32 @@ export function EvidenceDrawer({
   onClose: () => void;
   onLocate: (attack: Attack) => void;
 }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLElement>(null);
+  const { panel: dialogRef, backdrop, close } = useOverlayMotion<HTMLElement>("drawer", onClose);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const previousAttack = useRef(attack.id);
+  // A different citation changes the content in place; snapshot refreshes do not re-enter it.
   useLayoutEffect(() => {
-    const el = dialogRef.current;
-    return () =>
-      leaveAs(el, [{ transform: "none" }, { transform: "translateX(102%)" }], {
-        duration: 280,
-        backdrop: "rgb(11 13 16 / 0.34)",
-      });
-  }, [dialogRef]);
+    if (previousAttack.current === attack.id) return;
+    previousAttack.current = attack.id;
+    const content = contentRef.current;
+    if (!content) return;
+    content.scrollTop = 0;
+    if (reducedMotion()) return;
+    const animation = content.animate(
+      [
+        { opacity: 0.5, transform: "translateX(10px)" },
+        { opacity: 1, transform: "none" },
+      ],
+      { duration: 240, easing: "cubic-bezier(.16,1,.3,1)" },
+    );
+    return () => animation.cancel();
+  }, [attack.id]);
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-    const old = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     const handle = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+      }
       if (e.key === "Tab") {
         const nodes = dialogRef.current?.querySelectorAll<HTMLElement>(
           'button:not(:disabled), a[href], input, textarea, summary, [tabindex="0"]',
@@ -98,12 +109,8 @@ export function EvidenceDrawer({
       }
     };
     document.addEventListener("keydown", handle);
-    return () => {
-      document.body.style.overflow = old;
-      document.removeEventListener("keydown", handle);
-      previous?.focus();
-    };
-  }, [onClose]);
+    return () => document.removeEventListener("keydown", handle);
+  }, [close, dialogRef]);
   const evidence = version.evidence.filter((e) => e.attackId === attack.id);
   const revision = version.revisions.find((r) => r.strategyId === attack.targetStrategyId);
   const response = revision?.responses.find((r) => r.attackId === attack.id);
@@ -119,7 +126,7 @@ export function EvidenceDrawer({
   const citations = (ids: string[]) =>
     ids.map((id) => version.evidence.find((e) => e.id === id)?.title ?? id).join("、");
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
+    <div className="drawer-backdrop overlay-motion" ref={backdrop} onClick={() => close()}>
       <aside
         ref={dialogRef}
         className="evidence-drawer"
@@ -137,7 +144,11 @@ export function EvidenceDrawer({
               <span>
                 {attack.from} 质疑路线 {attack.targetStrategyId}
               </span>
-              <button type="button" className="text-button" onClick={() => onLocate(attack)}>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => close(() => onLocate(attack))}
+              >
                 <LocateFixed size={13} aria-hidden="true" />
                 在路线 {attack.targetStrategyId} 中定位
               </button>
@@ -146,14 +157,14 @@ export function EvidenceDrawer({
           <button
             className="icon-button"
             type="button"
-            onClick={onClose}
-            ref={closeRef}
+            onClick={() => close()}
+            data-overlay-autofocus
             aria-label="关闭证据详情"
           >
             <X size={22} />
           </button>
         </div>
-        <div className="drawer-scroll">
+        <div className="drawer-scroll" ref={contentRef}>
           <section className="evidence-section">
             <span className="evidence-step">01 / 被挑战的原话</span>
             <blockquote>{attack.claimQuote}</blockquote>

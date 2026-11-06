@@ -1,139 +1,185 @@
 "use client";
-import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
+import { useLayoutEffect, useRef, type CSSProperties } from "react";
 import { X } from "lucide-react";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { STAGE_LABELS, type ArenaVersion, type Attack } from "@/lib/contracts";
-import { holdMotion, reducedMotion, ROUTE_COLOR } from "./effects";
+import { reducedMotion, ROUTE_COLOR } from "./effects";
+import { acquireMotionHold } from "./motion-runtime";
+import "./step-card-motion.css";
 import { nameOf, type Beat } from "./beats";
 
-/** One spring drives the whole flight, so nothing in it can change speed abruptly. */
-type Spring = { ms: number; w: number; z: number };
-const DRAW: Spring = { ms: 620, w: 14.1, z: 0.8 };
-const LAND: Spring = { ms: 460, w: 19.6, z: 1 };
-const STEPS = 40;
-const TILT = (20 * Math.PI) / 180;
+type Point = { x: number; y: number };
+type Quad = [Point, Point, Point, Point];
+type Matrix = [number, number, number, number, number, number, number, number, number];
+type Flight = { parts: Animation[]; path: (t: number) => Quad; at: number; ms: number };
+const DRAW_MS = 620;
+const LAND_MS = 500;
+const HANDOFF = 0.7;
+const SAMPLES = 60;
 
-function spring(ms: number, { w, z }: Spring) {
-  const t = ms / 1000;
-  if (z >= 1) return 1 - (1 + w * t) * Math.exp(-w * t);
-  const wd = w * Math.sqrt(1 - z * z);
-  return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + ((z * w) / wd) * Math.sin(wd * t));
-}
-function smooth(from: number, to: number, x: number) {
-  const t = Math.min(1, Math.max(0, (x - from) / (to - from)));
-  return t * t * (3 - 2 * t);
+/** Read the projected border corners, including every ancestor's perspective. */
+function corners(el: HTMLElement): Quad {
+  const points = [
+    [0, 0],
+    [el.offsetWidth, 0],
+    [el.offsetWidth, el.offsetHeight],
+    [0, el.offsetHeight],
+  ].map(([x, y]) => {
+    const marker = document.createElement("i");
+    marker.style.cssText = `position:absolute;left:${x - el.clientLeft}px;top:${y - el.clientTop}px;width:0;height:0;margin:0;padding:0;border:0;pointer-events:none;visibility:hidden`;
+    marker.setAttribute("aria-hidden", "true");
+    el.append(marker);
+    return marker;
+  });
+  const quad = points.map((marker) => {
+    const box = marker.getBoundingClientRect();
+    return { x: box.left, y: box.top };
+  }) as Quad;
+  points.forEach((marker) => marker.remove());
+  return quad;
 }
 
-/** Leave a gap where this step sits in the chain. Set on the DOM so the page never re-renders mid-flight. */
-function markDeck(pulled: number | null, gap = pulled !== null) {
+/** A planar homography maps the whole card, not an estimated tilted bounding box. */
+function project(width: number, height: number, q: Quad): Matrix {
+  const [a, b, c, d] = q;
+  const dx1 = b.x - c.x;
+  const dx2 = d.x - c.x;
+  const dx3 = a.x - b.x + c.x - d.x;
+  const dy1 = b.y - c.y;
+  const dy2 = d.y - c.y;
+  const dy3 = a.y - b.y + c.y - d.y;
+  const det = dx1 * dy2 - dx2 * dy1;
+  const g = Math.abs(det) > 0.0001 ? (dx3 * dy2 - dx2 * dy3) / det : 0;
+  const h = Math.abs(det) > 0.0001 ? (dx1 * dy3 - dx3 * dy1) / det : 0;
+  return [
+    (b.x - a.x + g * b.x) / width,
+    (d.x - a.x + h * d.x) / height,
+    a.x,
+    (b.y - a.y + g * b.y) / width,
+    (d.y - a.y + h * d.y) / height,
+    a.y,
+    g / width,
+    h / height,
+    1,
+  ];
+}
+function inverse(m: Matrix): Matrix {
+  const [a, b, c, d, e, f, g, h, i] = m;
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  return [
+    e * i - f * h,
+    c * h - b * i,
+    b * f - c * e,
+    f * g - d * i,
+    a * i - c * g,
+    c * d - a * f,
+    d * h - e * g,
+    b * g - a * h,
+    a * e - b * d,
+  ].map((n) => n / det) as Matrix;
+}
+function multiply(a: Matrix, b: Matrix): Matrix {
+  return Array.from({ length: 9 }, (_, i) => {
+    const row = Math.floor(i / 3) * 3;
+    const col = i % 3;
+    return a[row] * b[col] + a[row + 1] * b[col + 3] + a[row + 2] * b[col + 6];
+  }) as Matrix;
+}
+function cssMatrix(m: Matrix) {
+  return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
+}
+function progress(t: number) {
+  return (1 - (1 + 8 * t) * Math.exp(-8 * t)) / (1 - 9 * Math.exp(-8));
+}
+function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad) {
+  return (t: number): Quad => {
+    const settled = progress(t);
+    const momentum = t * (1 - t) ** 3 * ms;
+    const lift = -52 * Math.sin(Math.PI * t) ** 2;
+    return from.map((point, i) => ({
+      x: point.x + (to[i].x - point.x) * settled + (velocity?.[i].x ?? 0) * momentum,
+      y: point.y + (to[i].y - point.y) * settled + (velocity?.[i].y ?? 0) * momentum + lift,
+    })) as Quad;
+  };
+}
+function stopFlight(flight: Flight | null) {
+  flight?.parts.forEach((part) => {
+    part.onfinish = null;
+    part.cancel();
+  });
+}
+function velocityOf(flight: Flight | null): Quad | undefined {
+  if (!flight) return;
+  const elapsed = Math.min(flight.ms, performance.now() - flight.at);
+  if (elapsed >= flight.ms) return;
+  const now = flight.path(elapsed / flight.ms);
+  const before = flight.path(Math.max(0, elapsed - 8) / flight.ms);
+  const dt = Math.max(1, Math.min(elapsed, 8));
+  return now.map((p, i) => ({ x: (p.x - before[i].x) / dt, y: (p.y - before[i].y) / dt })) as Quad;
+}
+
+/** Freeze the source's typography so the detail-dialog selectors cannot restyle its copy. */
+function copyCard(source: HTMLElement) {
+  const clone = source.cloneNode(true) as HTMLElement;
+  const originals = [source, ...source.querySelectorAll<HTMLElement>("*")];
+  const copies = [clone, ...clone.querySelectorAll<HTMLElement>("*")];
+  const properties = [
+    "display",
+    "position",
+    "flex-direction",
+    "flex",
+    "align-items",
+    "justify-content",
+    "gap",
+    "padding",
+    "margin",
+    "border",
+    "border-top",
+    "border-radius",
+    "box-sizing",
+    "background",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "line-height",
+    "letter-spacing",
+    "text-transform",
+    "text-align",
+    "color",
+    "white-space",
+    "overflow",
+    "text-overflow",
+  ];
+  originals.forEach((node, i) => {
+    const style = getComputedStyle(node);
+    properties.forEach((property) =>
+      copies[i].style.setProperty(property, style.getPropertyValue(property)),
+    );
+    copies[i].removeAttribute("id");
+    copies[i].removeAttribute("role");
+    copies[i].removeAttribute("tabindex");
+    copies[i].removeAttribute("data-step-source");
+  });
+  clone.classList.remove("pulled", "past-gap");
+  clone.setAttribute("aria-hidden", "true");
+  clone.inert = true;
+  return clone;
+}
+function sourceOf(index: number) {
+  const source = document.querySelector<HTMLElement>(`[data-step-source="${index}"]`);
+  const box = source?.getBoundingClientRect();
+  return source && box && box.width > 1 && box.height > 1 ? source : null;
+}
+
+/** Gap movements use the same clock as the flight, with no deferred class changes. */
+function markDeck(pulled: number | null, gap = pulled !== null, ms = 240) {
   document.querySelectorAll<HTMLElement>("[data-step-source]").forEach((card) => {
+    card.style.setProperty("--deck-gap-ms", `${ms}ms`);
     const i = Number(card.dataset.stepSource);
     card.classList.toggle("pulled", i === pulled);
     card.classList.toggle("past-gap", gap && pulled !== null && i > pulled);
   });
-}
-
-/** A copy of the chain card, sitting exactly over the top of the open one until it fades. */
-function faceOf(source: HTMLElement, scale: number) {
-  const face = source.cloneNode(true) as HTMLElement;
-  face.removeAttribute("data-step-source");
-  face.removeAttribute("role");
-  face.removeAttribute("tabindex");
-  face.classList.remove("pulled", "past-gap");
-  face.classList.add("c-pull-face");
-  face.setAttribute("aria-hidden", "true");
-  face.style.width = `${source.offsetWidth}px`;
-  face.style.height = `${source.offsetHeight}px`;
-  face.style.transform = `scale(${scale})`;
-  return face;
-}
-
-/**
- * Every part of the card as a function of one number: 0 is in the chain, 1 is fully open.
- * Only transform and opacity change, so the flight runs on the compositor.
- */
-function fly(el: HTMLDialogElement, index: number, from: number, to: number, how: Spring) {
-  // Measured first: from here on the animations below change what the browser reports.
-  const open = el.getBoundingClientRect();
-  const lines = [
-    ...el.querySelectorAll<HTMLElement>(
-      ":scope > .tb, .c-step h3, .c-step dl > div, :scope > .actions",
-    ),
-  ].map((line) => ({
-    line,
-    bottom: Math.min(1, (line.getBoundingClientRect().bottom - open.top) / open.height),
-  }));
-  const source = document.querySelector<HTMLElement>(`[data-step-source="${index}"]`);
-  const slot = source?.getBoundingClientRect();
-  const samples = Array.from({ length: STEPS + 1 }, (_, i) =>
-    i === STEPS ? to : from + (to - from) * spring((how.ms * i) / STEPS, how),
-  );
-  const timing = { duration: how.ms, fill: "both", easing: "linear" } as const;
-  const parts: Animation[] = [
-    el.animate(
-      samples.map((p) => ({ opacity: smooth(0, 0.8, p) })),
-      { ...timing, pseudoElement: "::backdrop" },
-    ),
-  ];
-  el.querySelector(".c-pull-face")?.remove();
-  if (!source || !slot || !source.offsetWidth) {
-    parts.unshift(
-      el.animate(
-        samples.map((p) => ({
-          transform: `translateY(${(1 - p) * 24}px) scale(${0.94 + 0.06 * p})`,
-          opacity: smooth(0, 0.6, p),
-        })),
-        timing,
-      ),
-    );
-    return parts;
-  }
-  const dx = slot.left - open.left;
-  const dy = slot.top - open.top;
-  const small = slot.width / open.width / Math.cos(TILT);
-  const fit = open.width / source.offsetWidth;
-  const low = Math.min(1, (source.offsetHeight * fit) / open.height);
-  const height = (p: number) => low + (1 - low) * smooth(0.04, 0.86, p);
-  parts.unshift(
-    el.animate(
-      samples.map((p) => {
-        const x = dx * (1 - smooth(0.12, 1, p));
-        const y = dy * (1 - p) - 70 * Math.sin(Math.PI * Math.min(p, 1));
-        const turn = Math.max(0, 1 - p) ** 2 * 20;
-        return {
-          transform: `translate(${x}px,${y}px) perspective(1200px) rotateY(${turn}deg) scale(${small + (1 - small) * p})`,
-        };
-      }),
-      timing,
-    ),
-    (el.querySelector(".c-pull-bg") as HTMLElement).animate(
-      samples.map((p) => ({ transform: `scaleY(${Math.min(1, height(p))})` })),
-      timing,
-    ),
-  );
-  const face = faceOf(source, fit);
-  el.append(face);
-  parts.push(
-    face.animate(
-      samples.map((p) => ({ opacity: 1 - smooth(0.05, 0.3, p) })),
-      timing,
-    ),
-  );
-  // Each line of detail appears as the growing card reaches it.
-  lines.forEach(({ line, bottom }) => {
-    let start = 0.1;
-    while (start < 1 && height(start) < bottom) start += 0.01;
-    parts.push(
-      line.animate(
-        samples.map((p) => {
-          const shown = smooth(start, start + 0.16, p);
-          return { opacity: shown, transform: `translateY(${(1 - shown) * 10}px)` };
-        }),
-        timing,
-      ),
-    );
-  });
-  return parts;
 }
 
 type Row = { label: string; text: string; tone?: string };
@@ -257,79 +303,297 @@ export function StepCard({
   const showing = useRef(index);
   const leaving = useRef(false);
   const first = useRef(true);
-  const flight = useRef<{ parts: Animation[]; from: number; to: number; how: Spring; at: number }>(
-    null,
-  );
+  const flight = useRef<Flight | null>(null);
+  const proxy = useRef<HTMLElement | null>(null);
+  const paging = useRef<Animation | null>(null);
+  const closingAction = useRef<(() => void) | null>(null);
+  const gapOrigins = useRef<{ card: HTMLElement; x: number; y: number }[]>([]);
 
-  const launch = (to: number, how: Spring, done: () => void) => {
-    const el = ref.current;
-    if (!el) return;
-    const now = flight.current;
-    const elapsed = now ? performance.now() - now.at : Infinity;
-    const from = !now
-      ? 1 - to
-      : elapsed >= now.how.ms
-        ? now.to
-        : now.from + (now.to - now.from) * spring(elapsed, now.how);
-    now?.parts.forEach((part) => part.cancel());
-    const parts = fly(el, showing.current, from, to, how);
-    flight.current = { parts, from, to, how, at: performance.now() };
-    parts[0].onfinish = done;
+  const clearFlight = () => {
+    stopFlight(flight.current);
+    flight.current = null;
+    proxy.current?.remove();
+    proxy.current = null;
+    ref.current?.querySelector(".c-pull-face")?.remove();
   };
 
-  // Open: draw the card out of the stack. Once there it holds no animation at all.
+  const fly = (opening: boolean, done: () => void, continuing = false) => {
+    const el = ref.current;
+    if (!el) return;
+    const source = sourceOf(showing.current);
+    const current = corners(el);
+    const currentTransform = getComputedStyle(el).transform;
+    const currentOpacity = Number(getComputedStyle(el).opacity);
+    const velocity = velocityOf(flight.current);
+    const detail = [...el.children].filter(
+      (node) => !node.classList.contains("c-pull-face"),
+    ) as HTMLElement[];
+    const initialOpacity = detail.map((node) => Number(getComputedStyle(node).opacity));
+    const oldFace = el.querySelector<HTMLElement>(".c-pull-face");
+    const initialFace = oldFace ? Number(getComputedStyle(oldFace).opacity) : 0;
+    const backdropOpacity = Number(getComputedStyle(el, "::backdrop").opacity);
+    clearFlight();
+    const width = el.offsetWidth;
+    const height = el.offsetHeight;
+    const open = corners(el);
+    const base = inverse(project(width, height, open));
+    const ms = source ? (opening ? DRAW_MS : LAND_MS) : 200;
+    const slot = source ? corners(source) : open;
+    const from = opening && !continuing ? slot : current;
+    const to = opening ? open : slot;
+    const path = pathBetween(from, to, ms, opening && !continuing ? undefined : velocity);
+    const timing = { duration: ms, easing: "linear", fill: "both" } as const;
+    const parts: Animation[] = [];
+    const add = (node: Element, frames: Keyframe[], options: KeyframeAnimationOptions = {}) => {
+      const animation = node.animate(frames, { ...timing, ...options });
+      parts.push(animation);
+      return animation;
+    };
+    const geometry = Array.from({ length: SAMPLES + 1 }, (_, i) => ({
+      transform: cssMatrix(multiply(base, project(width, height, path(i / SAMPLES)))),
+    }));
+    const driver = add(
+      el,
+      source
+        ? geometry
+        : [
+            {
+              transform: opening ? "translateY(12px) scale(.98)" : currentTransform,
+              opacity: opening ? 0 : currentOpacity,
+            },
+            {
+              transform: opening ? "none" : "translateY(8px) scale(.98)",
+              opacity: opening ? 1 : 0,
+            },
+          ],
+    );
+    add(
+      el,
+      [{ opacity: opening && !continuing ? 0 : backdropOpacity }, { opacity: opening ? 1 : 0 }],
+      {
+        pseudoElement: "::backdrop",
+        easing: "cubic-bezier(.2,.8,.3,1)",
+      },
+    );
+
+    if (source) {
+      const face = copyCard(source);
+      face.classList.add("c-pull-face");
+      face.style.width = `${source.offsetWidth}px`;
+      face.style.height = `${source.offsetHeight}px`;
+      face.style.transform = `scale(${width / source.offsetWidth},${height / source.offsetHeight})`;
+      face.style.transformOrigin = "0 0";
+      face.style.boxShadow = getComputedStyle(source).boxShadow;
+      el.append(face);
+      add(
+        face,
+        opening
+          ? [
+              { opacity: continuing ? initialFace : 1 },
+              { opacity: 0, offset: 0.36 },
+              { opacity: 0 },
+            ]
+          : [{ opacity: initialFace }, { opacity: 1, offset: 0.42 }, { opacity: 1 }],
+      );
+      detail.forEach((node, i) =>
+        add(
+          node,
+          opening
+            ? [
+                { opacity: continuing ? initialOpacity[i] : 0 },
+                { opacity: 1, offset: 0.55 },
+                { opacity: 1 },
+              ]
+            : [{ opacity: initialOpacity[i] }, { opacity: 0, offset: 0.4 }, { opacity: 0 }],
+        ),
+      );
+
+      if (!opening) {
+        const landing = copyCard(source);
+        landing.classList.add("c-return-proxy");
+        Object.assign(landing.style, {
+          width: `${source.offsetWidth}px`,
+          height: `${source.offsetHeight}px`,
+          maxHeight: "none",
+          minHeight: "0",
+          transform: "none",
+          transformOrigin: "0 0",
+          translate: "none",
+          rotate: "none",
+          scale: "none",
+          opacity: "0",
+          zIndex: getComputedStyle(source).zIndex,
+        });
+        source.parentElement?.append(landing);
+        proxy.current = landing;
+        const deckBase = inverse(
+          project(source.offsetWidth, source.offsetHeight, corners(landing)),
+        );
+        const landingGeometry = Array.from({ length: SAMPLES + 1 }, (_, i) => ({
+          transform: cssMatrix(
+            multiply(deckBase, project(source.offsetWidth, source.offsetHeight, path(i / SAMPLES))),
+          ),
+        }));
+        add(landing, landingGeometry);
+        // Both copies share a clock and the exact same screen quadrilateral at the handoff.
+        add(el, [
+          { opacity: 1, offset: 0, easing: "steps(1,end)" },
+          { opacity: 0, offset: HANDOFF },
+          { opacity: 0 },
+        ]);
+        add(landing, [
+          { opacity: 0, offset: 0, easing: "steps(1,end)" },
+          { opacity: 1, offset: HANDOFF },
+          { opacity: getComputedStyle(source).opacity },
+        ]);
+      }
+    }
+    if (!opening) {
+      gapOrigins.current.forEach(({ card, x, y }) =>
+        add(
+          card,
+          Array.from({ length: SAMPLES + 1 }, (_, i) => ({
+            translate: `${x * (1 - progress(i / SAMPLES))}px ${y * (1 - progress(i / SAMPLES))}px`,
+          })),
+        ),
+      );
+    }
+    // Starting every part at this common time prevents one-frame lag between the two card copies.
+    const start = document.timeline.currentTime;
+    if (typeof start === "number")
+      parts.forEach((part) => {
+        part.startTime = start;
+      });
+    flight.current = { parts, path, at: performance.now(), ms };
+    driver.onfinish = done;
+  };
+
   useLayoutEffect(() => {
     const el = ref.current;
+    if (!el) return;
     const previous = document.activeElement as HTMLElement | null;
-    holdMotion(true);
-    el?.showModal();
-    markDeck(index);
-    if (!reducedMotion())
-      launch(1, DRAW, () => {
-        el?.querySelector(".c-pull-face")?.remove();
-        flight.current?.parts.forEach((part) => part.cancel());
-        flight.current = { parts: [], from: 1, to: 1, how: DRAW, at: 0 };
+    const release = acquireMotionHold();
+    // A user can draw a card while a seek is still rearranging the deck. Freeze that exact pose.
+    const deckTransitions = [...document.querySelectorAll<HTMLElement>("[data-step-source]")]
+      .flatMap((card) => card.getAnimations())
+      .filter(
+        (animation) =>
+          "transitionProperty" in animation &&
+          ["transform", "opacity"].includes(String(animation.transitionProperty)) &&
+          animation.playState === "running",
+      );
+    deckTransitions.forEach((animation) => animation.pause());
+    el.showModal();
+    markDeck(index, true, DRAW_MS);
+    if (!reducedMotion()) fly(true, clearFlight);
+    const onResize = () => {
+      if (!flight.current) return;
+      // A changed viewport invalidates the flight. Preserve its current visible pose before fading.
+      const closing = closingAction.current;
+      if (!closing) {
+        fly(true, clearFlight, true);
+        return;
+      }
+      const visible =
+        proxy.current && Number(getComputedStyle(proxy.current).opacity) > 0 ? proxy.current : el;
+      const targets = [
+        el,
+        ...el.querySelectorAll<HTMLElement>(".c-pull-face, .c-pull-bg, .tb, .c-step, .actions"),
+        ...(proxy.current ? [proxy.current] : []),
+      ];
+      const frozen = targets.map((node) => {
+        const style = getComputedStyle(node);
+        return { node, transform: style.transform, opacity: style.opacity };
       });
-    return () => {
-      holdMotion(false);
-      markDeck(null);
-      el?.close();
-      previous?.focus({ preventScroll: true });
+      const veil = getComputedStyle(el, "::backdrop").opacity;
+      stopFlight(flight.current);
+      frozen.forEach(({ node, transform, opacity }) => {
+        node.style.transform = transform;
+        node.style.opacity = opacity;
+      });
+      const fade = visible.animate(
+        [{ opacity: getComputedStyle(visible).opacity }, { opacity: 0 }],
+        { duration: 160, fill: "forwards" },
+      );
+      const backdrop = el.animate([{ opacity: veil }, { opacity: 0 }], {
+        duration: 160,
+        fill: "forwards",
+        pseudoElement: "::backdrop",
+      });
+      flight.current = {
+        parts: [fade, backdrop],
+        path: () => corners(el),
+        at: performance.now(),
+        ms: 160,
+      };
+      fade.onfinish = closing;
     };
-    // The card opens once; paging inside it changes content only.
+    addEventListener("resize", onResize);
+    return () => {
+      removeEventListener("resize", onResize);
+      paging.current?.cancel();
+      clearFlight();
+      markDeck(null, false, 0);
+      document
+        .querySelectorAll<HTMLElement>("[data-step-source]")
+        .forEach((card) => card.style.removeProperty("--deck-gap-ms"));
+      el.close();
+      release();
+      deckTransitions.forEach((animation) => {
+        if (animation.playState === "paused") animation.play();
+      });
+      queueMicrotask(() => {
+        // Evidence may take over in the same commit. Its focus must win that handoff.
+        if (previous?.isConnected && !document.querySelector("dialog[open], .evidence-drawer")) {
+          previous.focus({ preventScroll: true });
+        }
+      });
+    };
+    // The dialog owns one hold and one flight; paging only changes its content and return target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the gap under the step on show, including when new results redraw the chain.
   useLayoutEffect(() => {
     showing.current = index;
     if (!leaving.current) markDeck(index);
   });
 
-  /** Put the card back, then carry on with what the viewer asked for. */
   const leave = (then: () => void) => {
     if (leaving.current) return;
     leaving.current = true;
+    closingAction.current = then;
+    paging.current?.cancel();
+    gapOrigins.current = [
+      ...document.querySelectorAll<HTMLElement>("[data-step-source].past-gap"),
+    ].map((card) => {
+      const [x, y = "0"] = getComputedStyle(card).translate.split(" ");
+      return { card, x: parseFloat(x) || 0, y: parseFloat(y) || 0 };
+    });
+    markDeck(showing.current, false, 0);
     if (reducedMotion()) return then();
-    // The later cards close up while it descends, so it lands in a slot that is ready for it.
-    setTimeout(() => markDeck(showing.current, false), LAND.ms * 0.45);
-    launch(0, LAND, then);
+    fly(false, then);
   };
 
-  // Paging: the new step's detail slides in, on the same card.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (first.current) {
       first.current = false;
       return;
     }
-    if (reducedMotion()) return;
-    body.current?.animate(
-      [
-        { transform: "translateX(26px)", opacity: 0 },
-        { transform: "none", opacity: 1 },
-      ],
-      { duration: 280, easing: "cubic-bezier(.16,1,.3,1)" },
-    );
+    paging.current?.cancel();
+    if (reducedMotion() || leaving.current) return;
+    // If a page changes mid-draw, continue from the current pose instead of snapping fully open.
+    if (flight.current) fly(true, clearFlight, true);
+    paging.current =
+      body.current?.animate(
+        [
+          { transform: "translateX(12px)", opacity: 0 },
+          { transform: "none", opacity: 1 },
+        ],
+        { duration: 240, easing: "cubic-bezier(.2,.8,.3,1)" },
+      ) ?? null;
+    return () => paging.current?.cancel();
+    // Flight inputs are read from refs; only a selected-record change starts paging.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index]);
 
   const verified = beat.attack && known.some((b) => b.id === `v:${beat.attack!.id}`);
@@ -381,7 +645,9 @@ export function StepCard({
           type="button"
           className="secondary-button"
           disabled={index <= 0}
-          onClick={() => onOpen(index - 1)}
+          onClick={() => {
+            if (!leaving.current) onOpen(index - 1);
+          }}
         >
           上一步
         </button>
@@ -389,7 +655,9 @@ export function StepCard({
           type="button"
           className="secondary-button"
           disabled={index >= last}
-          onClick={() => onOpen(index + 1)}
+          onClick={() => {
+            if (!leaving.current) onOpen(index + 1);
+          }}
         >
           下一步
         </button>

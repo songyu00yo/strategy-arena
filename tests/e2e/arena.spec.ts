@@ -249,3 +249,90 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
     releaseOld();
   }
 });
+
+// These checks use normal motion and synthetic records. They verify interruption and playback
+// behavior; visual smoothness is reviewed separately from recordings, not asserted by screenshots.
+async function openCompletedFixture(page: import("@playwright/test").Page) {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const snapshot = fixtureSnapshot();
+  for (let i = 0; i < 5; i++) advanceFixture(snapshot);
+  await page.route("**/api/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/health")
+      return route.fulfill({
+        json: {
+          status: "ok",
+          version: "explicit-ui-fixture",
+          commit: "fixture",
+          model: snapshot.model,
+          requiresAccessCode: false,
+          accessGranted: true,
+        },
+      });
+    if (path.endsWith("/events"))
+      return route.fulfill({ contentType: "text/event-stream", body: ": explicit UI fixture\n\n" });
+    return route.fulfill({ json: snapshot });
+  });
+  await page.goto("/");
+  await page.getByLabel("你的目标、备选方案或想法").fill(fixtureChallenge.goal);
+  await page.getByRole("button", { name: "让方案上场" }).click();
+  await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
+}
+
+test("explicit UI fixture: latest progress selection wins and interrupted cards return focus", async ({
+  page,
+}) => {
+  await openCompletedFixture(page);
+  for (const step of [1, 6, 2, 8, 4]) {
+    await page.getByRole("button", { name: `第 ${step} 步`, exact: true }).click({ force: true });
+  }
+  const current = page.getByRole("button", { name: "第 4 步", exact: true });
+  await expect(current).toHaveAttribute("aria-current", "step");
+  // Let any mistakenly retained choreography/advance callback fire before checking the final target.
+  await page.waitForTimeout(1600);
+  await expect(current).toHaveAttribute("aria-current", "step");
+  await expect(page.getByRole("region", { name: "正在发生" })).toContainText(
+    "测试质疑：尚未核算总投入",
+  );
+  await page.getByRole("button", { name: "第 9 步", exact: true }).click({ force: true });
+  await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
+  const source = page.getByRole("button", { name: "查看第 1 步", exact: true });
+  await source.focus();
+  await page.keyboard.press("Enter");
+  const card = page.getByRole("dialog", { name: "第 1 步 · 独立提案" });
+  await expect(card).toBeVisible();
+  // Close while the draw animation is still in flight.
+  await page.keyboard.press("Escape");
+  await expect(card).not.toBeVisible();
+  await expect(source).toBeFocused();
+  await expect(page.locator("[data-step-source].pulled")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "第 9 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+});
+
+test("explicit UI fixture: opening a modal preserves the remaining playback time", async ({
+  page,
+}) => {
+  await openCompletedFixture(page);
+  await page.getByRole("button", { name: "从头放映", exact: true }).click();
+  const first = page.getByRole("button", { name: "第 1 步", exact: true });
+  await expect(first).toHaveAttribute("aria-current", "step");
+  await page.locator(".model-pill").click();
+  const modal = page.getByRole("dialog", { name: "模型与运行信息" });
+  await expect(modal).toBeVisible();
+  // Longer than the entire first shot: modal reading time must never be counted as playback.
+  await page.waitForTimeout(3500);
+  await expect(first).toHaveAttribute("aria-current", "step");
+  await page.keyboard.press("Escape");
+  await expect(modal).not.toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(first).toHaveAttribute("aria-current", "step");
+  await expect(page.getByRole("button", { name: "第 2 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+    { timeout: 5000 },
+  );
+  await page.getByRole("button", { name: "暂停放映", exact: true }).click();
+});

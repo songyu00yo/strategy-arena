@@ -1,0 +1,30 @@
+/* Manual navigation keeps the light, dimensional language of the live stage. */
+.c-root.is-seeking .c-deck-card,
+.c-root.is-seeking .c-board {
+  transition-duration: 720ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.c-root.held .c-world *,
+.c-root.held .c-live,
+.c-root.held .c-now,
+.c-root.held .c-chapter,
+.c-root.held .c-film,
+.c-root.held .c-wall *,
+.c-root.held .c-threads *,
+.c-root.held .c-live *,
+.c-root.held .c-metrics *,
+.c-root.held .c-now *,
+.c-root.held .c-chapter *,
+.c-root.held .c-film * {
+  animation-play-state: paused !important;
+}
+.c-rig {
+  transition: transform 620ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .c-root.is-seeking .c-deck-card,
+  .c-root.is-seeking .c-board,
+  .c-rig {
+    transition: none;
+  }
+}

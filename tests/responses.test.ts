@@ -95,7 +95,7 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
   it("sends the actual flat Responses schema, disables storage and accounts reasoning once", async () => {
     const fetch = mockResponse();
     const config = getModelConfig("openai");
-    expect(config.configurationVersion).toBe("openai-1.1.1");
+    expect(config.configurationVersion).toBe("openai-1.2.0");
     const result = await generateStrategy(input, config, "responses-fixture");
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");

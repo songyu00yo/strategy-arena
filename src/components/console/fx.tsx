@@ -5,8 +5,9 @@ import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { nameOf, outputOf, type Beat } from "./beats";
 import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
 import { STAGE_LABELS, type Stage } from "@/lib/contracts";
+import { verdictLabel } from "@/lib/verdict-label";
 
-import { createMotionLoop, createMotionScope } from "./motion-runtime";
+import { createMotionLoop, createMotionScope, useReducedMotion } from "./motion-runtime";
 
 const reduced = reducedMotion;
 
@@ -24,6 +25,7 @@ export function Intro({
   onReveal: () => void;
   onDone: () => void;
 }) {
+  const reducePreference = useReducedMotion();
   const lines = [
     `${version.strategies.length} 条路线`,
     `${version.attacks.length} 次质疑`,
@@ -60,7 +62,7 @@ export function Intro({
       else onDone();
     });
     return () => scope.dispose();
-  }, [count, lines.length, onDone, onReveal]);
+  }, [count, lines.length, onDone, onReveal, reducePreference]);
   useEffect(() => {
     const skip = () => {
       onReveal();
@@ -111,6 +113,7 @@ const CHAPTER: Record<Stage, string> = {
 
 /** The stage word lands huge, then flies up and becomes its label on the timeline. */
 export function Chapter({ stage }: { stage: Stage }) {
+  const reducePreference = useReducedMotion();
   const word = useRef<HTMLElement>(null);
   useEffect(() => {
     const el = word.current;
@@ -136,7 +139,8 @@ export function Chapter({ stage }: { stage: Stage }) {
       );
     });
     return () => scope.dispose();
-  }, []);
+  }, [reducePreference]);
+  if (reducePreference) return null;
   return (
     <div className="c-chapter" aria-hidden="true">
       <b ref={word}>
@@ -148,6 +152,7 @@ export function Chapter({ stage }: { stage: Stage }) {
 
 /** The verdict lands: black bursts out of the chosen board, then folds into the verdict panel. */
 export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () => void }) {
+  const reducePreference = useReducedMotion();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = box.current;
@@ -198,16 +203,12 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
     };
     // Runs once: a poll that refreshes the record must not restart the verdict's timing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reducePreference]);
   return (
     <div className="c-film" ref={box} aria-hidden="true">
       <Dust embers={EMBERS(verdict.preferred)} />
       <small>
-        <Chars
-          text={verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
-          active
-          delay={520}
-        />
+        <Chars text={verdictLabel(verdict)} active delay={520} />
       </small>
       <div className="head">
         <Chars text={verdict.headline} active delay={650} />
@@ -336,6 +337,7 @@ export function RecordWall({
   events: ArenaEvent[];
   directed?: boolean;
 }) {
+  const reducePreference = useReducedMotion();
   const stage = useRef<HTMLDivElement>(null);
   const panels = useRef(new Map<string, Panel>());
   const records = wallRecords(version, shown, events);
@@ -410,7 +412,7 @@ export function RecordWall({
         panel.el.remove();
         panels.current.delete(id);
       }
-  }, [signature, currentId, directed]);
+  }, [signature, currentId, directed, reducePreference]);
   // The wall fills the same share of the stage on any screen.
   useEffect(() => {
     const fit = () => {
@@ -468,7 +470,7 @@ export function RecordWall({
       return moving;
     });
     return () => loop.dispose();
-  }, [signature, currentId, directed]);
+  }, [signature, currentId, directed, reducePreference]);
   return (
     <div className="c-wall" aria-hidden="true">
       <div className="c-stage" ref={stage} />
@@ -514,6 +516,7 @@ export function ChainDeck({
   reviewing: boolean;
   onStep: (index: number) => void;
 }) {
+  const reducePreference = useReducedMotion();
   const shown = beats.slice(0, index + 1);
   const front = useRef<HTMLDivElement>(null);
   const [peek, setPeek] = useState<number | null>(null);
@@ -523,7 +526,7 @@ export function ChainDeck({
   const running = current?.stage === "attack" ? 1 : current?.stage === "verify" ? 2 : 3;
   useEffect(() => {
     if (!front.current || !directed || reduced()) return;
-    const scope = createMotionScope();
+    const scope = createMotionScope(seeking ? "interaction" : "story");
     scope.animate(
       front.current,
       [
@@ -540,7 +543,7 @@ export function ChainDeck({
     return () => scope.dispose();
     // Only a new step brings a card in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id]);
+  }, [current?.id, reducePreference]);
   // Long records stay inside the card: the line being worked on is always the one in view.
   useEffect(() => {
     const body = front.current?.querySelector<HTMLElement>(".body");
@@ -678,7 +681,8 @@ export function ChainDeck({
                     <span>
                       <Decode
                         text={text}
-                        active={directed && !seeking && r === running}
+                        active={directed && r === running}
+                        origin={seeking ? "interaction" : "story"}
                         delay={lead + (r === 0 ? 700 : 300)}
                       />
                     </span>
@@ -753,7 +757,12 @@ export function LiveRecord({
       <div className="body">
         {lines.map((line, i) => (
           <div key={`${i}:${line}`}>
-            <Decode text={line} active={directed && !seeking} delay={lead + 160 + i * 110} />
+            <Decode
+              text={line}
+              active={directed}
+              origin={seeking ? "interaction" : "story"}
+              delay={lead + 160 + i * 110}
+            />
           </div>
         ))}
       </div>

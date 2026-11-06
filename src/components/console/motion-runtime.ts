@@ -46,6 +46,18 @@ export function subscribeMotionPause(listener: () => void) {
 export function useMotionPaused() {
   return useSyncExternalStore(subscribeMotionPause, motionPaused, () => false);
 }
+const reducedSnapshot = () =>
+  typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+function subscribeReduced(listener: () => void) {
+  const media = matchMedia("(prefers-reduced-motion: reduce)");
+  media.addEventListener("change", listener);
+  return () => media.removeEventListener("change", listener);
+}
+/** A live preference: switching to reduced motion settles effects instead of freezing half-written text. */
+export function useReducedMotion() {
+  return useSyncExternalStore(subscribeReduced, reducedSnapshot, () => false);
+}
+
 /** A clock that excludes time spent reading overlays or in a hidden tab. */
 export function motionNow() {
   listen();
@@ -53,7 +65,12 @@ export function motionNow() {
 }
 
 /** Owns one step's delayed work and animation, including work already started. */
-export function createMotionScope() {
+export type MotionOrigin = "story" | "interaction";
+
+/** Interaction motion uses wall time and remains responsive while the story is held. */
+export function createMotionScope(origin: MotionOrigin = "story") {
+  const clock = origin === "interaction" ? now : motionNow;
+  const paused = () => origin === "story" && motionPaused();
   let disposed = false;
   const animations = new Set<Animation>();
   const nodes = new Set<Element>();
@@ -61,26 +78,27 @@ export function createMotionScope() {
   const arm = () => {
     for (const timer of timers) {
       clearTimeout(timer.id);
-      if (disposed || motionPaused()) continue;
+      if (disposed || paused()) continue;
       timer.id = setTimeout(
         () => {
           timers.delete(timer);
           if (!disposed) timer.run();
         },
-        Math.max(0, timer.due - motionNow()),
+        Math.max(0, timer.due - clock()),
       );
     }
     for (const animation of animations) {
       if (animation.playState === "finished" || animation.playState === "idle") continue;
-      if (motionPaused()) animation.pause();
+      if (paused()) animation.pause();
       else animation.play();
     }
   };
-  const unsubscribe = subscribeMotionPause(arm);
+  const unsubscribe = origin === "story" ? subscribeMotionPause(arm) : () => {};
   return {
+    now: clock,
     later(ms: number, run: () => void) {
       if (disposed) return;
-      timers.add({ due: motionNow() + ms, run });
+      timers.add({ due: clock() + ms, run });
       arm();
     },
     own<T extends Element>(node: T): T {
@@ -102,7 +120,7 @@ export function createMotionScope() {
         },
         { once: true },
       );
-      if (motionPaused()) animation.pause();
+      if (paused()) animation.pause();
       animation.addEventListener("cancel", () => animations.delete(animation), { once: true });
       return animation;
     },
@@ -124,16 +142,21 @@ export function createMotionScope() {
 }
 
 /** A frame loop sleeps while held and when its callback reports no remaining work. */
-export function createMotionLoop(tick: (time: number, dt: number) => boolean) {
+export function createMotionLoop(
+  tick: (time: number, dt: number) => boolean,
+  origin: MotionOrigin = "story",
+) {
+  const clock = origin === "interaction" ? now : motionNow;
+  const paused = () => origin === "story" && motionPaused();
   let frame = 0;
   let disposed = false;
   let active = true;
   let running = false;
-  let last = motionNow();
+  let last = clock();
   const run = () => {
     frame = 0;
-    if (disposed || motionPaused()) return;
-    const time = motionNow();
+    if (disposed || paused()) return;
+    const time = clock();
     const dt = Math.min(0.033, Math.max(0, time - last) / 1000);
     last = time;
     running = true;
@@ -143,17 +166,20 @@ export function createMotionLoop(tick: (time: number, dt: number) => boolean) {
   };
   const wake = () => {
     active = true;
-    if (!frame && !running && !disposed && !motionPaused()) {
-      last = motionNow();
+    if (!frame && !running && !disposed && !paused()) {
+      last = clock();
       frame = requestAnimationFrame(run);
     }
   };
-  const unsubscribe = subscribeMotionPause(() => {
-    if (motionPaused()) {
-      cancelAnimationFrame(frame);
-      frame = 0;
-    } else if (active) wake();
-  });
+  const unsubscribe =
+    origin === "story"
+      ? subscribeMotionPause(() => {
+          if (paused()) {
+            cancelAnimationFrame(frame);
+            frame = 0;
+          } else if (active) wake();
+        })
+      : () => {};
   wake();
   return {
     wake,

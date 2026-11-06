@@ -3,7 +3,22 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
-  serverExternalPackages: ["node:sqlite"],
+  serverExternalPackages: [
+    "node:sqlite",
+    "pdfjs-dist",
+    "@napi-rs/canvas",
+    "sharp",
+    "exceljs",
+    "mammoth",
+  ],
+  // PDF.js loads its worker and built-in character/font assets by computed paths.
+  outputFileTracingIncludes: {
+    "/api/intakes/**": [
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+      "./node_modules/pdfjs-dist/cmaps/**/*",
+      "./node_modules/pdfjs-dist/standard_fonts/**/*",
+    ],
+  },
   outputFileTracingExcludes: {
     "/*": [
       "./.env*",

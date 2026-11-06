@@ -3,6 +3,7 @@ import type {
   ArenaSnapshot,
   ModelMode,
   ModelOption,
+  ModelCatalogOption,
   ModelProvider,
   ArenaVersion,
   Challenge,
@@ -18,6 +19,7 @@ import type {
 import type { z } from "zod";
 import { SCHEMA_VERSION } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
+import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
 import {
   getModelConfig,
@@ -55,6 +57,19 @@ import {
 
 type SelectedConfig = ReturnType<typeof getModelConfig>;
 export function modelInfo(): ArenaSnapshot["model"] {
+  const models: ModelCatalogOption[] = MODEL_CATALOG.map((model) => {
+    try {
+      const c = getModelConfig(model.provider, model.id);
+      return {
+        ...model,
+        configured: c.configured,
+        inputPrice: c.inputPrice,
+        outputPrice: c.outputPrice,
+      };
+    } catch {
+      return { ...model, configured: false, error: "模型配置无效，请运行者检查服务端配置。" };
+    }
+  });
   const providers = (["deepseek", "openai"] as const).map((provider): ModelOption => {
     try {
       const c = getModelConfig(provider);
@@ -70,11 +85,12 @@ export function modelInfo(): ArenaSnapshot["model"] {
     }
   });
   return {
-    id: (providers.find((provider) => provider.configured) ?? providers[0]).id,
+    id: "gpt-6.1-terra",
     configured: providers.some((provider) => provider.configured),
     promptVersion: PROMPT_VERSION,
     schemaVersion: SCHEMA_VERSION,
     providers,
+    models,
   };
 }
 function runConfiguration(config: SelectedConfig) {
@@ -85,19 +101,23 @@ function runConfiguration(config: SelectedConfig) {
     hash: createHash("sha256").update(JSON.stringify(configuration)).digest("hex"),
   };
 }
-function pinConfiguration(version: ArenaVersion, mode: ModelMode) {
+function pinConfiguration(version: ArenaVersion, mode: ModelMode, frozen?: SelectedConfig) {
   const route = routeModel(version.challenge, mode);
-  const config = getModelConfig(route.provider);
+  const config = frozen ?? getModelConfig(route.provider, isModelId(mode) ? mode : undefined);
+  const reason =
+    frozen && mode === "auto"
+      ? `本任务在材料读取阶段已固定 ${config.id}，补问与本轮讨论继续使用同一模型。`
+      : route.reason;
   const current = runConfiguration(config);
   version.runConfiguration = current.configuration;
   version.configurationHash = current.hash;
   version.modelSelection = {
     requestedMode: mode,
-    provider: route.provider,
+    provider: config.provider,
     modelId: config.id,
     currency: config.currency,
     policyVersion: route.policyVersion,
-    reason: route.reason,
+    reason,
   };
   version.costUsd = 0;
   version.reservedUsd = 0;
@@ -109,7 +129,7 @@ function pinConfiguration(version: ArenaVersion, mode: ModelMode) {
     arena.arena_id,
     version.id,
     "model_selected",
-    `本版本选择 ${config.id}：${route.reason}`,
+    `本版本选择 ${config.id}：${reason}`,
     undefined,
     undefined,
     {
@@ -125,14 +145,93 @@ export function getArena(arenaId: string, owner: string) {
   });
   return snapshot(arenaId, owner, modelInfo());
 }
-export function createArena(challenge: Challenge, owner: string, mode: ModelMode = "auto") {
+export function createArena(
+  challenge: Challenge,
+  owner: string,
+  mode: ModelMode = "auto",
+  options?: { intakeId: string; revision: number; assumptions?: string[] },
+) {
   const arenaId = atomic(() => {
+    let draft: { body: string; submitted_arena_id: string | null } | undefined;
+    let draftBody: Record<string, unknown> | undefined;
+    if (options) {
+      draft = db()
+        .prepare("SELECT body,submitted_arena_id FROM intake_drafts WHERE id=? AND owner=?")
+        .get(options.intakeId, owner) as typeof draft;
+      if (!draft) throw new ArenaError("未找到这份任务草稿。", 404, "NOT_FOUND");
+      // Return an already committed result before charging another run or checking stale revisions.
+      if (draft.submitted_arena_id) {
+        assertOwner(draft.submitted_arena_id, owner);
+        return draft.submitted_arena_id;
+      }
+      try {
+        const body: unknown = JSON.parse(draft.body);
+        if (!body || typeof body !== "object" || Array.isArray(body))
+          throw new Error("invalid draft");
+        draftBody = body as Record<string, unknown>;
+      } catch {
+        throw new ArenaError("任务草稿无法读取，请重新整理。", 409, "INTAKE_INVALID");
+      }
+      if (draftBody.revision !== options.revision || draftBody.status !== "summary")
+        throw new ArenaError("任务草稿已更新，请刷新后确认最新摘要。", 409, "STALE_INTAKE");
+    }
+    let frozen: SelectedConfig | undefined;
+    if (
+      draftBody &&
+      typeof draftBody.configHash === "string" &&
+      draftBody.config &&
+      typeof draftBody.config === "object"
+    ) {
+      const previous = draftBody.config as { provider?: unknown; id?: unknown };
+      if (
+        (previous.provider !== "openai" && previous.provider !== "deepseek") ||
+        typeof previous.id !== "string"
+      )
+        throw new ArenaError("草稿模型记录无效，请新建任务。", 409, "CONFIGURATION_CHANGED");
+      frozen = getModelConfig(previous.provider, isModelId(previous.id) ? previous.id : undefined);
+      if (runConfiguration(frozen).hash !== draftBody.configHash)
+        throw new ArenaError(
+          "模型或提示词配置已变化，请重新整理任务。",
+          409,
+          "CONFIGURATION_CHANGED",
+        );
+    }
     consumeRun(owner);
     const arenaId = id();
     db()
       .prepare("INSERT INTO arenas(id,owner,active_version_id,created_at) VALUES(?,?,?,?)")
       .run(arenaId, owner, "", now());
-    pinConfiguration(addVersion(arenaId, challenge, "首次讨论", null), mode);
+    const version = addVersion(arenaId, challenge, "首次讨论", null);
+    if (options && draftBody) {
+      draftBody.challenge = challenge;
+      if (options.assumptions) draftBody.assumptions = options.assumptions;
+      version.intake = {
+        id: options.intakeId,
+        originalGoal: String(draftBody.goal ?? ""),
+        answers: Array.isArray(draftBody.answers)
+          ? (draftBody.answers as NonNullable<ArenaVersion["intake"]>["answers"])
+          : [],
+        assumptions: Array.isArray(draftBody.assumptions)
+          ? (draftBody.assumptions as string[])
+          : [],
+        usedSources: Array.isArray(draftBody.sources)
+          ? (draftBody.sources as NonNullable<ArenaVersion["intake"]>["usedSources"])
+          : [],
+        usage: Array.isArray(draftBody.usage) ? (draftBody.usage as ModelUsage[]) : [],
+      };
+    }
+    pinConfiguration(version, mode, frozen);
+    if (options && draftBody) {
+      draftBody.status = "submitted";
+      draftBody.arenaId = arenaId;
+      draftBody.updatedAt = now();
+      draftBody.revision = options.revision + 1;
+      db()
+        .prepare(
+          "UPDATE intake_drafts SET submitted_arena_id=?,body=?,updated_at=? WHERE id=? AND owner=?",
+        )
+        .run(arenaId, JSON.stringify(draftBody), Date.now(), options.intakeId, owner);
+    }
     return arenaId;
   });
   return getArena(arenaId, owner);
@@ -172,6 +271,7 @@ export function newVersion(
       );
     }
     const version = addVersion(arenaId, challenge, reason, previous.id);
+    if (previous.intake) version.intake = structuredClone(previous.intake);
     pinConfiguration(version, mode ?? previous.modelSelection?.requestedMode ?? "deepseek");
     for (const text of [...userChallenges(previous.id), ...(intervention ? [intervention] : [])])
       db()
@@ -328,6 +428,7 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
     evidence: independent ? [] : version.evidence,
     revisions: independent ? [] : version.revisions,
     userChallenges: userChallenges(version.id),
+    assumptions: version.intake?.assumptions ?? [],
     ...(previousStrategy ? { previousStrategy } : {}),
     ...(step.role.includes(":retry")
       ? { duplicateHint: "上次方案与其他方案实质重复。请换一种机制、资源分配与执行路径。" }
@@ -390,7 +491,13 @@ function claim(
     if (db().prepare("SELECT id FROM steps WHERE version_id=? AND status='running'").get(versionId))
       return null;
     const provider: ModelProvider = version.modelSelection?.provider ?? "deepseek";
-    const config = getModelConfig(provider);
+    const selected = version.modelSelection;
+    const config = getModelConfig(
+      provider,
+      selected && isModelId(selected.requestedMode) && isModelId(selected.modelId)
+        ? selected.modelId
+        : undefined,
+    );
     if (
       !version.modelSelection ||
       !version.runConfiguration?.provider ||

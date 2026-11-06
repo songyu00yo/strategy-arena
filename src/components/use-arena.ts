@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArenaSnapshot, Challenge, ModelMode } from "@/lib/contracts";
+import type { IntakeDraft } from "@/lib/intake-contracts";
 
 export interface Health {
   status: string;
@@ -87,18 +88,38 @@ export function useArena() {
     [request, accept],
   );
   const restore = useCallback(async () => {
-    const id = localStorage.getItem(storageKey);
     const epoch = generation.current;
-    if (!id) {
-      setRestoring(false);
-      return;
-    }
+    let id: string | null = null;
+    let restoringPreviousArena = false;
     try {
+      id = localStorage.getItem(storageKey);
+      const draftId = localStorage.getItem("strategy-arena:intake-id");
+      if (draftId) {
+        let draft: IntakeDraft | null = null;
+        try {
+          draft = await request<IntakeDraft>(`/api/intakes/${encodeURIComponent(draftId)}`);
+        } catch (failure) {
+          if (failure instanceof ApiError && failure.code === "NOT_FOUND")
+            localStorage.removeItem("strategy-arena:intake-id");
+          else throw failure;
+        }
+        if (draft) {
+          // The server may have committed submit even when the browser lost its response.
+          if (draft.status === "submitted" && draft.arenaId) {
+            const committed = await request<ArenaSnapshot>(`/api/arenas/${draft.arenaId}`);
+            if (accept(committed, epoch)) localStorage.removeItem("strategy-arena:intake-id");
+          }
+          // A pending draft takes precedence over an older discussion in this browser.
+          return;
+        }
+      }
+      if (!id) return;
+      restoringPreviousArena = true;
       const value = await request<ArenaSnapshot>(`/api/arenas/${encodeURIComponent(id)}`);
       accept(value, epoch);
     } catch (e) {
       if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
-        if (!(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
+        if (restoringPreviousArena && !(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
           localStorage.removeItem(storageKey);
         setError(
           e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
@@ -281,6 +302,13 @@ export function useArena() {
       }
     },
     clearError: () => setError(""),
+    adopt: (value: ArenaSnapshot) => {
+      const epoch = ++generation.current;
+      setError("");
+      accept(value, epoch);
+      setAuto(true);
+      setDriverRevision((revision) => revision + 1);
+    },
     create: (challenge: Challenge, modelMode: ModelMode = "auto") =>
       mutate("/api/arenas", { ...challenge, modelMode }),
     rematch: (challenge: Challenge, changeReason: string, modelMode?: ModelMode) =>

@@ -60,13 +60,19 @@ export function EvidenceDrawer({
   version,
   onClose,
   onLocate,
+  trigger,
 }: {
   attack: Attack;
   version: ArenaVersion;
   onClose: () => void;
   onLocate: (attack: Attack) => void;
+  trigger?: HTMLElement | null;
 }) {
-  const { panel: dialogRef, backdrop, close } = useOverlayMotion<HTMLElement>("drawer", onClose);
+  const {
+    panel: dialogRef,
+    backdrop,
+    close,
+  } = useOverlayMotion<HTMLElement>("drawer", onClose, undefined, trigger);
   const contentRef = useRef<HTMLDivElement>(null);
   const previousAttack = useRef(attack.id);
   // A different citation changes the content in place; snapshot refreshes do not re-enter it.

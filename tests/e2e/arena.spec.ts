@@ -2,6 +2,11 @@ import { expect, test } from "@playwright/test";
 import { advanceFixture, fixtureChallenge, fixtureSnapshot, fixtureVersion } from "./ui.fixture";
 import type { Challenge } from "../../src/lib/contracts";
 import { e2eAddress } from "../../scripts/test-address.mjs";
+import {
+  configureFixtureModels,
+  confirmFixtureIntake,
+  installQuickIntakeFixture,
+} from "./intake.fixture";
 
 const { origin } = e2eAddress();
 
@@ -78,7 +83,7 @@ test("real unconfigured homepage explains missing key and prevents starting a pa
   });
   await page.goto("/");
   await expect(page.getByRole("button", { name: "模型待配置" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "让方案上场" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeDisabled();
   await expect(
     page.getByText("当前不会生成模拟结果或发起计费请求。", { exact: false }),
   ).toBeVisible();
@@ -89,7 +94,7 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
 }, testInfo) => {
   // This suite checks data flow; the console also supports immediate reduced-motion viewing.
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const snapshot = fixtureSnapshot();
+  const snapshot = configureFixtureModels(fixtureSnapshot());
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/health")
@@ -120,9 +125,9 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
     }
     return route.fulfill({ json: snapshot });
   });
+  await installQuickIntakeFixture(page, snapshot);
   await page.goto("/");
-  await page.getByRole("button", { name: "试填一个视频任务" }).click();
-  await page.getByRole("button", { name: "让方案上场" }).click();
+  await confirmFixtureIntake(page);
   await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("explicit-ui-fixture-arena.png"),
@@ -181,7 +186,7 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
 }) => {
   // This suite checks data flow; the console also supports immediate reduced-motion viewing.
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const snapshot = fixtureSnapshot();
+  const snapshot = configureFixtureModels(fixtureSnapshot());
   let releaseOld!: () => void;
   let oldStarted!: () => void;
   const oldGate = new Promise<void>((resolve) => {
@@ -228,9 +233,9 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
     return route.fulfill({ json: snapshot });
   });
   try {
+    await installQuickIntakeFixture(page, snapshot);
     await page.goto("/");
-    await page.getByLabel("你的目标、备选方案或想法").fill(fixtureChallenge.goal);
-    await page.getByRole("button", { name: "让方案上场" }).click();
+    await confirmFixtureIntake(page);
     await oldSeen;
     await page.getByRole("button", { name: "修改条件再开局" }).click();
     const edit = page.getByRole("dialog", { name: "修改条件，重新开局" });
@@ -254,7 +259,7 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
 // behavior; visual smoothness is reviewed separately from recordings, not asserted by screenshots.
 async function openCompletedFixture(page: import("@playwright/test").Page) {
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  const snapshot = fixtureSnapshot();
+  const snapshot = configureFixtureModels(fixtureSnapshot());
   for (let i = 0; i < 5; i++) advanceFixture(snapshot);
   await page.route("**/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -273,9 +278,9 @@ async function openCompletedFixture(page: import("@playwright/test").Page) {
       return route.fulfill({ contentType: "text/event-stream", body: ": explicit UI fixture\n\n" });
     return route.fulfill({ json: snapshot });
   });
+  await installQuickIntakeFixture(page, snapshot);
   await page.goto("/");
-  await page.getByLabel("你的目标、备选方案或想法").fill(fixtureChallenge.goal);
-  await page.getByRole("button", { name: "让方案上场" }).click();
+  await confirmFixtureIntake(page);
   await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
 }
 

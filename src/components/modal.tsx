@@ -9,15 +9,22 @@ export function Modal({
   onClose,
   wide = false,
   motionRef,
+  trigger,
 }: {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
   wide?: boolean;
   motionRef?: Ref<OverlayMotionHandle>;
+  trigger?: HTMLElement | null;
 }) {
   const titleId = useId();
-  const { panel, close } = useOverlayMotion<HTMLDialogElement>("modal", onClose, motionRef);
+  const { panel, close } = useOverlayMotion<HTMLDialogElement>(
+    "modal",
+    onClose,
+    motionRef,
+    trigger,
+  );
   return (
     <dialog
       ref={panel}

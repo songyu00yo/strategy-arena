@@ -1,69 +1,199 @@
 .selector {
   border: 0;
-  border-top: 1px solid #d9d6ce;
-  padding: 18px 0;
-  margin: 20px 0 0;
+  padding: 0;
+  margin: 0;
   min-width: 0;
 }
 .selector legend {
-  font-size: 13px;
+  margin-bottom: 8px;
+  padding: 0;
+  font-size: 12px;
   font-weight: 650;
-  padding: 0 8px 0 0;
+}
+.compact {
+  display: inline-flex;
+  max-width: 100%;
+}
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  min-height: 36px;
+  max-width: 100%;
+  white-space: nowrap;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #555e6b;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 180ms,
+    color 180ms;
+}
+.trigger:hover,
+.trigger[aria-expanded="true"] {
+  background: #eef0f4;
+  color: #14171c;
+}
+.trigger > svg {
+  flex-shrink: 0;
+  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.trigger[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+.popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 348px;
+  padding: 9px;
+  border: 1px solid #d8dce3;
+  border-radius: 13px;
+  background: #fff;
+  color: #15181e;
+  box-shadow:
+    0 18px 60px rgb(14 22 36 / 0.18),
+    0 3px 12px rgb(14 22 36 / 0.07);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  transform-origin: 0 0;
+  box-sizing: border-box;
+}
+.popover::backdrop {
+  background: transparent;
+  pointer-events: none;
+}
+.heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px 10px;
+  color: #414956;
+  font-size: 12px;
+  font-weight: 650;
+}
+.heading > span {
+  color: #9299a4;
+  font-size: 10px;
+  font-weight: 400;
 }
 .options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 3px;
 }
-.options label {
+.option {
   display: flex;
-  gap: 8px;
   align-items: center;
-  border: 1px solid #d9d6ce;
-  padding: 12px 10px;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #202632;
+  text-align: left;
+  font: inherit;
   cursor: pointer;
-  font-size: 14px;
-  min-height: 54px;
+  transition:
+    background 180ms,
+    color 180ms;
 }
-.options label.selected {
-  border-color: #254ddd;
-  background: #eff2ff;
+.option > span {
+  min-width: 0;
 }
-.options label:focus-within {
-  outline: 2px solid #254ddd;
-  outline-offset: 3px;
-}
-.options input {
-  accent-color: #254ddd;
-  flex: 0 0 auto;
-}
-.options small {
+.option strong {
   display: block;
-  font-size: 11px;
-  color: #555;
-  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 650;
 }
-.selector p {
-  font-size: 12px;
-  line-height: 1.7;
-  margin: 10px 0 0;
-  overflow-wrap: anywhere;
+.option small {
+  display: block;
+  margin-top: 3px;
+  color: #7b8491;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.option:hover,
+.option:focus-visible {
+  outline: none;
+  background: #f1f3f7;
+}
+.option.selected {
+  background: #f0f3fa;
+}
+.option.selected > svg {
+  color: #202c45;
+  flex-shrink: 0;
+}
+.trigger:focus-visible,
+.reasonToggle:focus-visible {
+  outline: 2px solid #739dff;
+  outline-offset: 2px;
 }
 .detail {
-  font-size: 12px;
-  color: #595951;
-  margin-top: 8px;
+  margin: 10px 10px 3px;
+  color: #7c8490;
+  font-size: 10px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
 }
-.detail summary {
+.unavailable {
+  margin: 9px 10px;
+  color: #a45132;
+  font-size: 10px;
+  line-height: 1.65;
+}
+.reasonToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: calc(100% - 18px);
+  margin: 9px 9px 0;
+  padding: 12px 0 5px;
+  border: 0;
+  border-top: 1px solid #e9ebef;
+  background: transparent;
+  color: #646d7a;
+  font: inherit;
+  font-size: 10px;
   cursor: pointer;
 }
-.selector .unavailable {
-  color: #a3321d;
+.reasonToggle > svg {
+  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-@media (max-width: 420px) {
-  .options label {
-    padding: 10px 6px;
-    gap: 4px;
-    font-size: 12px;
+.reasonToggle[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+.selector:disabled .trigger {
+  cursor: default;
+  opacity: 0.55;
+}
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .selector *,
+  .popover * {
+    transition: none !important;
+    animation: none !important;
   }
 }

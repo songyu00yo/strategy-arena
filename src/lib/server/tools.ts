@@ -423,18 +423,13 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
   let result = { ...verdict, comparisons, attackFindings: findings };
   if (result.preferred && !strategies.some((s) => s.id === result.preferred))
     throw new Error("裁决选择了不存在的策略。");
-  if (strategies.length < 2 || !successful.size)
+  if (strategies.length < 2 && !["infeasible", "partial"].includes(result.outcome))
     result = {
       ...result,
       preferred: null,
       outcome: "insufficient",
       headline: "目前不足以判定优选",
-      uncertainties: [
-        ...result.uncertainties,
-        strategies.length < 2
-          ? "不足两条独立策略，尚未形成有效比较。"
-          : "没有有效工具证据，不能声称完成了核验。",
-      ],
+      uncertainties: [...result.uncertainties, "不足两条独立策略，尚未形成有效比较。"],
     };
   if (
     result.preferred &&
@@ -447,6 +442,34 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
       headline: "当前优选违反限制，需要重新核实或修改路线",
       rationale: `协议检查撤销了优选：${result.rationale}`,
       uncertainties: [...result.uncertainties, "不能将超出明确限制的路线判为优选。"],
+    };
+  if (result.outcome === "recommendation" && !successful.size) {
+    result = {
+      ...result,
+      conditions: [
+        "本建议依据用户提供的条件与明确假设；尚无有效工具证据支持外部事实。",
+        ...result.conditions,
+      ].slice(0, 5),
+      uncertainties: [
+        ...result.uncertainties,
+        "尚未完成外部事实核实；材料检索无命中不代表路线不可行。",
+      ].slice(0, 6),
+    };
+  }
+  if (
+    result.outcome !== "partial" &&
+    comparisons.length &&
+    comparisons.every((comparison) => comparison.status === "violates")
+  )
+    result = {
+      ...result,
+      preferred: null,
+      outcome: "infeasible",
+      headline: "当前各条路线均违反明确限制",
+      uncertainties: [
+        ...result.uncertainties,
+        "需获得用户明确同意变更相关条件，或提出符合原限制的新路线。",
+      ].slice(0, 6),
     };
   if (result.outcome !== "recommendation") result.preferred = null;
   return result;

@@ -3600,7 +3600,7 @@
   transform-origin: 0 0;
   pointer-events: none;
 }
-.c-pull .tb {
+.c-pull > .tb {
   flex: none;
   display: flex;
   align-items: center;
@@ -3611,28 +3611,28 @@
   color: #c9ccd1;
   white-space: nowrap;
 }
-.c-pull .tb b {
+.c-pull > .tb b {
   font-size: 14px;
   font-weight: 800;
   color: #fff;
 }
-.c-pull .tb span {
+.c-pull > .tb span {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.c-pull .tb button {
+.c-pull > .tb button {
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
   color: #fff;
 }
-.c-pull .tb button:hover {
+.c-pull > .tb button:hover {
   background: #fff;
   color: #0b0d10;
 }
-.c-pull .tb button:hover svg {
+.c-pull > .tb button:hover svg {
   rotate: 90deg;
 }
 .c-pull .c-step {
@@ -3694,7 +3694,7 @@
 .c-pull .actions > span {
   flex: 1;
 }
-.c-root.held .c-thread-flow {
+.c-root.held[data-motion-origin="story"] .c-thread-flow {
   animation-play-state: paused;
 }
 /* The gap it left, and the cards making room. */

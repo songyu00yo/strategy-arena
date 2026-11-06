@@ -3,6 +3,7 @@
 import { useCallback, useImperativeHandle, useLayoutEffect, useRef, type Ref } from "react";
 import { acquireMotionHold } from "./console/motion-runtime";
 import { reducedMotion } from "./console/effects";
+import { currentMotionOrigin, readMotionOrigin } from "./motion-origin";
 
 export type OverlayMotionHandle = { close: (after?: () => void) => boolean };
 
@@ -22,11 +23,30 @@ function lockScroll() {
   };
 }
 
+function lockDrawerBackground(panel: HTMLElement) {
+  const changed: { element: HTMLElement; inert: boolean }[] = [];
+  let branch: HTMLElement = panel;
+  while (branch.parentElement && branch.parentElement !== document.body) {
+    for (const sibling of branch.parentElement.children) {
+      if (sibling instanceof HTMLElement && sibling !== branch) {
+        changed.push({ element: sibling, inert: sibling.inert });
+        sibling.inert = true;
+      }
+    }
+    branch = branch.parentElement;
+  }
+  return () =>
+    changed.forEach(({ element, inert }) => {
+      element.inert = inert;
+    });
+}
+
 /** Keep the real overlay, focus trap and playback hold alive until its exit has finished. */
 export function useOverlayMotion<T extends HTMLElement>(
   kind: "modal" | "drawer",
   onClose: () => void,
   handle?: Ref<OverlayMotionHandle>,
+  trigger?: HTMLElement | null,
 ) {
   const panel = useRef<T>(null);
   const backdrop = useRef<HTMLDivElement>(null);
@@ -37,6 +57,7 @@ export function useOverlayMotion<T extends HTMLElement>(
   const completion = useRef<(() => void) | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const origin = useRef({ x: 0, y: 18 });
+  const openingOrigin = useRef(readMotionOrigin(trigger));
   useLayoutEffect(() => {
     latestClose.current = onClose;
   });
@@ -60,6 +81,19 @@ export function useOverlayMotion<T extends HTMLElement>(
       // Read the currently displayed pose before cancelling an interrupted entrance.
       const pose = getComputedStyle(el);
       const start = { transform: pose.transform, opacity: pose.opacity };
+      const source = currentMotionOrigin(openingOrigin.current);
+      const box = el.getBoundingClientRect();
+      const matrix = new DOMMatrixReadOnly(pose.transform === "none" ? undefined : pose.transform);
+      const visibleSource =
+        source &&
+        source.element.isConnected &&
+        source.x >= 0 &&
+        source.x <= innerWidth &&
+        source.y >= 0 &&
+        source.y <= innerHeight;
+      const destination = visibleSource
+        ? `translate(${source.x - (box.left + box.width / 2 - matrix.m41)}px,${source.y - (box.top + box.height / 2 - matrix.m42)}px) scale(${Math.min(0.45, source.width / Math.max(1, el.offsetWidth))},${Math.min(0.45, source.height / Math.max(1, el.offsetHeight))})`
+        : start.transform;
       const veil = kind === "modal" ? el : backdrop.current;
       const pseudo = kind === "modal" ? "::backdrop" : "::before";
       const veilOpacity = veil ? getComputedStyle(veil, pseudo).opacity : "1";
@@ -73,10 +107,7 @@ export function useOverlayMotion<T extends HTMLElement>(
         [
           start,
           {
-            transform:
-              kind === "drawer"
-                ? "translateX(102%)"
-                : `translate(${origin.current.x * 0.7}px,${origin.current.y * 0.7}px) scale(.45)`,
+            transform: destination,
             opacity: 0,
           },
         ],
@@ -108,19 +139,21 @@ export function useOverlayMotion<T extends HTMLElement>(
     closing.current = false;
     const active = document.activeElement as HTMLElement | null;
     // Strict Mode replays effects after autofocus; retain the original outside trigger.
-    if (active && !el.contains(active)) returnFocus.current = active;
+    if (openingOrigin.current?.element.isConnected)
+      returnFocus.current = openingOrigin.current.element;
+    else if (active && !el.contains(active)) returnFocus.current = active;
     const previous = returnFocus.current;
     const releaseScroll = lockScroll();
     const releaseMotion = acquireMotionHold();
+    const releaseBackground = kind === "drawer" ? lockDrawerBackground(el) : () => {};
     if (el instanceof HTMLDialogElement) el.showModal();
     else el.querySelector<HTMLElement>("[data-overlay-autofocus]")?.focus({ preventScroll: true });
     const box = el.getBoundingClientRect();
-    const trigger =
-      previous?.isConnected && previous !== document.body ? previous.getBoundingClientRect() : null;
-    origin.current = trigger
+    const source = currentMotionOrigin(openingOrigin.current);
+    origin.current = source
       ? {
-          x: trigger.left + trigger.width / 2 - box.left - box.width / 2,
-          y: trigger.top + trigger.height / 2 - box.top - box.height / 2,
+          x: source.x - box.left - box.width / 2,
+          y: source.y - box.top - box.height / 2,
         }
       : { x: 0, y: 18 };
     if (!reducedMotion()) {
@@ -128,7 +161,7 @@ export function useOverlayMotion<T extends HTMLElement>(
         [
           {
             transform:
-              kind === "drawer"
+              kind === "drawer" && !source
                 ? "translateX(60px)"
                 : `translate(${origin.current.x}px,${origin.current.y}px) scale(.32)`,
             opacity: kind === "drawer" ? 0.2 : 0,
@@ -170,8 +203,20 @@ export function useOverlayMotion<T extends HTMLElement>(
           );
         });
     }
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const settlePreference = () => {
+      if (!media.matches) return;
+      animations.current.forEach((animation) => {
+        animation.onfinish = null;
+        animation.cancel();
+      });
+      animations.current = [];
+      if (closing.current) completion.current?.();
+    };
+    media.addEventListener("change", settlePreference);
     return () => {
       mounted.current = false;
+      media.removeEventListener("change", settlePreference);
       completion.current = null;
       animations.current.forEach((animation) => {
         animation.onfinish = null;
@@ -181,6 +226,7 @@ export function useOverlayMotion<T extends HTMLElement>(
       if (el instanceof HTMLDialogElement) el.close();
       releaseScroll();
       releaseMotion();
+      releaseBackground();
       // The next overlay or version gets first choice of focus during a handoff.
       queueMicrotask(() => {
         if (mounted.current || !previous?.isConnected) return;

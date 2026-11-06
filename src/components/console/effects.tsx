@@ -1,6 +1,13 @@
 "use client";
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { createMotionLoop, createMotionScope, motionNow } from "./motion-runtime";
+import { recordMotionOrigin } from "../motion-origin";
+import {
+  createMotionLoop,
+  createMotionScope,
+  motionNow,
+  useReducedMotion,
+  type MotionOrigin,
+} from "./motion-runtime";
 
 export const reducedMotion = () =>
   typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -322,11 +329,14 @@ export function Decode({
   text,
   active,
   delay = 0,
+  origin = "story",
 }: {
   text: string;
   active: boolean;
   delay?: number;
+  origin?: MotionOrigin;
 }) {
+  const reducePreference = useReducedMotion();
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -336,10 +346,10 @@ export function Decode({
     const pool = Array.from(text.replace(/\s/g, ""));
     const glyphs = Array.from(text);
     const duration = Math.min(1000, 300 + glyphs.length * 16);
-    const scope = createMotionScope();
+    const scope = createMotionScope(origin);
     let loop: ReturnType<typeof createMotionLoop> | undefined;
     scope.later(delay, () => {
-      const began = motionNow();
+      const began = scope.now();
       let painted = 0;
       loop = createMotionLoop((now) => {
         const k = (now - began) / duration;
@@ -357,14 +367,14 @@ export function Decode({
           )
           .join("");
         return true;
-      });
+      }, origin);
     });
     return () => {
       scope.dispose();
       loop?.dispose();
       el.textContent = text;
     };
-  }, [text, active, delay]);
+  }, [text, active, delay, origin, reducePreference]);
   return <span ref={ref}>{text}</span>;
 }
 
@@ -373,11 +383,14 @@ export function Roll({
   value,
   delay = 0,
   animate = true,
+  origin = "story",
 }: {
   value: number;
   delay?: number;
   animate?: boolean;
+  origin?: MotionOrigin;
 }) {
+  const reducePreference = useReducedMotion();
   const ref = useRef<HTMLSpanElement>(null);
   const shown = useRef(value);
   useEffect(() => {
@@ -389,20 +402,20 @@ export function Roll({
       el.textContent = value.toLocaleString();
       return;
     }
-    const scope = createMotionScope();
+    const scope = createMotionScope(origin);
     let loop: ReturnType<typeof createMotionLoop> | undefined;
     scope.later(delay, () => {
-      scope.animate(el, [{ transform: "scale(1.08)" }, { transform: "none" }], {
-        duration: 420,
-        easing: "cubic-bezier(.2,.7,.2,1)",
+      scope.animate(el, [{ transform: "scale(1.3)" }, { transform: "none" }], {
+        duration: 700,
+        easing: "cubic-bezier(.2,1.4,.3,1)",
       });
-      const began = motionNow();
+      const began = scope.now();
       loop = createMotionLoop((now) => {
-        const k = Math.max(0, Math.min(1, (now - began) / 420));
+        const k = Math.max(0, Math.min(1, (now - began) / 700));
         shown.current = Math.round(from + (value - from) * (1 - Math.pow(1 - k, 3)));
         el.textContent = shown.current.toLocaleString();
         return k < 1;
-      });
+      }, origin);
     });
     return () => {
       scope.dispose();
@@ -410,7 +423,7 @@ export function Roll({
     };
     // A step's delay is fixed when its recorded value changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, animate]);
+  }, [value, animate, origin, reducePreference]);
   return (
     <span ref={ref} className="c-roll">
       {value.toLocaleString()}
@@ -420,6 +433,7 @@ export function Roll({
 
 /** Drifting dust for a surface outside the stage, such as the home page. */
 export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string[] }) {
+  const reducePreference = useReducedMotion();
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -443,7 +457,7 @@ export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string
       size.disconnect();
       sparks.clear();
     };
-  }, [dark, embers]);
+  }, [dark, embers, reducePreference]);
   return <canvas ref={ref} className="c-dust" aria-hidden="true" />;
 }
 
@@ -564,7 +578,6 @@ export function Leaving({
 
 export function ClickFx() {
   useEffect(() => {
-    if (reducedMotion()) return;
     const presses = new Map<HTMLElement, Animation>();
     const decorations = new Set<HTMLElement>();
     const add = (node: HTMLElement, frames: Keyframe[], duration: number) => {
@@ -582,29 +595,56 @@ export function ClickFx() {
       const route = style.getPropertyValue("--route").trim();
       const color = route ? route.replaceAll(" ", ",") : "11,13,16";
       const box = target.getBoundingClientRect();
+      recordMotionOrigin(target, x, y, box);
+      if (reducedMotion()) return;
       const scale = style.scale === "none" ? "1" : style.scale;
-      const compact = !!target.closest(".c-time, .c-transport, .c-pull .actions");
       presses.get(target)?.cancel();
-      const press = target.animate([{ scale }, { scale: "0.97", offset: 0.3 }, { scale: "1" }], {
-        duration: compact ? 140 : 220,
-        easing: "cubic-bezier(.2,.7,.2,1)",
-      });
+      const press = target.animate(
+        [
+          { scale },
+          { scale: "0.955", offset: 0.28 },
+          { scale: "1.018", offset: 0.68 },
+          { scale: "1" },
+        ],
+        {
+          duration: 340,
+          easing: "ease-out",
+        },
+      );
       presses.set(target, press);
       press.onfinish = () => {
         if (presses.get(target) === press) presses.delete(target);
       };
-      if (!compact) {
+      {
         const ring = document.createElement("div");
         ring.className = "c-press-ring";
         ring.style.cssText = `left:${x}px;top:${y}px;color:rgb(${color})`;
         add(
           ring,
           [
-            { transform: "translate(-50%,-50%) scale(.2)", opacity: 0.55 },
+            { transform: "translate(-50%,-50%) scale(.2)", opacity: 0.85 },
             { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
           ],
-          300,
+          460,
         );
+        for (let i = 0; i < 7; i++) {
+          const spark = document.createElement("div");
+          spark.className = "c-press-spark";
+          spark.style.cssText = `left:${x}px;top:${y}px;background:rgb(${color})`;
+          const angle = (i / 7) * Math.PI * 2 + Math.random() * 0.6;
+          const reach = 18 + Math.random() * 22;
+          add(
+            spark,
+            [
+              { transform: "translate(-50%,-50%)", opacity: 0.9 },
+              {
+                transform: `translate(calc(-50% + ${Math.cos(angle) * reach}px),calc(-50% + ${Math.sin(angle) * reach}px)) scale(.3)`,
+                opacity: 0,
+              },
+            ],
+            380 + Math.random() * 160,
+          );
+        }
       }
       target.style.setProperty("--cx", `${x - box.left}px`);
       target.style.setProperty("--cy", `${y - box.top}px`);
@@ -624,14 +664,25 @@ export function ClickFx() {
     };
     addEventListener("pointerdown", onPointer, true);
     addEventListener("click", onClick, true);
+    const preference = matchMedia("(prefers-reduced-motion: reduce)");
+    const clearDecorations = () => {
+      presses.forEach((animation) => animation.cancel());
+      presses.clear();
+      decorations.forEach((node) => {
+        node.getAnimations().forEach((animation) => animation.cancel());
+        node.remove();
+      });
+      decorations.clear();
+    };
+    const changedPreference = () => {
+      if (preference.matches) clearDecorations();
+    };
+    preference.addEventListener("change", changedPreference);
     return () => {
       removeEventListener("pointerdown", onPointer, true);
       removeEventListener("click", onClick, true);
-      presses.forEach((animation) => animation.cancel());
-      decorations.forEach((node) => {
-        node.getAnimations().forEach((a) => a.cancel());
-        node.remove();
-      });
+      preference.removeEventListener("change", changedPreference);
+      clearDecorations();
     };
   }, []);
   return null;

@@ -162,6 +162,8 @@ export async function prepareLivePreview(options, dependencies = {}) {
       ".next/BUILD_ID",
       ".next/static",
       "migrations/001_initial.sql",
+      "migrations/002_intakes.sql",
+      "migrations/003_decision_reviews.sql",
       "migrations/billing/002_limit_audit.sql",
     ].every((path) => existsSync(join(release, path)))
   )
@@ -171,7 +173,7 @@ export async function prepareLivePreview(options, dependencies = {}) {
     billing.usdLimitMicros !== 10_000_000 ||
     !Number.isInteger(billing.requestLimit) ||
     billing.requestLimit < 300 ||
-    billing.requestLimit > 400 ||
+    billing.requestLimit > 650 ||
     billing.tokenLimit !== 5_000_000 ||
     billing.hardTotalUsdMicros !== 200_000_000 ||
     billing.developmentMaxUsdMicros !== 120_000_000 ||
@@ -180,7 +182,7 @@ export async function prepareLivePreview(options, dependencies = {}) {
     billing.revision < 1
   )
     throw new Error(
-      "Ledger must already have audited cumulative USD 10 / 300–400 requests / 5000000 token limits; launcher never raises them.",
+      "Ledger must already have audited cumulative USD 10 / 300–650 requests / 5000000 token limits; launcher never raises them.",
     );
   if (
     billing.committedUsdMicros >= billing.usdLimitMicros ||
@@ -209,8 +211,9 @@ export async function prepareLivePreview(options, dependencies = {}) {
     ARENA_ACCESS_CODE: "",
     ARENA_PUBLIC_ORIGIN: `http://127.0.0.1:${port}`,
     ARENA_WORKER_ENABLED: "false",
-    ARENA_RUN_BUDGET_USD: "0.5",
-    ARENA_RUN_BUDGET_CNY: "3",
+    // Astra's conservative next-call reservation needs headroom within the shared USD 10 cap.
+    ARENA_RUN_BUDGET_USD: "2",
+    ARENA_RUN_BUDGET_CNY: "12",
     ARENA_GLOBAL_BUDGET_USD: "10",
     ARENA_GLOBAL_BUDGET_CNY: "60",
     ARENA_MAX_CONCURRENT_CALLS: "1",

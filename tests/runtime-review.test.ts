@@ -513,15 +513,36 @@ describe("runtime adversarial review", () => {
     expect(validateVerdict(proposedVerdict("A"), pairedInput(100, 10)).preferred).toBe("A");
     expect(validateVerdict(proposedVerdict("A"), pairedInput(100, 8)).preferred).toBe("A");
   });
-  it("withdraws a synthetic winner when all tool checks are unavailable", () => {
+  it("keeps a conditional recommendation when tool checks are unavailable", () => {
     const input = pairedInput(100);
     input.evidence = input.evidence.map((evidence) => ({
       ...evidence,
       status: "unavailable",
       result: null,
     }));
+    const checked = validateVerdict(proposedVerdict("A"), input);
+    expect(checked).toMatchObject({ outcome: "recommendation", preferred: "A" });
+    expect(checked.conditions.join(" ")).toContain("尚无有效工具证据");
+    expect(checked.uncertainties.join(" ")).toContain("未完成外部事实核实");
+  });
+  it("does not let a conditional recommendation override a hard conflict without tool evidence", () => {
+    const input = pairedInput(50);
+    input.evidence = [];
+    const checked = validateVerdict(proposedVerdict("A"), input);
+    expect(checked).toMatchObject({ outcome: "insufficient", preferred: null });
+    expect(checked.comparisons[0].status).toBe("violates");
+  });
+  it("preserves infeasible, tie and partial outcomes without successful tool evidence", () => {
+    const input = pairedInput(100);
+    input.evidence = [];
+    for (const outcome of ["infeasible", "tie", "partial"] as const) {
+      expect(
+        validateVerdict({ ...proposedVerdict("A"), outcome, preferred: null }, input).outcome,
+      ).toBe(outcome);
+    }
+    input.challenge.budget = 1;
     expect(validateVerdict(proposedVerdict("A"), input)).toMatchObject({
-      outcome: "insufficient",
+      outcome: "infeasible",
       preferred: null,
     });
   });

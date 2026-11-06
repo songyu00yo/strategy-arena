@@ -1,4 +1,5 @@
 import type { Challenge, ModelMode, ModelProvider } from "./contracts";
+import { catalogModel, isModelId, type ModelId } from "./model-catalog";
 
 export const ROUTING_POLICY_VERSION = "cost-first-1.0.0";
 export const ROUTING_MATERIAL_LENGTH = 6000;
@@ -10,14 +11,24 @@ export function routeModel(
   mode: ModelMode,
 ): {
   provider: ModelProvider;
+  modelId: ModelId;
   policyVersion: string;
   reason: string;
 } {
   const result = (provider: ModelProvider, reason: string) => ({
     provider,
+    modelId: (provider === "openai" ? "gpt-6.1-terra" : "deepseek-flash") as ModelId,
     policyVersion: ROUTING_POLICY_VERSION,
     reason,
   });
+  if (isModelId(mode)) {
+    const model = catalogModel(mode);
+    const reason =
+      mode === "gpt-6.1-terra"
+        ? `使用 ${model.label}，这是当前默认模型。`
+        : `按你的选择使用 ${model.label}。`;
+    return { ...result(model.provider, reason), modelId: mode };
+  }
   if (mode !== "auto")
     return result(
       mode === "gpt" ? "openai" : "deepseek",

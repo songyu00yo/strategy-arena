@@ -26,12 +26,12 @@ vi.mock("../src/lib/server/model", () => {
   }
   return {
     ModelCallError,
-    getModelConfig: (provider: ModelProvider = "deepseek") => {
+    getModelConfig: (provider: ModelProvider = "deepseek", modelId?: string) => {
       if (provider === fixture.invalidProvider)
         throw new Error("SYNTHETIC_INVALID_CONFIG_PRIVATE_DETAILS");
       return {
         provider,
-        id: provider === "openai" ? fixture.openaiId : fixture.deepseekId,
+        id: modelId ?? (provider === "openai" ? fixture.openaiId : fixture.deepseekId),
         currency: provider === "openai" ? "USD" : "CNY",
         configured: provider === "openai" ? fixture.openaiConfigured : fixture.deepseekConfigured,
         timeoutMs: 1000,
@@ -47,7 +47,7 @@ vi.mock("../src/lib/server/model", () => {
   };
 });
 import { ModelCallError } from "../src/lib/server/model";
-import { atomic, closeDb, getVersion, saveVersion } from "../src/lib/server/db";
+import { atomic, closeDb, db, getVersion, saveVersion } from "../src/lib/server/db";
 import {
   advanceArena,
   createArena,
@@ -107,6 +107,27 @@ afterEach(() => {
 });
 
 describe("per-version selected provider and native currency", () => {
+  it("keeps an explicitly selected model through all claims and inherited rematches", async () => {
+    const arena = createArena(challenge, "owner", "gpt-6.1-sol");
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(fixture.generate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: "gpt-6.1-sol", provider: "openai" }),
+      expect.any(String),
+    );
+    const rematch = newVersion(arena.id, "owner", challenge, "补充细节");
+    expect(rematch.versions[1].modelSelection).toMatchObject({
+      requestedMode: "gpt-6.1-sol",
+      modelId: "gpt-6.1-sol",
+    });
+    expect(modelInfo().models?.map((model) => model.id)).toEqual([
+      "gpt-6.1-terra",
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "deepseek-flash",
+    ]);
+  });
   it("pins the automatic choice, records its reason, and reevaluates only on a new version", async () => {
     const first = createArena(challenge, "owner");
     expect(first.versions[0].modelSelection).toMatchObject({
@@ -284,5 +305,121 @@ describe("per-version selected provider and native currency", () => {
       requestedMode: "deepseek",
       provider: "deepseek",
     });
+  });
+});
+
+describe("atomic intake submission", () => {
+  function draft(status = "summary", owner = "owner") {
+    db()
+      .prepare("INSERT INTO intake_drafts(id,owner,body,updated_at) VALUES(?,?,?,?)")
+      .run(
+        "intake-fixture",
+        owner,
+        JSON.stringify({ id: "intake-fixture", status, revision: 3 }),
+        Date.now(),
+      );
+  }
+  it("passes the confirmed assumptions into inference and retains them with an updated rematch challenge", async () => {
+    draft();
+    db()
+      .prepare("UPDATE intake_drafts SET body=? WHERE id=?")
+      .run(
+        JSON.stringify({
+          status: "summary",
+          revision: 3,
+          goal: "原始条件只有五名成员",
+          assumptions: ["模型最初的假设"],
+          sources: [],
+          answers: [],
+          usage: [],
+        }),
+        "intake-fixture",
+      );
+    const original = {
+      ...challenge,
+      constraints: "当前团队五人",
+      materials: "用户早期原话：当前团队五人",
+    };
+    const arena = createArena(original, "owner", "gpt-6.1-sol", {
+      intakeId: "intake-fixture",
+      revision: 3,
+      assumptions: ["先验证已有设备是否可用"],
+    });
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(fixture.generate.mock.calls[0][0]).toMatchObject({
+      assumptions: ["先验证已有设备是否可用"],
+      challenge: { constraints: "当前团队五人" },
+    });
+    const rematch = newVersion(
+      arena.id,
+      "owner",
+      { ...original, constraints: "本版只有两名成员，不可增人" },
+      "人数由五人调整为两人",
+    );
+    await advanceArena(rematch.id, "owner", rematch.activeVersionId);
+    expect(fixture.generate.mock.calls[1][0]).toMatchObject({
+      assumptions: ["先验证已有设备是否可用"],
+      challenge: {
+        constraints: "本版只有两名成员，不可增人",
+        materials: "用户早期原话：当前团队五人",
+      },
+    });
+    expect(rematch.versions[0].intake?.assumptions).toEqual(["先验证已有设备是否可用"]);
+    expect(rematch.versions[1].intake?.assumptions).toEqual(["先验证已有设备是否可用"]);
+  });
+  it("binds the arena and draft once and returns it for a replayed confirmation", () => {
+    draft();
+    const arena = createArena(challenge, "owner", "gpt-6.1-sol", {
+      intakeId: "intake-fixture",
+      revision: 3,
+    });
+    const duplicate = createArena(challenge, "owner", "gpt-6.1-sol", {
+      intakeId: "intake-fixture",
+      revision: 3,
+    });
+    expect(duplicate.id).toBe(arena.id);
+    expect(db().prepare("SELECT COUNT(*) AS count FROM arenas").get()).toMatchObject({ count: 1 });
+    const row = db()
+      .prepare("SELECT body,submitted_arena_id FROM intake_drafts WHERE id=?")
+      .get("intake-fixture") as { body: string; submitted_arena_id: string };
+    expect(row.submitted_arena_id).toBe(arena.id);
+    expect(JSON.parse(row.body)).toMatchObject({
+      status: "submitted",
+      revision: 4,
+      arenaId: arena.id,
+    });
+  });
+  it("rejects stale summaries, unreviewed input and other owners without consuming a run", () => {
+    draft("questions");
+    expect(() =>
+      createArena(challenge, "owner", "gpt", { intakeId: "intake-fixture", revision: 3 }),
+    ).toThrow("最新摘要");
+    expect(() =>
+      createArena(challenge, "other-owner", "gpt", { intakeId: "intake-fixture", revision: 3 }),
+    ).toThrow("未找到");
+    db()
+      .prepare("UPDATE intake_drafts SET body=? WHERE id=?")
+      .run(JSON.stringify({ status: "summary", revision: 4 }), "intake-fixture");
+    expect(() =>
+      createArena(challenge, "owner", "gpt", { intakeId: "intake-fixture", revision: 3 }),
+    ).toThrow("最新摘要");
+    expect(db().prepare("SELECT COUNT(*) AS count FROM arenas").get()).toMatchObject({ count: 0 });
+  });
+  it("rolls back arena creation and draft binding together on configuration failure", () => {
+    draft();
+    fixture.invalidProvider = "openai";
+    expect(() =>
+      createArena(challenge, "owner", "gpt", { intakeId: "intake-fixture", revision: 3 }),
+    ).toThrow();
+    expect(db().prepare("SELECT COUNT(*) AS count FROM arenas").get()).toMatchObject({ count: 0 });
+    expect(
+      db().prepare("SELECT submitted_arena_id FROM intake_drafts WHERE id=?").get("intake-fixture"),
+    ).toMatchObject({ submitted_arena_id: null });
+    fixture.invalidProvider = "";
+    const arena = createArena(challenge, "owner", "gpt", {
+      intakeId: "intake-fixture",
+      revision: 3,
+    });
+    expect(arena.versions[0].modelSelection?.provider).toBe("openai");
   });
 });

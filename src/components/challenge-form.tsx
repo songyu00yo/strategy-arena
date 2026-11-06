@@ -142,7 +142,7 @@ export function ChallengeForm({
   demo = false,
   onSubmit,
   onCancel,
-  initialModelMode = "auto",
+  initialModelMode = "gpt-6.1-terra",
   modelProviders,
 }: {
   initial?: Challenge;
@@ -173,7 +173,11 @@ export function ChallengeForm({
   };
   const chosen = routeModel(challenge, modelMode);
   const modelUnavailable =
-    !demo && modelProviders?.find((p) => p.provider === chosen.provider)?.configured === false;
+    !demo &&
+    (
+      modelProviders?.find((p) => p.id === chosen.modelId) ??
+      modelProviders?.find((p) => p.provider === chosen.provider)
+    )?.configured === false;
   const [details, setDetails] = useState(editing);
   const [error, setError] = useState("");
   const [reason, setReason] = useState("");

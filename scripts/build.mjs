@@ -48,11 +48,14 @@ const generatedRoots = new Set([
   "outputs",
   "private",
   "data",
+  "uploads",
+  "attachments",
 ]);
 function isSource(path) {
   const name = basename(path);
   return (
     !generatedRoots.has(path.split("/")[0]) &&
+    !/^public\/(?:uploads|attachments)(?:\/|$)/.test(path) &&
     path !== "next-env.d.ts" &&
     !path.endsWith(".tsbuildinfo") &&
     !(/^\.env($|\.)/.test(name) && name !== ".env.example")

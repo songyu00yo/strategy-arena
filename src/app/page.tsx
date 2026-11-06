@@ -27,6 +27,9 @@ import {
 } from "@/lib/contracts";
 import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
+import { GuidedIntake } from "@/components/guided-intake";
+import { IntakeContext } from "@/components/intake-context";
+import { DecisionReviewPanel } from "@/components/decision-review-panel";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
 import { Chars, ClickFx, Dust, Leaving } from "@/components/console/effects";
@@ -232,6 +235,10 @@ export default function Page() {
   const versionEvents = arena.snapshot?.events.filter((e) => e.versionId === selected?.id) ?? [];
   const selectedSteps = arena.snapshot?.steps.filter((s) => s.versionId === selected?.id) ?? [];
   const selectedRunning = !!selected && ["running", "ready"].includes(selected.status);
+  const preparationUsd =
+    selected?.intake?.usage.reduce((sum, usage) => sum + (usage.estimatedUsd ?? 0), 0) ?? 0;
+  const preparationCny =
+    selected?.intake?.usage.reduce((sum, usage) => sum + usage.estimatedCny, 0) ?? 0;
   const parentVersion = arena.snapshot?.versions.find((v) => v.id === selected?.parentVersionId);
   const parentChanges =
     parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
@@ -347,7 +354,7 @@ export default function Page() {
                     <LoaderCircle className="spin" size={24} />
                     <p>正在找回上一次的擂台…</p>
                   </div>
-                ) : (
+                ) : demo ? (
                   <ChallengeForm
                     demo={demo}
                     modelProviders={arena.health?.model.providers}
@@ -355,6 +362,16 @@ export default function Page() {
                     disabled={configured === false || !arena.health || accessRequired}
                     onSubmit={async (challenge, _reason, modelMode) => {
                       if (await arena.create(challenge, modelMode)) chooseVersion(null);
+                    }}
+                  />
+                ) : (
+                  <GuidedIntake
+                    modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
+                    pending={arena.busy}
+                    disabled={!arena.health || accessRequired}
+                    onCreated={(snapshot) => {
+                      arena.adopt(snapshot);
+                      chooseVersion(null);
                     }}
                   />
                 )}
@@ -429,6 +446,7 @@ export default function Page() {
                           </span>
                         )}
                       </div>
+                      {selected.intake && <IntakeContext intake={selected.intake} />}
                       {selected.changeReason && (
                         <p className="version-reason">
                           <CornerIcon />
@@ -456,6 +474,14 @@ export default function Page() {
                           ? money(selected.costUsd ?? 0, "USD")
                           : money(selected.costCny)}
                       </strong>
+                      {!demo && (preparationUsd > 0 || preparationCny > 0) && (
+                        <small>
+                          准备阶段另计 {preparationUsd > 0 ? money(preparationUsd, "USD") : ""}
+                          {preparationUsd > 0 && preparationCny > 0 ? " + " : ""}
+                          {preparationCny > 0 ? money(preparationCny) : ""}
+                          （含材料辨读与补问）
+                        </small>
+                      )}
                       {(selected.reservedCny > 0 || (selected.reservedUsd ?? 0) > 0) && (
                         <small>
                           另有{" "}
@@ -534,6 +560,24 @@ export default function Page() {
                         <Settings2 size={14} />
                         修改条件再开局
                       </button>
+                      {!demo &&
+                        selected.verdict &&
+                        selected.strategies.length === 3 &&
+                        ["completed", "paused", "failed", "superseded"].includes(
+                          selected.status,
+                        ) && (
+                          <DecisionReviewPanel
+                            key={`review-${selected.id}`}
+                            arenaId={arena.snapshot.id}
+                            version={selected}
+                            configured={
+                              (arena.health?.model.models ?? arena.health?.model.providers)?.some(
+                                (model) => model.provider === "openai" && model.configured,
+                              ) ?? false
+                            }
+                            readOnly={historical}
+                          />
+                        )}
                       <button
                         type="button"
                         className="text-button"
@@ -748,7 +792,7 @@ export default function Page() {
             demo={demo}
             initial={selected.challenge}
             initialModelMode={arena.active?.modelSelection?.requestedMode ?? "deepseek"}
-            modelProviders={arena.health?.model.providers}
+            modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
             disabled={configured === false || !arena.health || accessRequired}
             pending={arena.busy}
             editing

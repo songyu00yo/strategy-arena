@@ -20,6 +20,10 @@ export function db(): DatabaseSync {
     database = new DatabaseSync(path);
     database.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
     database.exec(readFileSync(resolve(process.cwd(), "migrations/001_initial.sql"), "utf8"));
+    database.exec(readFileSync(resolve(process.cwd(), "migrations/002_intakes.sql"), "utf8"));
+    database.exec(
+      readFileSync(resolve(process.cwd(), "migrations/003_decision_reviews.sql"), "utf8"),
+    );
   }
   return database;
 }

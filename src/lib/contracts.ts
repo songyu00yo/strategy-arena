@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MODEL_IDS } from "./model-catalog";
 
 export const SCHEMA_VERSION = "1.0.0";
 export const STAGES = ["propose", "attack", "verify", "revise", "judge"] as const;
@@ -22,7 +23,7 @@ export const ChallengeSchema = z.object({
   timeHours: z.number().min(0.01).max(100000).nullable().default(null),
 });
 export type Challenge = z.infer<typeof ChallengeSchema>;
-export const ModelModeSchema = z.enum(["auto", "deepseek", "gpt"]);
+export const ModelModeSchema = z.enum([...MODEL_IDS, "auto", "deepseek", "gpt"]);
 export type ModelMode = z.infer<typeof ModelModeSchema>;
 export type ModelProvider = "deepseek" | "openai";
 export type Currency = "CNY" | "USD";
@@ -40,6 +41,11 @@ export interface ModelOption {
   configured: boolean;
   currency: Currency;
   error?: string;
+}
+export interface ModelCatalogOption extends ModelOption {
+  label: string;
+  inputPrice: number;
+  outputPrice: number;
 }
 export const CreateArenaRequestSchema = ChallengeSchema.extend({
   modelMode: ModelModeSchema.default("auto"),
@@ -195,6 +201,14 @@ export interface ArenaVersion {
   costUsd?: number;
   reservedUsd?: number;
   modelSelection?: ModelSelection;
+  intake?: {
+    id: string;
+    originalGoal: string;
+    answers: import("./intake-contracts").RecordedAnswer[];
+    assumptions: string[];
+    usedSources: import("./intake-contracts").MaterialSource[];
+    usage: ModelUsage[];
+  };
   createdAt: string;
   changeReason: string;
   parentVersionId: string | null;
@@ -215,6 +229,7 @@ export interface ArenaSnapshot {
     promptVersion: string;
     schemaVersion: string;
     providers?: ModelOption[];
+    models?: ModelCatalogOption[];
   };
 }
 export interface ModelUsage {
@@ -242,6 +257,7 @@ export interface StageInput {
   evidence: Evidence[];
   revisions: Revision[];
   userChallenges: string[];
+  assumptions?: string[];
   previousStrategy?: Strategy;
   duplicateHint?: string;
   repairFeedback?: string;

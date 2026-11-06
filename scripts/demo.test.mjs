@@ -3,8 +3,9 @@ import http from "node:http";
 import { after, before, test } from "node:test";
 import { createDemoServer, DEMO_MODEL } from "./demo/server.mjs";
 import { scenarioFor } from "./demo/scenarios.mjs";
-import { samples } from "../src/lib/sample.ts";
-import { ChallengeSchema } from "../src/lib/contracts.ts";
+import { tsImport } from "tsx/esm/api";
+const { samples } = await tsImport("../src/lib/sample.ts", import.meta.url);
+const { ChallengeSchema } = await tsImport("../src/lib/contracts.ts", import.meta.url);
 
 test("every sample has its own scenario, distinct from the others", () => {
   const seen = new Set();

@@ -50,6 +50,8 @@ function fixture(t) {
     ".next/BUILD_ID",
     ".next/static/fixture",
     "migrations/001_initial.sql",
+    "migrations/002_intakes.sql",
+    "migrations/003_decision_reviews.sql",
     "migrations/billing/002_limit_audit.sql",
   ]) {
     mkdirSync(dirname(join(release, file)), { recursive: true });
@@ -77,8 +79,8 @@ test("check validates identities and runtime caps without creating data or readi
   assert.equal(config.env.ARENA_BILLING_USD_LIMIT, "10");
   assert.equal(config.env.ARENA_BILLING_REQUEST_LIMIT, "300");
   assert.equal(config.env.ARENA_BILLING_TOKEN_LIMIT, "5000000");
-  assert.equal(config.env.ARENA_RUN_BUDGET_USD, "0.5");
-  assert.equal(config.env.ARENA_RUN_BUDGET_CNY, "3");
+  assert.equal(config.env.ARENA_RUN_BUDGET_USD, "2");
+  assert.equal(config.env.ARENA_RUN_BUDGET_CNY, "12");
   assert.equal(config.env.ARENA_GLOBAL_BUDGET_USD, "10");
   assert.equal(config.env.ARENA_GLOBAL_BUDGET_CNY, "60");
   assert.equal(config.env.ARENA_WORKER_ENABLED, "false");
@@ -124,29 +126,31 @@ test("passes only trusted proxy variables and appends loopback bypasses for both
   });
 });
 
-test("uses the existing audited 400-request cap without adjusting the ledger or other ceilings", async (t) => {
+test("uses audited 300, 400 or 650 request caps without adjusting the ledger or other ceilings", async (t) => {
   const { directory, options, deps } = fixture(t);
-  let reads = 0;
-  const summary = { ...billingFixture, requestLimit: 400, requests: 243 };
-  const before = structuredClone(summary);
-  const config = await prepareLivePreview(options, {
-    ...deps,
-    readBillingStatus: () => {
-      reads++;
-      return summary;
-    },
-  });
-  assert.equal(reads, 1);
-  assert.equal(config.env.ARENA_BILLING_REQUEST_LIMIT, "400");
-  assert.equal(config.env.ARENA_BILLING_USD_LIMIT, "10");
-  assert.equal(config.env.ARENA_BILLING_TOKEN_LIMIT, "5000000");
-  assert.deepEqual(summary, before);
-  assert.equal(existsSync(join(directory, "data")), false);
-  for (const requestLimit of [299, 401, 300.5])
+  for (const requestLimit of [300, 400, 650]) {
+    let reads = 0;
+    const summary = { ...billingFixture, requestLimit, requests: 243 };
+    const before = structuredClone(summary);
+    const config = await prepareLivePreview(options, {
+      ...deps,
+      readBillingStatus: () => {
+        reads++;
+        return summary;
+      },
+    });
+    assert.equal(reads, 1);
+    assert.equal(config.env.ARENA_BILLING_REQUEST_LIMIT, String(requestLimit));
+    assert.equal(config.env.ARENA_BILLING_USD_LIMIT, "10");
+    assert.equal(config.env.ARENA_BILLING_TOKEN_LIMIT, "5000000");
+    assert.deepEqual(summary, before);
+    assert.equal(existsSync(join(directory, "data")), false);
+  }
+  for (const requestLimit of [299, 651, 300.5])
     await assert.rejects(
       prepareLivePreview(options, {
         ...deps,
-        readBillingStatus: () => ({ ...summary, requestLimit }),
+        readBillingStatus: () => ({ ...billingFixture, requestLimit }),
       }),
       /already have audited/,
     );
@@ -192,8 +196,10 @@ test("never silently raises existing ledger caps or launches when shared allowan
   const { options, deps } = fixture(t);
   for (const change of [
     { usdLimitMicros: 2_000_000 },
+    { usdLimitMicros: 10_000_001 },
     { requestLimit: 100 },
     { tokenLimit: 2_000_000 },
+    { tokenLimit: 5_000_001 },
     { revision: 0 },
     { activeStage: null },
   ])
@@ -249,6 +255,10 @@ test("occupied loopback ports are refused without stopping their owner", async (
 
 test("CLI check uses the actual read-only billing API and never starts the synthetic server", async (t) => {
   const { directory, options } = fixture(t);
+  const probe = createServer();
+  await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
   writeFileSync(
     join(options.release, "server.js"),
     `require('node:fs').writeFileSync(${JSON.stringify(join(directory, "unexpected-spawn"))}, 'bad');`,
@@ -283,6 +293,8 @@ test("CLI check uses the actual read-only billing API and never starts the synth
       options.database,
       "--billing-database",
       options.billingDatabase,
+      "--port",
+      String(port),
       "--check",
     ],
     { cwd: process.cwd(), encoding: "utf8" },
@@ -293,3 +305,11 @@ test("CLI check uses the actual read-only billing API and never starts the synth
   assert.equal(existsSync(join(directory, "unexpected-spawn")), false);
   assert.equal(existsSync(join(directory, "data")), false);
 });
+
+for (const migration of ["002_intakes.sql", "003_decision_reviews.sql"])
+  test(`rejects a bundle missing ${migration} before starting or creating data`, async (t) => {
+    const { directory, options, deps } = fixture(t);
+    rmSync(join(options.release, "migrations", migration));
+    await assert.rejects(prepareLivePreview(options, deps), /Standalone release is incomplete/);
+    assert.equal(existsSync(join(directory, "data")), false);
+  });

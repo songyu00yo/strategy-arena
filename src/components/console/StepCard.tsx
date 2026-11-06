@@ -13,9 +13,9 @@ type Quad = [Point, Point, Point, Point];
 type Matrix = [number, number, number, number, number, number, number, number, number];
 type Flight = { parts: Animation[]; path: (t: number) => Quad; at: number; ms: number };
 const DRAW_MS = 620;
-const LAND_MS = 500;
+const LAND_MS = 460;
 const HANDOFF = 0.7;
-const SAMPLES = 60;
+const SAMPLES = 40;
 
 /** Read the projected border corners, including every ancestor's perspective. */
 function corners(el: HTMLElement): Quad {
@@ -88,14 +88,24 @@ function multiply(a: Matrix, b: Matrix): Matrix {
 function cssMatrix(m: Matrix) {
   return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
 }
-function progress(t: number) {
-  return (1 - (1 + 8 * t) * Math.exp(-8 * t)) / (1 - 9 * Math.exp(-8));
+function progress(t: number, opening = false) {
+  if (t >= 1) return 1;
+  const ms = opening ? DRAW_MS : LAND_MS;
+  const w = opening ? 14.1 : 19.6;
+  const z = opening ? 0.8 : 1;
+  const seconds = (t * ms) / 1000;
+  if (z >= 1) return 1 - (1 + w * seconds) * Math.exp(-w * seconds);
+  const wd = w * Math.sqrt(1 - z * z);
+  return (
+    1 -
+    Math.exp(-z * w * seconds) * (Math.cos(wd * seconds) + ((z * w) / wd) * Math.sin(wd * seconds))
+  );
 }
-function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad) {
+function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad, opening = false) {
   return (t: number): Quad => {
-    const settled = progress(t);
+    const settled = progress(t, opening);
     const momentum = t * (1 - t) ** 3 * ms;
-    const lift = -52 * Math.sin(Math.PI * t) ** 2;
+    const lift = -70 * Math.sin(Math.PI * Math.min(1, settled)) ** 2;
     return from.map((point, i) => ({
       x: point.x + (to[i].x - point.x) * settled + (velocity?.[i].x ?? 0) * momentum,
       y: point.y + (to[i].y - point.y) * settled + (velocity?.[i].y ?? 0) * momentum + lift,
@@ -118,48 +128,31 @@ function velocityOf(flight: Flight | null): Quad | undefined {
   return now.map((p, i) => ({ x: (p.x - before[i].x) / dt, y: (p.y - before[i].y) / dt })) as Quad;
 }
 
-/** Freeze the source's typography so the detail-dialog selectors cannot restyle its copy. */
+/** Preserve the source card's own styling without a computed-style walk through its text. */
 function copyCard(source: HTMLElement) {
   const clone = source.cloneNode(true) as HTMLElement;
-  const originals = [source, ...source.querySelectorAll<HTMLElement>("*")];
-  const copies = [clone, ...clone.querySelectorAll<HTMLElement>("*")];
-  const properties = [
-    "display",
-    "position",
-    "flex-direction",
-    "flex",
-    "align-items",
-    "justify-content",
-    "gap",
-    "padding",
-    "margin",
-    "border",
-    "border-top",
-    "border-radius",
-    "box-sizing",
-    "background",
+  const style = getComputedStyle(source);
+  for (const property of [
     "font-family",
     "font-size",
     "font-weight",
-    "font-style",
     "line-height",
-    "letter-spacing",
-    "text-transform",
-    "text-align",
     "color",
-    "white-space",
-    "overflow",
-    "text-overflow",
-  ];
-  originals.forEach((node, i) => {
-    const style = getComputedStyle(node);
-    properties.forEach((property) =>
-      copies[i].style.setProperty(property, style.getPropertyValue(property)),
-    );
-    copies[i].removeAttribute("id");
-    copies[i].removeAttribute("role");
-    copies[i].removeAttribute("tabindex");
-    copies[i].removeAttribute("data-step-source");
+    "background",
+    "border",
+    "border-top",
+    "box-shadow",
+  ]) {
+    clone.style.setProperty(property, style.getPropertyValue(property));
+  }
+  [
+    clone,
+    ...clone.querySelectorAll<HTMLElement>("[id], [role], [tabindex], [data-step-source]"),
+  ].forEach((node) => {
+    node.removeAttribute("id");
+    node.removeAttribute("role");
+    node.removeAttribute("tabindex");
+    node.removeAttribute("data-step-source");
   });
   clone.classList.remove("pulled", "past-gap");
   clone.setAttribute("aria-hidden", "true");
@@ -341,7 +334,7 @@ export function StepCard({
     const slot = source ? corners(source) : open;
     const from = opening && !continuing ? slot : current;
     const to = opening ? open : slot;
-    const path = pathBetween(from, to, ms, opening && !continuing ? undefined : velocity);
+    const path = pathBetween(from, to, ms, opening && !continuing ? undefined : velocity, opening);
     const timing = { duration: ms, easing: "linear", fill: "both" } as const;
     const parts: Animation[] = [];
     const add = (node: Element, frames: Keyframe[], options: KeyframeAnimationOptions = {}) => {
@@ -528,9 +521,20 @@ export function StepCard({
       };
       fade.onfinish = closing;
     };
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const settlePreference = () => {
+      if (!media.matches) return;
+      paging.current?.cancel();
+      clearFlight();
+      el.style.transform = "";
+      el.style.opacity = "";
+      if (closingAction.current) closingAction.current();
+    };
+    media.addEventListener("change", settlePreference);
     addEventListener("resize", onResize);
     return () => {
       removeEventListener("resize", onResize);
+      media.removeEventListener("change", settlePreference);
       paging.current?.cancel();
       clearFlight();
       markDeck(null, false, 0);

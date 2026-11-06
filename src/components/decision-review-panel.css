@@ -1,0 +1,59 @@
+.decision-review {
+  display: grid;
+  gap: 18px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.decision-review-intro {
+  margin: 0;
+  color: var(--quiet);
+}
+.decision-review-original {
+  padding: 14px 16px;
+  background: var(--sunken);
+  border-left: 3px solid var(--blue);
+  display: grid;
+  gap: 6px;
+}
+.decision-review-original small {
+  color: var(--quiet);
+}
+.decision-review-results {
+  padding: 4px 0;
+}
+.decision-review-answer {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.decision-review-answer.preference {
+  color: var(--blue);
+  font-size: 16px;
+}
+.decision-review-error {
+  color: var(--red);
+}
+.decision-review-distribution {
+  padding: 12px 0;
+}
+.decision-review-distribution > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(60px, 1fr) 52px;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.decision-review-distribution meter {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--blue);
+}
+.decision-review-note,
+.decision-review-cost {
+  color: var(--quiet);
+  font-size: 12px;
+  margin: 0;
+}

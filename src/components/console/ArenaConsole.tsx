@@ -17,6 +17,7 @@ import {
   type Strategy,
 } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
+import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
 import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
@@ -288,7 +289,7 @@ export function ArenaConsole({
       });
       return;
     }
-    const scope = createMotionScope();
+    const scope = createMotionScope("interaction");
     const starts = nodes.map((node) => ({
       opacity: node.style.opacity || "0.35",
       transform: node.style.transform || "translateY(16px)",
@@ -322,6 +323,7 @@ export function ArenaConsole({
 
   return (
     <div
+      data-motion-origin={seeking ? "interaction" : "story"}
       className={`c-root ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
     >
       <RecordWall
@@ -373,7 +375,12 @@ export function ArenaConsole({
               <div key={label} className={tone} data-state={METRIC_STATE[label]}>
                 <dt>{label}</dt>
                 <dd>
-                  <Roll value={value} delay={rollDelay} animate={directed && !seeking} />
+                  <Roll
+                    value={value}
+                    delay={rollDelay}
+                    animate={directed}
+                    origin={seeking ? "interaction" : "story"}
+                  />
                 </dd>
               </div>
             ))}
@@ -398,7 +405,7 @@ export function ArenaConsole({
                         : undefined
                     }
                   >
-                    {verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
+                    {verdictLabel(verdict)}
                   </b>
                   <span>{OUTCOME[verdict.outcome]}</span>
                 </div>
@@ -427,7 +434,12 @@ export function ArenaConsole({
                 {verdict.nextActions.length > 1 && (
                   <p className="more">接着做：{listOf(verdict.nextActions.slice(1))}</p>
                 )}
-                <button type="button" onClick={() => setWholeResult((w) => !w)}>
+                <button
+                  type="button"
+                  aria-expanded={wholeResult}
+                  aria-controls="verdict"
+                  onClick={() => setWholeResult((w) => !w)}
+                >
                   {wholeResult ? "收起结论" : "看完整结论"}
                 </button>
               </div>

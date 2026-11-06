@@ -2,12 +2,9 @@
 // so demo mode cannot reach a model or spend money. Pages and assets come from the production build.
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import {
-  ChallengeSchema,
-  CreateArenaRequestSchema,
-  InterventionSchema,
-  VersionRequestSchema,
-} from "../../src/lib/contracts.ts";
+import { tsImport } from "tsx/esm/api";
+const { ChallengeSchema, CreateArenaRequestSchema, InterventionSchema, VersionRequestSchema } =
+  await tsImport("../../src/lib/contracts.ts", import.meta.url);
 import { scenarioFor } from "./scenarios.mjs";
 
 export const DEMO_MODEL = {

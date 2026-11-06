@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChallengeSchema, StrategySchema, type StageInput } from "../src/lib/contracts";
+import {
+  ChallengeSchema,
+  StrategySchema,
+  AttackSchema,
+  RevisionSchema,
+  VerdictSchema,
+  type StageInput,
+} from "../src/lib/contracts";
 import {
   buildMessages,
   buildRequestBody,
@@ -78,6 +85,32 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
     expect(JSON.stringify(messages)).not.toContain("OPPONENT_PRIVATE_PROPOSAL");
     expect(messages[1].content).toContain("静态生成网站");
     expect(estimateCallCost(input)).toBeGreaterThan(0);
+  });
+  it("includes confirmed assumptions in every stage and prioritizes current fields over historical material", () => {
+    const current: StageInput = {
+      ...input,
+      assumptions: ["先验证已有设备是否可用"],
+      challenge: {
+        ...input.challenge,
+        constraints: "当前团队两人，不可增人",
+        materials: "早期用户原话：团队五人",
+      },
+    };
+    for (const [kind, schema] of [
+      ["propose", StrategySchema],
+      ["attack", AttackSchema],
+      ["revise", RevisionSchema],
+      ["judge", VerdictSchema],
+    ] as const) {
+      const messages = buildMessages(kind, current, schema);
+      const data = JSON.parse(messages[1].content.slice(messages[1].content.indexOf("\n") + 1));
+      expect(data).toMatchObject({
+        assumptions: ["先验证已有设备是否可用"],
+        challenge: { constraints: "当前团队两人，不可增人" },
+      });
+      expect(messages[0].content).toContain("优先于材料内的历史原话");
+      expect(messages[0].content).toContain("不是材料原文或工具证据");
+    }
   });
   it("sends bounded JSON request and records returned model and actual usage", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

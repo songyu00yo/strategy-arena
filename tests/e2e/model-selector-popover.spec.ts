@@ -104,7 +104,8 @@ test("explicit UI fixture: floating picker keeps form geometry, arrows only focu
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(380);
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(834);
   const goal = page.getByLabel("你想解决什么问题？", { exact: true });
-  await goal.click();
+  // The centered mobile composer is behind the picker. Click its exposed left padding.
+  await goal.click({ position: { x: 8, y: 16 } });
   await expect(listbox).toBeHidden();
   await expect(goal).toBeFocused();
   await trigger.click();

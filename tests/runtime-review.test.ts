@@ -158,6 +158,54 @@ afterEach(() => {
 });
 
 describe("runtime adversarial review", () => {
+  it.each(["propose", "revise"] as const)(
+    "archives rejected %s arithmetic and settles test usage before the existing one-shot repair",
+    async (stage) => {
+      const arena = createArena(challenge, "review-owner");
+      const invalid = { ...structuredClone(strategy), steps: ["总计1+2=4小时"] };
+      if (stage === "revise") {
+        const version = getVersion(arena.activeVersionId);
+        version.strategies = [structuredClone(strategy)];
+        saveVersion(version);
+        db()
+          .prepare(
+            "UPDATE steps SET status='completed' WHERE version_id=? AND NOT(stage='revise' AND role='A')",
+          )
+          .run(version.id);
+      }
+      const rejected =
+        stage === "propose"
+          ? invalid
+          : {
+              strategyId: "A",
+              strategy: invalid,
+              responses: [],
+              summary: "合成算术回归",
+              changed: true,
+            };
+      fixture.generate.mockResolvedValueOnce({ value: rejected, usage });
+      const snapshot = await advanceArena(arena.id, "review-owner", arena.activeVersionId);
+      expect(snapshot.versions[0]).toMatchObject({
+        status: "ready",
+        costCny: 0.04,
+        reservedCny: 0,
+      });
+      expect(
+        snapshot.steps.find((step) => step.stage === stage && step.role === "A"),
+      ).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("正确计算结果为 3"),
+      });
+      expect(
+        snapshot.steps.filter((step) => step.stage === stage && step.role === "A:repair"),
+      ).toMatchObject([{ status: "pending" }]);
+      expect(snapshot.versions[0].strategies).toEqual(stage === "propose" ? [] : [strategy]);
+      expect(snapshot.versions[0].revisions).toEqual([]);
+      const failure = snapshot.events.find((event) => event.type === "step_failed");
+      expect(failure?.data).toMatchObject({ rejectedResult: rejected, usage });
+      expect(fixture.generate).toHaveBeenCalledTimes(1);
+    },
+  );
   it("preserves an identified restriction conflict when another resource estimate is unknown", () => {
     const input = pairedInput(300);
     input.challenge.constraints = "全部画面必须来自真实记录，禁止生成虚构画面";

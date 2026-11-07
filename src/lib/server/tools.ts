@@ -238,6 +238,7 @@ export function validateRevision(revision: Revision, input: StageInput): Revisio
   const original = input.strategies.find((s) => s.id === revision.strategyId);
   if (!original || revision.strategy.id !== original.id || revision.strategyId !== input.role)
     throw new Error("修订策略与本轮角色不匹配。");
+  assertStrategyArithmetic(revision.strategy);
   const eligible = input.attacks.filter((a) => a.targetStrategyId === original.id);
   const seen = new Set<string>();
   for (const r of revision.responses) {
@@ -346,6 +347,25 @@ export function assertExplicitArithmetic(text: string): void {
     if (Math.abs(actual - Number(match[3])) > 1e-8) mismatch(match[0], actual);
   }
 }
+/** Only standalone resource equations are assertions here. A learning plan may discuss an
+ * incorrect equation without asserting it. Prose, questions and quoted sources stay untouched. */
+export function assertStrategyArithmetic(strategy: Strategy): void {
+  const resourceEquation =
+    /^(?:(?:预算|费用|成本|支出|投入|工时|用时|时间)(?:总计|合计|小计|累计)?|总计|合计|小计|累计)\s*(?:为|是|[:：])?\s*[()\d\s.+\-*/%×÷]+\s*=\s*[+\-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:元|小时)\.?$/;
+  for (const field of [
+    strategy.thesis,
+    ...strategy.steps,
+    strategy.resources,
+    strategy.firstAction,
+    strategy.failureCondition,
+  ]) {
+    const ownText = field.replace(/“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"\n]*"|'[^'\n]*'/g, "");
+    for (const sentence of ownText.split(/[。；;\n]/)) {
+      const calculation = sentence.trim();
+      if (resourceEquation.test(calculation)) assertExplicitArithmetic(calculation);
+    }
+  }
+}
 export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
   for (const field of [
     verdict.headline,
@@ -397,14 +417,21 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
       };
     // A separate unknown must not erase an already identified conflict.
     if (existing?.status === "violates") return existing;
-    if (
-      (input.challenge.budget !== null && s.estimatedCost === null) ||
-      (input.challenge.timeHours !== null && s.estimatedHours === null)
-    )
+    const missingResources: string[] = [];
+    if (input.challenge.budget !== null && s.estimatedCost === null)
+      missingResources.push("缺少完整支出估算，尚不能确认满足预算上限。");
+    if (input.challenge.timeHours !== null && s.estimatedHours === null)
+      missingResources.push("缺少全程工时估算，尚不能确认满足总工时上限。");
+    if (missingResources.length)
       return {
         strategyId: s.id,
         status: "unknown" as const,
-        reason: "关键限制缺少可核验的资源估计，尚不能确认满足。",
+        reason: [
+          existing?.reason,
+          ...missingResources.filter((reason) => !existing?.reason.includes(reason)),
+        ]
+          .filter(Boolean)
+          .join(" "),
       };
     if (existing?.status === "eligible" && input.challenge.constraints.trim())
       return {

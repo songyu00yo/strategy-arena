@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MODEL_IDS } from "./model-catalog";
 
-export const SCHEMA_VERSION = "1.3.0";
+export const SCHEMA_VERSION = "1.3.1";
 export const STAGES = ["propose", "attack", "verify", "revise", "judge"] as const;
 export type Stage = (typeof STAGES)[number];
 export const STAGE_LABELS: Record<Stage, string> = {

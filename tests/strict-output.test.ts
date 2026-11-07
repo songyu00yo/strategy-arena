@@ -1,11 +1,13 @@
 /** HTTP doubles only: these tests do not call DeepSeek or establish model quality. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { AgentPlanSchema } from "../src/lib/agent-contracts";
 import {
   AttackSchema,
   ChallengeSchema,
   RevisionSchema,
   StrategySchema,
+  ToolRequestSchema,
   VerdictSchema,
   type StageInput,
 } from "../src/lib/contracts";
@@ -343,7 +345,7 @@ describe("strict provider schema", () => {
       "strict-output-fixture",
     );
   });
-  it.each([StrategySchema, AttackSchema, RevisionSchema, VerdictSchema])(
+  it.each([StrategySchema, AttackSchema, RevisionSchema, VerdictSchema, AgentPlanSchema])(
     "closes every object, requires defaults and removes unsupported keywords",
     (schema) => {
       const converted = toStrictToolSchema(z.toJSONSchema(schema));
@@ -375,6 +377,20 @@ describe("strict provider schema", () => {
       expect(JSON.stringify(converted)).toContain("pattern");
     },
   );
+  it("omits unsupported URI format from planner and attack tools while retaining URL validation", () => {
+    for (const schema of [AgentPlanSchema, AttackSchema]) {
+      const converted = toStrictToolSchema(z.toJSONSchema(schema));
+      expect(JSON.stringify(converted)).not.toContain('"format":"uri"');
+      expect(JSON.stringify(converted)).toContain('"url":{"type":"string","pattern":');
+    }
+    expect(ToolRequestSchema.safeParse({ tool: "read_web", url: "invalid-url" }).success).toBe(
+      false,
+    );
+    expect(
+      ToolRequestSchema.safeParse({ tool: "read_web", url: "https://nodejs.org/api/sqlite.html" })
+        .success,
+    ).toBe(true);
+  });
   it("converts discriminant constants and restores only known nullable fields recursively", () => {
     expect(
       toStrictToolSchema({

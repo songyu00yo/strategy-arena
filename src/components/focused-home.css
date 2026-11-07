@@ -50,3 +50,67 @@
   color: var(--c-t2);
   font-size: 13px;
 }
+
+.home-intro {
+  padding: 0 16px;
+}
+.home-intro .eyebrow {
+  color: var(--c-t2);
+}
+.home-intro h1 {
+  margin: 12px 0;
+  font-size: clamp(28px, 4vw, 46px);
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+}
+.home-intro > p:last-child {
+  margin: 0;
+  color: var(--c-t2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.gi-scenarios {
+  padding: 15px 18px 3px;
+  color: var(--c-t2);
+  font-size: 12px;
+}
+.gi-scenarios > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.gi-scenarios button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  background: var(--c-glass);
+  color: var(--c-t0);
+  font: inherit;
+  cursor: pointer;
+}
+.gi-scenarios button:hover {
+  border-color: var(--c-t2);
+}
+.gi-scenarios button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.gi-scenarios small {
+  display: block;
+  line-height: 1.6;
+}
+@media (max-width: 650px) {
+  .home-intro {
+    margin-bottom: 12px;
+  }
+  .home-intro h1 {
+    margin: 8px 0;
+  }
+  .home-intro > p:last-child {
+    max-width: 28em;
+    margin-inline: auto;
+    font-size: 12px;
+  }
+}

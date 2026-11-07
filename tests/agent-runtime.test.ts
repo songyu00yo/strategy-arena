@@ -432,20 +432,69 @@ describe("durable bounded agent with synthetic models", () => {
       new Set(repairs.map((action) => JSON.parse(actionFor(action.id)!.payload).repairOf)).size,
     ).toBe(3);
   });
-  it("stops after a failed planner repair instead of creating a repair chain", async () => {
+  it("falls back to fixed actions after one failed planner repair without replacing failures", async () => {
     models.plan.mockRejectedValue(
       new ModelCallError("Synthetic repeated schema failure", false, usage, {
         feedback: "summary too long",
         rejectedOutput: "rejected",
       }),
     );
-    const failed = await drive(arena());
-    expect(failed.versions[0]).toMatchObject({ status: "failed", verdict: { outcome: "partial" } });
-    expect(failed.versions[0].agent?.plans).toHaveLength(0);
+    const completed = await drive(arena());
+    const version = assertCompleted(completed, 2);
+    expect(version.agent?.plans).toHaveLength(0);
+    expect(version.agent?.stopReason).toContain("summary too long");
+    expect(
+      completed.events
+        .filter((entry) => entry.type === "step_failed")
+        .every((entry) => entry.message.includes("Synthetic repeated schema failure")),
+    ).toBe(true);
     expect(models.plan).toHaveBeenCalledTimes(2);
-    expect(modelRequestsUsed(failed.activeVersionId)).toBe(2);
-    expect(failed.steps).toHaveLength(2);
-    expect(failed.steps.every((step) => step.status === "failed")).toBe(true);
+    expect(modelRequestsUsed(completed.activeVersionId)).toBe(12);
+    expect(completed.steps.filter((step) => step.status === "failed")).toHaveLength(2);
+    expect(completed.events.filter((entry) => entry.type === "agent_fallback")).toHaveLength(1);
+    expect(version.strategies).toHaveLength(3);
+    expect(version.costCny).toBeCloseTo(usage.estimatedCny * 12);
+  });
+  it("retains completed proposals and evidence when a semantically invalid second plan falls back", async () => {
+    models.plan.mockImplementation(async (request) => ({
+      value: { ...plan(request.input.checkpoint), next: "discuss" },
+      usage,
+    }));
+    const before = await drive(
+      arena(),
+      (current) =>
+        current.versions[0].attacks.length === 3 &&
+        current.steps.find((step) => step.status === "pending")?.stage === "verify",
+    );
+    const preserved = structuredClone(before.versions[0].strategies);
+    const completed = await drive(before);
+    const version = assertCompleted(completed, 1);
+    expect(version.strategies).toEqual(preserved);
+    expect(version.agent?.plans.map((item) => item.checkpoint)).toEqual([1]);
+    expect(version.agent?.stopReason).toContain("规划动作不符合当前检查点");
+    expect(completed.events.find((entry) => entry.type === "agent_fallback")?.data).toMatchObject({
+      reason: "规划动作不符合当前检查点。",
+    });
+    expect(completed.steps.find((step) => step.status === "failed")?.error).toContain(
+      "规划动作不符合当前检查点",
+    );
+    expect(version.evidence.some((item) => item.status === "found")).toBe(true);
+    expect(models.plan).toHaveBeenCalledTimes(2);
+    expect(models.propose).toHaveBeenCalledTimes(3);
+    expect(version.revisions).toHaveLength(3);
+    expect(models.judge).toHaveBeenCalledTimes(1);
+  });
+  it("does not fallback after a stopped planner returns a known failure", async () => {
+    const snapshot = arena();
+    const pending = deferred<{ value: AgentPlan; usage: ModelUsage }>();
+    models.plan.mockReturnValueOnce(pending.promise);
+    const running = advanceArena(snapshot.id, owner, snapshot.activeVersionId);
+    stopArena(snapshot.id, owner, snapshot.activeVersionId);
+    pending.resolve({ value: { ...plan(1), next: "judge" }, usage });
+    const stopped = await running;
+    expect(stopped.versions[0].status).toBe("paused");
+    expect(stopped.events.some((entry) => entry.type === "agent_fallback")).toBe(false);
+    expect(models.propose).not.toHaveBeenCalled();
   });
   it("requires a newly affordable reservation before a planner repair is sent", async () => {
     models.plan.mockRejectedValueOnce(
@@ -705,7 +754,13 @@ describe("durable bounded agent with synthetic models", () => {
     await advanceArena(created.id, owner, created.activeVersionId);
     expect(models.plan).toHaveBeenCalledTimes(1);
     pending.resolve({ value: plan(1), usage });
-    await running;
+    const archived = await running;
+    expect(archived.versions[0].status).toBe("paused");
+    expect(archived.versions[0].agent?.plans).toHaveLength(0);
+    expect(archived.steps.some((step) => step.status === "pending")).toBe(false);
+    expect(archived.events.some((entry) => entry.type === "step_uncertain")).toBe(true);
+    await advanceArena(created.id, owner, created.activeVersionId);
+    expect(models.plan).toHaveBeenCalledTimes(1);
   });
   it("persists skipped action states when a frozen configuration changes before dispatch", async () => {
     const created = arena();
@@ -887,6 +942,7 @@ describe("durable bounded agent with synthetic models", () => {
     const version = snapshot.versions[0];
     const firstAttack = version.attacks.find((entry) => entry.from === "A")!;
     expect(version.status).toBe("uncertain");
+    expect(version.error).toContain("Synthetic response lost");
     expect(
       version.evidence.some(
         (entry) => entry.attackId === firstAttack.id && entry.status === "found",
@@ -897,6 +953,50 @@ describe("durable bounded agent with synthetic models", () => {
     await advanceArena(snapshot.id, owner, snapshot.activeVersionId);
     expect(externalTool).toHaveBeenCalledTimes(1);
   });
+  it.each(["error", "throw"] as const)(
+    "preserves tool failures and stops only unknown %s outcomes",
+    async (failure) => {
+      vi.stubEnv("ARENA_SEARCH_PROVIDER", "tavily");
+      vi.stubEnv("TAVILY_API_KEY", "synthetic-key");
+      vi.stubEnv("ARENA_TOOL_BATCH_ID", "synthetic-tool-errors");
+      models.attack.mockImplementation(async (input, _config, attemptId) => ({
+        value: {
+          ...attack(input, attemptId),
+          requests: input.role === "A" ? [{ tool: "search_web", query: "公开课程资料" }] : [],
+        },
+        usage,
+      }));
+      if (failure === "throw")
+        externalTool.mockRejectedValue(new Error("synthetic unexpected interruption"));
+      else
+        externalTool.mockResolvedValue({
+          status: "error",
+          sources: [],
+          error: "Synthetic HTTP 403",
+          estimatedUsd: 0,
+        });
+      const snapshot = await drive(arena());
+      const version = snapshot.versions[0];
+      expect(version.strategies).toHaveLength(3);
+      expect(version.attacks).toHaveLength(3);
+      if (failure === "throw") {
+        expect(version.status).toBe("uncertain");
+        expect(version.error).toContain("调用结果与费用待确认");
+        expect(version.toolReservedUsd).toBeCloseTo(0.008);
+        expect(models.judge).not.toHaveBeenCalled();
+      } else {
+        expect(version.status).toBe("completed");
+        expect(version.evidence.find((item) => item.tool === "search_web")).toMatchObject({
+          status: "error",
+          content: "Synthetic HTTP 403",
+        });
+        expect(version.toolReservedUsd).toBe(0);
+        expect(models.judge).toHaveBeenCalledTimes(1);
+      }
+      await advanceArena(snapshot.id, owner, snapshot.activeVersionId);
+      expect(externalTool).toHaveBeenCalledTimes(1);
+    },
+  );
   it("refuses external requests before they exceed the arena's shared historical budget", async () => {
     vi.stubEnv("ARENA_SEARCH_PROVIDER", "tavily");
     vi.stubEnv("TAVILY_API_KEY", "synthetic-key");

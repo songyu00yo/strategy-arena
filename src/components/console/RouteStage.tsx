@@ -1,4 +1,5 @@
 "use client";
+import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
@@ -835,9 +836,13 @@ export function RouteStage({
         {present && strategy && view ? (
           <div className="c-board-body">
             <h3>
-              <Chars text={view.title} active={enter} delay={lead + 700} />
+              <Chars
+                text={readableClaimText(version, view.title)}
+                active={enter}
+                delay={lead + 700}
+              />
             </h3>
-            <p>{view.thesis}</p>
+            <p>{readableClaimText(version, view.thesis)}</p>
             <div className="est">
               {strategy.estimatedHours === view.estimatedHours
                 ? `${view.estimatedHours ?? "?"} 小时`
@@ -861,7 +866,7 @@ export function RouteStage({
                   onClick={() => onClaim(view, claimId)}
                 >
                   <em>
-                    {claimId} {CLAIM[claim.status]}
+                    {claimLabel(version, id, claimId)} · {CLAIM[claim.status]}
                     {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
                     {!after && " · 已撤回"}
                     {!before && " · 新增"}
@@ -873,12 +878,16 @@ export function RouteStage({
                   </em>
                   <span>
                     <span className={lost || !after ? "struck" : ""}>
-                      {before?.text ?? claim.text}
+                      {readableClaimText(version, before?.text ?? claim.text)}
                     </span>
                   </span>
                   {before && after && before.text !== after.text && (
                     <span className={`changed ${rewriting ? "fresh" : ""}`}>
-                      <Chars text={after.text} active={rewriting} delay={lead + 800} />
+                      <Chars
+                        text={readableClaimText(version, after.text)}
+                        active={rewriting}
+                        delay={lead + 800}
+                      />
                     </span>
                   )}
                 </button>

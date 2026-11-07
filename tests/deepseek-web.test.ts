@@ -129,6 +129,7 @@ describe("DeepSeek raw web APIs through the actual local MCP adapter", () => {
       );
       expect(await search()).toMatchObject({
         status: "error",
+        error: expect.stringContaining(`HTTP ${status}`),
         providerUsage: { successfulRequests: 0, statusCode: status },
       });
       expect(getToolAttempt("search", databasePath)).toMatchObject({
@@ -151,7 +152,7 @@ describe("DeepSeek raw web APIs through the actual local MCP adapter", () => {
         reserved_usd_micros: 834,
         settled_usd_micros: null,
       });
-    expect((await search("network")).status).toBe("unavailable");
+    expect((await search("network")).status).toBe("uncertain");
     expect(fetchDouble).toHaveBeenCalledTimes(3);
   });
   it("enforces 128 Unicode characters without splitting supplementary characters", async () => {

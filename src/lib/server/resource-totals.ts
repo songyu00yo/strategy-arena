@@ -89,7 +89,7 @@ export function normalizeCostPlan(
   const plan = { ...declaredPlan, items: declaredPlan.items.map((item) => ({ ...item })) };
   const ids = new Set<string>();
   const labels = new Set<string>();
-  const quotedCharges: { quote: string; amount: number | null }[] = [];
+  const quotedCharges: { quote: string; amount: number | null; recurring: boolean }[] = [];
   for (const [index, item] of plan.items.entries()) {
     if (ids.has(item.id)) throw new Error("必要费用清单存在重复编号，不能重复计算同一支出。");
     ids.add(item.id);
@@ -104,10 +104,30 @@ export function normalizeCostPlan(
           `费用事实必须逐字引用当前用户原文；quote复制同一项目及金额的原文短句，label可取金额前原文短片段，不添加报价范围。${correction}`,
         );
       const prices = [...item.quote.matchAll(/\d+(?:\.\d+)?\s*元/g)];
+      // One item may state both its monthly charge and an explicit, arithmetically bound total.
+      const recurring =
+        /^([^，,。；;！？?\n]+?每月)\s*(\d+(?:\.\d+)?)\s*元[，,]\s*([1-9]\d*)个月\s*(?:合计|总计|共计)?\s*(\d+(?:\.\d+)?)\s*元[。.]?$/.exec(
+          item.quote,
+        );
+      const monthlyCents = recurring ? Number(recurring[2]) * 100 : 0;
+      const months = recurring ? Number(recurring[3]) : 0;
+      const recurringTotalMatches = Boolean(
+        prices.length === 2 &&
+        recurring &&
+        item.amount !== null &&
+        Number.isSafeInteger(months) &&
+        Math.abs(monthlyCents - Math.round(monthlyCents)) <= 1e-6 &&
+        Number.isSafeInteger(Math.round(monthlyCents) * months) &&
+        Math.round(monthlyCents) * months === Math.round(item.amount * 100) &&
+        Number(recurring[4]) === item.amount,
+      );
       if (item.amount !== null) {
-        if (prices.length !== 1 || Number.parseFloat(prices[0][0]) !== item.amount)
+        if (
+          !recurringTotalMatches &&
+          (prices.length !== 1 || Number.parseFloat(prices[0][0]) !== item.amount)
+        )
           throw new Error(
-            `费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额，label可取该句金额前原文短片段。${correction}`,
+            `费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额。同项“每月X元，N个月Y元”可引用总额，但X×N必须等于Y且amount=Y。label可取原文短片段。${correction}`,
           );
       }
       if (item.amount !== null && /假设|如果|若|可能|预计|大约|约\d|是否/.test(item.quote))
@@ -117,16 +137,23 @@ export function normalizeCostPlan(
       if (
         quotedCharges.some(
           (charge) =>
-            charge.amount === item.amount &&
+            (charge.amount === item.amount || charge.recurring || recurringTotalMatches) &&
             (charge.quote.includes(item.quote) || item.quote.includes(charge.quote)),
         )
       )
         throw new Error("同一原文报价被重复列入费用清单，须先核实包含关系再计算。");
-      quotedCharges.push({ quote: item.quote, amount: item.amount });
+      quotedCharges.push({
+        quote: item.quote,
+        amount: item.amount,
+        recurring: recurringTotalMatches,
+      });
       // The model's display label is not evidence. Keep only wording derived from the quote.
-      const sourceLabel = (prices.length === 1 ? item.quote.replace(prices[0][0], "") : item.quote)
-        .trim()
-        .replace(/[，,。；;：:\s]+$/u, "");
+      const quotedLabel = recurringTotalMatches
+        ? `${recurring![1].replace(/每月$/, "")}（${months}个月）`
+        : prices.length === 1
+          ? item.quote.replace(prices[0][0], "")
+          : item.quote;
+      const sourceLabel = quotedLabel.trim().replace(/[，,。；;：:\s]+$/u, "");
       item.label = sourceLabel && sourceLabel.length <= 24 ? sourceLabel : `原文报价${index + 1}`;
     } else if (item.quote)
       throw new Error("假设和未知费用不填写事实引用，成立条件写入项目名称或步骤。");

@@ -1,4 +1,5 @@
 "use client";
+import { claimLabel, readableClaimText } from "./claim-label";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { reducedMotion } from "@/components/console/effects";
 import { useOverlayMotion } from "./overlay-motion";
@@ -15,7 +16,7 @@ import {
 import type { ArenaVersion, Attack, Evidence } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta, StatusTag } from "@/components/status";
 
-function EvidenceItem({ item }: { item: Evidence }) {
+function EvidenceItem({ item, version }: { item: Evidence; version: ArenaVersion }) {
   const external = /^https?:\/\//.test(item.source);
   return (
     <article className={`evidence-item evidence-${item.status}`}>
@@ -50,7 +51,17 @@ function EvidenceItem({ item }: { item: Evidence }) {
         )}
       </div>
       {item.sourceIds.length > 0 && (
-        <p className="source-ids">材料定位：{item.sourceIds.join("、")}</p>
+        <p className="source-ids">
+          材料定位：
+          {item.sourceIds
+            .map((id) => {
+              const source = version.intake?.usedSources.find((entry) => entry.id === id);
+              return source
+                ? `${source.filename} · ${source.location}`
+                : "材料片段（来源位置待核对）";
+            })
+            .join("、")}
+        </p>
       )}
     </article>
   );
@@ -130,7 +141,9 @@ export function EvidenceDrawer({
   const finding = version.verdict?.attackFindings.find((f) => f.attackId === attack.id);
   // Show what a citation points at, never a bare internal evidence ID.
   const citations = (ids: string[]) =>
-    ids.map((id) => version.evidence.find((e) => e.id === id)?.title ?? id).join("、");
+    ids
+      .map((id) => version.evidence.find((e) => e.id === id)?.title ?? "证据记录（待定位）")
+      .join("、");
   return (
     <div className="drawer-backdrop overlay-motion" ref={backdrop} onClick={() => close()}>
       <aside
@@ -175,13 +188,13 @@ export function EvidenceDrawer({
             <span className="evidence-step">01 / 被质疑的原话</span>
             <blockquote>{attack.claimQuote}</blockquote>
             <span className="evidence-route">
-              路线 {attack.targetStrategyId} · 判断 {attack.targetClaimId}
+              {claimLabel(version, attack.targetStrategyId, attack.targetClaimId)}
             </span>
           </section>
           <section className="evidence-section">
             <span className="evidence-step red">02 / {attack.from} 提出的质疑</span>
-            <h3>{attack.reason}</h3>
-            <p>{attack.impact}</p>
+            <h3>{readableClaimText(version, attack.reason)}</h3>
+            <p>{readableClaimText(version, attack.impact)}</p>
             <div className="verify-plan">
               <FileSearch size={15} />
               <span>
@@ -193,7 +206,7 @@ export function EvidenceDrawer({
           <section className="evidence-section">
             <span className="evidence-step">03 / 工具返回的证据</span>
             {evidence.length ? (
-              evidence.map((e) => <EvidenceItem key={e.id} item={e} />)
+              evidence.map((e) => <EvidenceItem key={e.id} item={e} version={version} />)
             ) : (
               <div className="evidence-empty">
                 <FileSearch size={24} />
@@ -207,11 +220,11 @@ export function EvidenceDrawer({
             {response ? (
               <div className="revision-response">
                 <StatusTag meta={decisionMeta[response.decision]} />
-                <p>{response.reason}</p>
+                <p>{readableClaimText(version, response.reason)}</p>
                 {response.change && (
                   <div className="response-change">
                     <CornerDownRight size={15} />
-                    <span>{response.change}</span>
+                    <span>{readableClaimText(version, response.change)}</span>
                   </div>
                 )}
                 {response.evidenceIds.length > 0 && (
@@ -242,11 +255,11 @@ export function EvidenceDrawer({
                       }[otherResponse.decision]
                     }
                   </span>
-                  <p>{otherResponse.reason}</p>
+                  <p>{readableClaimText(version, otherResponse.reason)}</p>
                   {otherResponse.change && (
                     <div className="response-change">
                       <CornerDownRight size={15} />
-                      <span>{otherResponse.change}</span>
+                      <span>{readableClaimText(version, otherResponse.change)}</span>
                     </div>
                   )}
                   <div className="borrowed-action">
@@ -269,7 +282,7 @@ export function EvidenceDrawer({
                   }[finding.status]
                 }
               </span>
-              <h3>{finding.reason}</h3>
+              <h3>{readableClaimText(version, finding.reason)}</h3>
               {finding.evidenceIds.length > 0 && (
                 <small>裁决引用证据：{citations(finding.evidenceIds)}</small>
               )}

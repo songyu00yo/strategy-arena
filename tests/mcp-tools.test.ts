@@ -190,7 +190,7 @@ describe("bounded read-only Tavily MCP adapter", () => {
     expect(result.status).toBe("uncertain");
     expect(JSON.stringify(result)).not.toContain("tvly-test-fixture-only");
     expect(getToolAttempt("search", databasePath)?.state).toBe("held");
-    expect((await runSearch()).status).toBe("unavailable");
+    expect((await runSearch()).status).toBe("uncertain");
     expect(doubles.callTool).toHaveBeenCalledTimes(1);
     expect(getToolAttempt("search", databasePath)?.state).toBe("held");
   });

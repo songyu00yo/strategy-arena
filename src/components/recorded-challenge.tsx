@@ -212,7 +212,10 @@ export function RecordedChallenge({
         <div className="recorded-challenge-source">
           <div className="recorded-challenge-source-row">
             <span
-              title={target.context?.title ?? `路线 ${target.strategy?.id} · ${target.claimId}`}
+              title={
+                target.context?.title ??
+                `路线 ${target.strategy?.id} · ${claim?.text ?? "这条判断"}`
+              }
             >
               V{version.number} ·{" "}
               {target.context

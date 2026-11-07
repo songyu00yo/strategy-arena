@@ -26,6 +26,8 @@ import {
   seedAgent,
   agentRequest,
   compilePlan,
+  fallbackAfterPlanFailure,
+  AgentToolUncertainError,
   agentInput,
   bindActionInput,
   modelRequestsUsed,
@@ -1007,7 +1009,8 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       settle(version, step, result?.usage);
       if (action?.kind === "plan") {
         if (
-          ["running", "uncertain"].includes(version.status) &&
+          version.status === "running" &&
+          currentStep.status === "running" &&
           assertOwner(arenaId, owner).active_version_id === versionId
         )
           compilePlan(arenaId, version, action, value as AgentPlan);
@@ -1029,7 +1032,8 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           .prepare("SELECT id FROM steps WHERE version_id=? AND stage='propose' AND role=?")
           .get(versionId, `${input.role}:retry`);
         const maySchedule =
-          ["running", "uncertain"].includes(version.status) &&
+          version.status === "running" &&
+          currentStep.status === "running" &&
           assertOwner(arenaId, owner).active_version_id === versionId;
         if (duplicate && !duplicateRetryExists && maySchedule) {
           const retryId = id();
@@ -1093,10 +1097,15 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       }
       db()
         .prepare(
-          "UPDATE steps SET status='completed',finished_at=?,lease_until=NULL,reservation=0,usage=?,error=NULL WHERE id=?",
+          "UPDATE steps SET status='completed',finished_at=?,lease_until=NULL,reservation=0,usage=?,error=CASE WHEN status='uncertain' THEN error ELSE NULL END WHERE id=?",
         )
         .run(now(), result ? JSON.stringify(result.usage) : null, step.id);
-      if (["running", "uncertain"].includes(version.status)) {
+      if (version.status === "uncertain" || currentStep.status === "uncertain") {
+        if (!["paused", "superseded"].includes(version.status)) {
+          version.status = "paused";
+          version.error = "请求曾超时，迟到结果已归档。后续步骤保持停止，请核对记录后创建新版本。";
+        }
+      } else if (version.status === "running") {
         version.status = step.stage === "judge" ? "completed" : "ready";
         version.error = null;
       }
@@ -1126,17 +1135,15 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
     });
   } catch (error) {
     const modelError = error instanceof ModelCallError ? error : undefined;
-    const uncertain =
-      (modelError?.uncertain ?? false) ||
-      (error instanceof Error && error.message === "MCP_OUTCOME_UNCERTAIN");
+    const uncertain = (modelError?.uncertain ?? false) || error instanceof AgentToolUncertainError;
     const usage = modelError?.usage ?? result?.usage;
     const validationMessage =
       modelError?.repair?.feedback ||
       (!modelError && result && error instanceof Error ? error.message.slice(0, 500) : null);
     const message =
       modelError?.message ||
-      (error instanceof Error && error.message === "MCP_OUTCOME_UNCERTAIN"
-        ? "联网请求结果待确认，工具费用预留保留，后续步骤已停止。"
+      (error instanceof AgentToolUncertainError
+        ? error.message
         : error instanceof Error && error.message === "CORPUS_SNAPSHOT_MISSING"
           ? "此版本的材料快照缺失，请保留记录并创建新版本。"
           : null) ||
@@ -1191,6 +1198,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       const repairRole = action ? `${step.role}:repair` : `${input.role}:repair`;
       if (
         modelError?.repair &&
+        currentStep.status === "running" &&
         (!action ||
           ((action.kind === "plan"
             ? !JSON.parse(action.payload).repairOf
@@ -1227,6 +1235,15 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           modelError.repair,
         );
       }
+      if (
+        action?.kind === "plan" &&
+        currentStep.status === "running" &&
+        !uncertain &&
+        version.status === "failed" &&
+        (modelError || result?.usage) &&
+        assertOwner(arenaId, owner).active_version_id === versionId
+      )
+        fallbackAfterPlanFailure(arenaId, version, action, validationMessage || message);
       if (action && ["failed", "uncertain"].includes(version.status))
         version.verdict = partialVerdict(version);
       syncActions(version);

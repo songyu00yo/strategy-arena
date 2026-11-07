@@ -230,6 +230,9 @@ export async function executeMcpTool(input: {
   } catch (error) {
     return {
       ...base,
+      ...(error instanceof ToolBudgetError && error.code === "TOOL_DUPLICATE_ATTEMPT"
+        ? { status: "uncertain" as const }
+        : {}),
       error: error instanceof ToolBudgetError ? error.message : "中央工具账本不可用。",
     };
   }
@@ -286,7 +289,10 @@ export async function executeMcpTool(input: {
         ...base,
         responseHash,
         status: "error",
-        error: "联网工具明确返回执行错误。",
+        error:
+          provider === "deepseek" && typeof record(payload?.providerUsage)?.statusCode === "number"
+            ? `DeepSeek联网工具返回 HTTP ${record(payload?.providerUsage)!.statusCode}，本次未取得可用资料。`
+            : "联网工具明确返回执行错误。",
         ...(payload?.providerUsage ? { providerUsage: payload.providerUsage } : {}),
       };
     } else {

@@ -1,4 +1,5 @@
 "use client";
+import { readableClaimText } from "@/components/claim-label";
 import {
   useCallback,
   useEffect,
@@ -347,6 +348,68 @@ export function ArenaConsole({
       />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
+        {verdict && (
+          <ResultRegion open={atResult} expanded={wholeResult}>
+            <section
+              className={`c-result ${wholeResult ? "whole" : ""}`}
+              aria-label="结论"
+              id="verdict"
+            >
+              <div className="lead">
+                <div className="tag">
+                  <b
+                    className={verdict.preferred ? "pick" : "none"}
+                    style={
+                      verdict.preferred
+                        ? ({
+                            "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
+                          } as CSSProperties)
+                        : undefined
+                    }
+                  >
+                    {verdictLabel(verdict)}
+                  </b>
+                  <span>{OUTCOME[verdict.outcome]}</span>
+                </div>
+                <h2>{readableClaimText(version, verdict.headline)}</h2>
+                <p>{readableClaimText(version, verdict.rationale)}</p>
+              </div>
+              <div className="act">
+                <div className="first">
+                  <small>现在该做的第一步</small>
+                  <strong>{readableClaimText(version, verdict.nextActions[0])}</strong>
+                </div>
+                <dl>
+                  <div>
+                    <dt>前提</dt>
+                    <dd>{readableClaimText(version, listOf(verdict.conditions)) || "未给出"}</dd>
+                  </div>
+                  <div>
+                    <dt>仍需确认</dt>
+                    <dd>{readableClaimText(version, listOf(verdict.uncertainties)) || "未列出"}</dd>
+                  </div>
+                  <div>
+                    <dt>退出条件</dt>
+                    <dd>{readableClaimText(version, verdict.exitCondition)}</dd>
+                  </div>
+                </dl>
+                {verdict.nextActions.length > 1 && (
+                  <p className="more">
+                    接着做：{readableClaimText(version, listOf(verdict.nextActions.slice(1)))}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  aria-expanded={wholeResult}
+                  aria-controls="verdict"
+                  onClick={() => setWholeResult((w) => !w)}
+                >
+                  {wholeResult ? "收起结论" : "看完整结论"}
+                </button>
+              </div>
+            </section>
+          </ResultRegion>
+        )}
         <div className="c-conditions">{conditions}</div>
         <div className="c-notices">{notices}</div>
         <div className="c-track">
@@ -399,66 +462,7 @@ export function ArenaConsole({
             ))}
           </dl>
         </div>
-        {verdict && (
-          <ResultRegion open={atResult} expanded={wholeResult}>
-            <section
-              className={`c-result ${wholeResult ? "whole" : ""}`}
-              aria-label="结论"
-              id="verdict"
-            >
-              <div className="lead">
-                <div className="tag">
-                  <b
-                    className={verdict.preferred ? "pick" : "none"}
-                    style={
-                      verdict.preferred
-                        ? ({
-                            "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
-                          } as CSSProperties)
-                        : undefined
-                    }
-                  >
-                    {verdictLabel(verdict)}
-                  </b>
-                  <span>{OUTCOME[verdict.outcome]}</span>
-                </div>
-                <h2>{verdict.headline}</h2>
-                <p>{verdict.rationale}</p>
-              </div>
-              <div className="act">
-                <div className="first">
-                  <small>现在该做的第一步</small>
-                  <strong>{verdict.nextActions[0]}</strong>
-                </div>
-                <dl>
-                  <div>
-                    <dt>前提</dt>
-                    <dd>{listOf(verdict.conditions) || "未给出"}</dd>
-                  </div>
-                  <div>
-                    <dt>仍需确认</dt>
-                    <dd>{listOf(verdict.uncertainties) || "未列出"}</dd>
-                  </div>
-                  <div>
-                    <dt>退出条件</dt>
-                    <dd>{verdict.exitCondition}</dd>
-                  </div>
-                </dl>
-                {verdict.nextActions.length > 1 && (
-                  <p className="more">接着做：{listOf(verdict.nextActions.slice(1))}</p>
-                )}
-                <button
-                  type="button"
-                  aria-expanded={wholeResult}
-                  aria-controls="verdict"
-                  onClick={() => setWholeResult((w) => !w)}
-                >
-                  {wholeResult ? "收起结论" : "看完整结论"}
-                </button>
-              </div>
-            </section>
-          </ResultRegion>
-        )}
+
         <main className="c-main">
           <RouteStage
             version={version}
@@ -617,7 +621,7 @@ export function ArenaConsole({
                     <em className={`is-${state}`}>
                       {a.from}→{a.targetStrategyId} {attackMeta[state].label}
                     </em>
-                    <span>{a.reason}</span>
+                    <span>{readableClaimText(version, a.reason)}</span>
                   </button>
                 );
               })}

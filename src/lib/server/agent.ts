@@ -65,10 +65,9 @@ function enqueue(
   role: string,
   round: number,
   payload: unknown = {},
+  dependencies = version.agent!.actions.at(-1) ? [version.agent!.actions.at(-1)!.id] : [],
 ) {
   const stepId = id();
-  const previous = version.agent!.actions.at(-1);
-  const dependencies = previous ? [previous.id] : [];
   const stage: Stage = kind === "plan" || kind === "tools" ? "verify" : kind;
   const ordinal = (
     db()
@@ -250,6 +249,50 @@ export function compilePlan(
     evidenceHash,
   });
 }
+/** Continue only a known failed planner, preserving its rejected action and all prior outputs. */
+export function fallbackAfterPlanFailure(
+  arenaId: string,
+  version: ArenaVersion,
+  action: ActionRow,
+  reason: string,
+) {
+  const checkpoint = JSON.parse(action.payload).checkpoint as number;
+  const dependencies = JSON.parse(action.dependencies) as string[];
+  if (checkpoint === 1) {
+    enqueue(arenaId, version, "propose", "A", 1, {}, dependencies);
+    for (const role of ["B", "C"]) enqueue(arenaId, version, "propose", role, 1);
+    for (const role of ["A", "B", "C"]) enqueue(arenaId, version, "attack", role, 1);
+    enqueue(arenaId, version, "tools", "tools", 1, { attacks: true });
+  }
+  const roles = version.strategies.length
+    ? version.strategies.map((strategy) => strategy.id)
+    : ["A", "B", "C"];
+  for (const [index, role] of roles.entries())
+    enqueue(
+      arenaId,
+      version,
+      "revise",
+      role,
+      1,
+      {},
+      checkpoint !== 1 && index === 0 ? dependencies : undefined,
+    );
+  enqueue(arenaId, version, "judge", "judge", 1);
+  version.status = "ready";
+  version.error = null;
+  version.agent!.stopReason = `规划器失败，已转为固定流程继续。原因：${reason}`;
+  event(arenaId, version.id, "agent_fallback", version.agent!.stopReason, "verify", "planner", {
+    failedStepId: action.step_id,
+    checkpoint,
+    reason,
+  });
+}
+export class AgentToolUncertainError extends Error {
+  constructor(reason?: string) {
+    super(reason || "联网请求结果待确认，工具费用预留保留，后续步骤已停止。");
+    this.name = "AgentToolUncertainError";
+  }
+}
 export function modelRequestsUsed(versionId: string) {
   return (
     db()
@@ -367,8 +410,12 @@ export async function runAgentTool(
       request.tool === "search_web"
         ? { tool: "tavily_search", query: request.query }
         : { tool: "tavily_extract", url: request.url },
+  }).catch(() => {
+    throw new AgentToolUncertainError(
+      "联网工具异常中断，调用结果与费用待确认，已保留预留并停止后续步骤。",
+    );
   });
-  if (result.status === "uncertain") throw new Error("MCP_OUTCOME_UNCERTAIN");
+  if (result.status === "uncertain") throw new AgentToolUncertainError(result.error);
   onSettled?.(result.estimatedUsd ?? 0);
   if (!result.sources.length)
     return [

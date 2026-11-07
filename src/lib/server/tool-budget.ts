@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS tool_budget_batches (
   max_usd_micros INTEGER NOT NULL CHECK(max_usd_micros=2000000),
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tool_budget_authorizations (
+  batch_id TEXT PRIMARY KEY REFERENCES tool_budget_batches(batch_id),
+  model_requests INTEGER NOT NULL CHECK(model_requests BETWEEN 1 AND 100),
+  web_requests INTEGER NOT NULL CHECK(web_requests BETWEEN 1 AND 40),
+  usd_micros INTEGER NOT NULL CHECK(usd_micros BETWEEN 1 AND 3000000)
+);
 CREATE TABLE IF NOT EXISTS tool_attempts (
   attempt_id TEXT PRIMARY KEY,
   version_id TEXT NOT NULL,
@@ -122,6 +128,25 @@ function modelTotals(connection: DatabaseSync, baseline = 0) {
     )
     .get(baseline) as { requests: number; amount: number };
 }
+export interface ToolBatchLimits {
+  modelRequests: number;
+  webRequests: number;
+  usdMicros: number;
+}
+function batchLimits(connection: DatabaseSync, batchId: string): ToolBatchLimits {
+  const approved = hasTable(connection, "tool_budget_authorizations")
+    ? (connection
+        .prepare("SELECT * FROM tool_budget_authorizations WHERE batch_id=?")
+        .get(batchId) as
+        | { model_requests: number; web_requests: number; usd_micros: number }
+        | undefined)
+    : undefined;
+  return {
+    modelRequests: approved?.model_requests ?? 20,
+    webRequests: approved?.web_requests ?? 20,
+    usdMicros: approved?.usd_micros ?? 2_000_000,
+  };
+}
 export function configuredToolBatchId() {
   return process.env.ARENA_ACCEPTANCE_BATCH_ID || process.env.ARENA_TOOL_BATCH_ID || "";
 }
@@ -139,14 +164,15 @@ export function assertToolBatchModelBudget(
     .get(batchId) as { model_baseline_rowid: number; max_usd_micros: number } | undefined;
   if (!batch) throw new ToolBudgetError("工具验收批次尚未初始化。", "TOOL_BATCH_NOT_INITIALIZED");
   const models = modelTotals(connection, batch.model_baseline_rowid);
+  const limits = batchLimits(connection, batchId);
   const tools = connection
     .prepare(
       "SELECT COALESCE(SUM(CASE WHEN state='settled' THEN settled_usd_micros ELSE reserved_usd_micros END),0) AS total FROM tool_attempts WHERE batch_id=?",
     )
     .get(batchId) as { total: number };
   if (
-    models.requests + 1 > 20 ||
-    models.amount + tools.total + additionalUsdMicros > batch.max_usd_micros
+    models.requests + 1 > limits.modelRequests ||
+    models.amount + tools.total + additionalUsdMicros > limits.usdMicros
   )
     throw new ToolBudgetError("本批次模型与工具共享额度已用尽。", "TOOL_BATCH_LIMIT_REACHED");
 }
@@ -171,18 +197,46 @@ function withLedger<T>(databasePath: string | undefined, fn: (connection: Databa
   }
 }
 /** Explicit batch identity must be stable across restarts. Invoke before the first model call. */
-export function ensureToolBudgetBatch(batchId: string, databasePath?: string) {
+export function ensureToolBudgetBatch(
+  batchId: string,
+  databasePath?: string,
+  approvedLimits?: ToolBatchLimits,
+) {
   identifier(batchId);
   return withLedger(databasePath, (connection) =>
-    ensureToolBudgetBatchOnConnection(connection, batchId),
+    ensureToolBudgetBatchOnConnection(connection, batchId, approvedLimits),
   );
 }
 /** Reuses the caller's write transaction. Never opens a second connection to a locked ledger. */
-export function ensureToolBudgetBatchOnConnection(connection: DatabaseSync, batchId: string) {
+export function ensureToolBudgetBatchOnConnection(
+  connection: DatabaseSync,
+  batchId: string,
+  approvedLimits?: ToolBatchLimits,
+) {
   identifier(batchId);
   if (!connection.isTransaction)
     throw new ToolBudgetError("批次初始化须在账本写入事务内执行。", "TOOL_TRANSACTION_REQUIRED");
   initializeToolSchema(connection);
+  const existing = connection
+    .prepare("SELECT * FROM tool_budget_batches WHERE batch_id=?")
+    .get(batchId);
+  if (approvedLimits) {
+    if (
+      !Number.isSafeInteger(approvedLimits.modelRequests) ||
+      approvedLimits.modelRequests < 1 ||
+      approvedLimits.modelRequests > 100 ||
+      !Number.isSafeInteger(approvedLimits.webRequests) ||
+      approvedLimits.webRequests < 1 ||
+      approvedLimits.webRequests > 40 ||
+      !Number.isSafeInteger(approvedLimits.usdMicros) ||
+      approvedLimits.usdMicros < 1 ||
+      approvedLimits.usdMicros > 3_000_000
+    )
+      throw new ToolBudgetError("批次授权额度无效。", "TOOL_BATCH_INVALID_LIMITS");
+    const stored = batchLimits(connection, batchId);
+    if (existing && JSON.stringify(stored) !== JSON.stringify(approvedLimits))
+      throw new ToolBudgetError("已有批次授权不可修改或重置。", "TOOL_BATCH_LIMITS_MISMATCH");
+  }
   const baseline = (
     connection.prepare("SELECT COALESCE(MAX(rowid),0) AS baseline FROM billing_attempts").get() as {
       baseline: number;
@@ -193,6 +247,17 @@ export function ensureToolBudgetBatchOnConnection(connection: DatabaseSync, batc
       "INSERT OR IGNORE INTO tool_budget_batches(batch_id,model_baseline_rowid,max_credits,max_usd_micros,created_at) VALUES(?,?,20,2000000,?)",
     )
     .run(batchId, baseline, new Date().toISOString());
+  if (!existing && approvedLimits)
+    connection
+      .prepare(
+        "INSERT INTO tool_budget_authorizations(batch_id,model_requests,web_requests,usd_micros) VALUES(?,?,?,?)",
+      )
+      .run(
+        batchId,
+        approvedLimits.modelRequests,
+        approvedLimits.webRequests,
+        approvedLimits.usdMicros,
+      );
   return connection.prepare("SELECT * FROM tool_budget_batches WHERE batch_id=?").get(batchId);
 }
 export function reserveToolAttempt(input: ToolReservation, databasePath?: string) {
@@ -226,6 +291,7 @@ export function reserveToolAttempt(input: ToolReservation, databasePath?: string
       )
       .get(input.batchId) as { calls: number; credits: number; amount: number };
     const models = modelTotals(connection, batch.model_baseline_rowid);
+    const limits = batchLimits(connection, input.batchId);
     const settings = connection
       .prepare("SELECT usd_limit_micros,hard_total_usd_micros FROM billing_settings WHERE id=1")
       .get() as { usd_limit_micros: number; hard_total_usd_micros: number };
@@ -247,11 +313,11 @@ export function reserveToolAttempt(input: ToolReservation, databasePath?: string
       : 0;
     if (
       count >= 6 ||
-      tools.calls >= 20 ||
-      tools.credits + credits > batch.max_credits ||
-      models.requests > 20 ||
+      tools.calls >= limits.webRequests ||
+      tools.credits + credits > limits.webRequests ||
+      models.requests > limits.modelRequests ||
       (stage && stageAmount > stage.stage_usd_limit_micros) ||
-      tools.amount + models.amount + amount > batch.max_usd_micros ||
+      tools.amount + models.amount + amount > limits.usdMicros ||
       allAmount > Math.min(settings.usd_limit_micros, settings.hard_total_usd_micros)
     )
       throw new ToolBudgetError(

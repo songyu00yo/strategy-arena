@@ -1,4 +1,5 @@
 "use client";
+import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
@@ -239,7 +240,12 @@ function linesOf(version: ArenaVersion, beat: Beat): string[] {
   let lines: string[] = [];
   if (beat.strategy) {
     const s = beat.strategy;
-    lines = [s.thesis, ...s.steps, ...s.claims.map((c) => `${c.id}：${c.text}`), s.firstAction];
+    lines = [
+      s.thesis,
+      ...s.steps,
+      ...s.claims.map((c) => `${claimLabel(version, s.id, c.id)} · ${c.text}`),
+      s.firstAction,
+    ];
   } else if (beat.stage === "attack" && beat.attack) {
     const a = beat.attack;
     lines = [`原话：${a.claimQuote}`, `质疑：${a.reason}`, a.impact, `核验：${a.verification}`];
@@ -276,7 +282,7 @@ function linesOf(version: ArenaVersion, beat: Beat): string[] {
       ...v.nextActions.map((c) => `下一步：${c}`),
     ];
   }
-  return lines;
+  return lines.map((line) => readableClaimText(version, line));
 }
 
 /** The wall shows only what has happened so far: real proposals, challenges, checks and revisions. */
@@ -304,7 +310,7 @@ function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[])
         row: WALL_ROW[event.stage],
         title: "模型结构化输出",
         meta: event.actor ?? "",
-        lines: JSON.stringify(output, null, 1).split("\n"),
+        lines: readableClaimText(version, JSON.stringify(output, null, 1)).split("\n"),
       });
   }
   return records.slice(-WALL_LIMIT);
@@ -479,8 +485,14 @@ export function RecordWall({
 }
 
 /** The record behind the step in front, so the card carries substance and not only a caption. */
-function detailsOf(beat: Beat): string[] {
-  if (beat.strategy) return beat.strategy.claims.slice(0, 3).map((c) => `${c.id}：${c.text}`);
+function detailsOf(version: ArenaVersion, beat: Beat): string[] {
+  if (beat.strategy)
+    return beat.strategy.claims
+      .slice(0, 3)
+      .map(
+        (c) =>
+          `${claimLabel(version, beat.strategy!.id, c.id)} · ${readableClaimText(version, c.text)}`,
+      );
   if (beat.revision)
     return [
       ...(beat.changes ?? []).map((c) => `改动：${c}`),
@@ -705,7 +717,7 @@ export function ChainDeck({
                 <p>{beat.plain}</p>
                 {isFront && (
                   <ul>
-                    {detailsOf(beat).map((line) => (
+                    {detailsOf(version, beat).map((line) => (
                       <li key={line}>{line}</li>
                     ))}
                   </ul>

@@ -324,7 +324,7 @@ describe("durable execution and ownership", () => {
     await advanceArena(arena.id, "owner", arena.activeVersionId);
     expect(model.generate).toHaveBeenCalledTimes(2);
   });
-  it("treats stale leases as uncertain, but can settle a late response exactly once", async () => {
+  it("settles a late expired response exactly once while keeping later calls stopped", async () => {
     const arena = createArena(challenge, "owner");
     let resolve!: (value: ModelResult<Strategy>) => void;
     model.generate.mockImplementationOnce(
@@ -345,7 +345,16 @@ describe("durable execution and ownership", () => {
     expect(model.generate).toHaveBeenCalledTimes(1);
     resolve(result());
     const settled = await first;
-    expect(settled.versions[0]).toMatchObject({ status: "ready", reservedCny: 0, costCny: 0.04 });
+    expect(settled.versions[0]).toMatchObject({ status: "paused", reservedCny: 0, costCny: 0.04 });
+    expect(settled.versions[0].strategies).toHaveLength(1);
+    expect(settled.events.filter((entry) => entry.type === "step_uncertain")).toHaveLength(1);
+    expect(settled.steps.find((step) => step.status === "completed")?.error).toContain(
+      "超出记录期限",
+    );
+    const stopped = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(stopped.versions[0]).toMatchObject({ status: "paused", reservedCny: 0, costCny: 0.04 });
+    expect(stopped.versions[0].strategies).toHaveLength(1);
+    expect(model.generate).toHaveBeenCalledTimes(1);
   });
   it("settles an old in-flight response only into its original superseded version", async () => {
     const arena = createArena(challenge, "owner");

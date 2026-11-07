@@ -458,6 +458,71 @@ describe("quote attribution and comparison assumptions", () => {
       ),
     ).toThrow("其他项目金额");
   });
+  it("accepts the recorded same-item monthly and six-month total quotation without changing its source", () => {
+    const source = "未来24周生活费每月2000元，6个月12000元";
+    const candidate = route({
+      complete: false,
+      items: [{ id: "living", label: "6个月生活费", amount: 12000, basis: "user", quote: source }],
+    });
+    const original = structuredClone(candidate);
+    const normalized = normalizeCostPlan(candidate, `现有存款18000元，${source}。`);
+    expect(normalized.costPlan?.items[0]).toEqual({
+      id: "living",
+      label: "未来24周生活费（6个月）",
+      amount: 12000,
+      basis: "user",
+      quote: source,
+    });
+    expect(normalized.estimatedCost).toBeNull();
+    expect(
+      normalizeStrategyResources(
+        candidate,
+        ChallengeSchema.parse({
+          goal: "比较学习与就业路线",
+          materials: `现有存款18000元，${source}。`,
+          budget: 18000,
+        }),
+      ).costPlan,
+    ).toEqual(normalized.costPlan);
+    expect(normalizeCostPlan(normalized, `现有存款18000元，${source}。`)).toEqual(normalized);
+    expect(candidate).toEqual(original);
+  });
+  it.each([
+    ["生活费每月2000元，6个月13000元", 13000],
+    ["生活费每月2000元，6个月12000元", 2000],
+    ["生活费每月2000元，6个月12000元", 10000],
+    ["生活费每月2000元，6个月车款12000元", 12000],
+    ["维修费2000元，二手车12000元", 12000],
+    ["生活费每月2000元，0个月0元", 0],
+  ])("rejects an unbound or wrong recurring quote %s for amount %s", (source, amount) => {
+    const candidate = route({
+      complete: false,
+      items: [{ id: "living", label: "生活费", amount, basis: "user", quote: source }],
+    });
+    expect(() => normalizeCostPlan(candidate, source)).toThrow("其他项目金额");
+  });
+  it.each([false, true])(
+    "does not count the monthly charge again beside its explicit total (reverse=%s)",
+    (reverse) => {
+      const source = "未来24周生活费每月2000元，6个月12000元";
+      const items: CostPlan["items"] = [
+        { id: "total", label: "生活费总额", amount: 12000, basis: "user", quote: source },
+        {
+          id: "monthly",
+          label: "月生活费",
+          amount: 2000,
+          basis: "user",
+          quote: "生活费每月2000元",
+        },
+      ];
+      expect(() =>
+        normalizeCostPlan(
+          route({ complete: false, items: reverse ? items.reverse() : items }),
+          source,
+        ),
+      ).toThrow("同一原文报价");
+    },
+  );
   it("accepts the explicit unknown or conditional-assumption correction without inventing user prices", () => {
     const unknown = route({
       complete: false,

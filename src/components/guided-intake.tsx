@@ -49,6 +49,22 @@ const EMPTY: Challenge = {
   budget: null,
   timeHours: null,
 };
+// These inputs describe fictional situations. Selecting one only fills the editable goal.
+const CHOICE_SCENARIOS = [
+  {
+    label: "考研还是就业",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我是一名大三学生，在全力考研、直接就业和先工作再读研之间犹豫。家里能支持一年生活费，九月前要定方向。我更看重长期发展，希望比较每条路线的代价、仍需核实的信息和第一步。",
+  },
+  {
+    label: "选 offer",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我即将大学毕业，有两份 offer：本地岗位月薪八千元，外地岗位月薪一万二千元。我更看重成长机会，也在意生活成本和离家距离。两周内要答复，房租、试用期条款和岗位培养安排还没有核实。请帮我比较并列出决定前要确认的事。",
+  },
+  {
+    label: "买二手车",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我刚毕业，需要通勤，正在比较买二手车、继续公共交通和暂时租车。购车总预算五万元，希望每月养车支出可控。候选车辆的事故记录、车况、保险和维修费用都还没核实。请比较各路线的成本、风险和决定前的第一步。",
+  },
+];
+
 const ACCEPT = ".pdf,.docx,.xlsx,.csv,.txt,.md,.png,.jpg,.jpeg,.webp";
 
 export function parseIntakePages(input: string, pageCount: number): number[] {
@@ -727,12 +743,17 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="说说你的目标。"
+          placeholder="说说你的选择、顾虑或其他想解决的问题。"
           onChange={(event) => {
             setGoal(event.target.value);
             goalRef.current = event.target.value;
           }}
-          onBlur={() => {
+          onBlur={(event) => {
+            if (
+              event.relatedTarget instanceof Element &&
+              event.relatedTarget.closest(".gi-scenarios")
+            )
+              return;
             setTimeout(() => {
               if (
                 !alive.current ||
@@ -861,6 +882,29 @@ export function GuidedIntake({
           }}
         />
       </form>
+
+      {!draft && (
+        <div className="gi-scenarios" aria-label="合成场景试填">
+          <span>试填合成场景</span>
+          <div role="group" aria-label="选择一个合成场景">
+            {CHOICE_SCENARIOS.map((scenario) => (
+              <button
+                type="button"
+                key={scenario.label}
+                disabled={blocked || uncertain}
+                onClick={() => {
+                  setGoal(scenario.goal);
+                  goalRef.current = scenario.goal;
+                  goalInput.current?.focus();
+                }}
+              >
+                {scenario.label}
+              </button>
+            ))}
+          </div>
+          <small>虚构问题，仅填入输入框。你也可以输入任何其他选择。</small>
+        </div>
+      )}
 
       {unavailable && !pending && !restoring && (
         <p className="gi-config" role="status">

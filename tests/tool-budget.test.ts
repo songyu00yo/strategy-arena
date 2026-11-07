@@ -151,6 +151,47 @@ describe("persistent tool ledger", () => {
     });
     expect(() => reserve("twenty-first", "another-version")).toThrow(/额度/);
   });
+  it("persists an explicit authorization without changing historical batches or resetting usage", () => {
+    const limits = { modelRequests: 100, webRequests: 40, usdMicros: 3_000_000 };
+    ensureToolBudgetBatch("deployment", databasePath, limits);
+    for (let index = 0; index < 40; index++) {
+      reserveToolAttempt(
+        {
+          attemptId: `authorized-${index}`,
+          versionId: `v-${index}`,
+          batchId: "deployment",
+          tool: "deepseek_search",
+          request: { query: "synthetic" },
+        },
+        databasePath,
+      );
+    }
+    expect(() => reserve("over-limit", "v-extra", "deployment")).toThrow(/额度/);
+    expect(() => ensureToolBudgetBatch("deployment", databasePath, limits)).not.toThrow();
+    expect(() =>
+      ensureToolBudgetBatch("deployment", databasePath, { ...limits, webRequests: 39 }),
+    ).toThrow(/不可修改/);
+    expect(() => ensureToolBudgetBatch("batch", databasePath, limits)).toThrow(/不可修改/);
+    expect(() =>
+      ensureToolBudgetBatch("invalid", databasePath, { ...limits, modelRequests: 101 }),
+    ).toThrow(/无效/);
+    for (let index = 0; index < 20; index++) {
+      ledger.reserve({
+        attemptId: `authorized-model-${index}`,
+        provider: "openai",
+        currency: "USD",
+        estimatedAmount: 1,
+        maxTokens: 1,
+      });
+    }
+    const connection = new DatabaseSync(databasePath);
+    expect(() => assertToolBatchModelBudget(connection, 1, "batch")).toThrow(/共享额度/);
+    expect(() => assertToolBatchModelBudget(connection, 1, "deployment")).not.toThrow();
+    expect(() => assertToolBatchModelBudget(connection, 2_999_999, "deployment")).toThrow(
+      /共享额度/,
+    );
+    connection.close();
+  });
   it("migrates historical Tavily rows without changing their amounts, IDs, timestamps or results", () => {
     const connection = new DatabaseSync(databasePath);
     connection.exec(`DROP TABLE tool_attempts;

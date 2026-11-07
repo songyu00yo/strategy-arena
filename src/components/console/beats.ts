@@ -1,3 +1,4 @@
+import { claimLabel, readableClaimText } from "@/components/claim-label";
 import type {
   ArenaEvent,
   ArenaVersion,
@@ -61,7 +62,7 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       stage: "attack",
       agent: a.from as AgentId,
       to: a.targetStrategyId,
-      packet: `质疑 ${a.targetClaimId}`,
+      packet: `质疑${claimLabel(version, a.targetStrategyId, a.targetClaimId)}`,
       title: a.reason,
       plain: `${a.from} 认为 ${a.targetStrategyId} 的这句话站不住：「${a.claimQuote}」`,
       attack: a,
@@ -88,7 +89,7 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       id: `r:${r.revisionId ?? r.strategyId}`,
       stage: "revise",
       agent: r.strategyId,
-      title: r.summary,
+      title: readableClaimText(version, r.summary),
       plain: changes.length
         ? `方案 ${r.strategyId} 回应质疑后改了：${changes.join("、")}。`
         : `方案 ${r.strategyId} 复核后没有改动。`,

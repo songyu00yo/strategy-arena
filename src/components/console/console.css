@@ -3906,3 +3906,15 @@
     transition: none;
   }
 }
+
+/* Lead with the saved conclusion and first action. Supporting details expand in place. */
+.c-result:not(.whole) {
+  max-height: none;
+}
+.c-result:not(.whole) .lead > p,
+.c-result:not(.whole) dl {
+  display: none;
+}
+.c-result .first {
+  padding-top: 25px;
+}

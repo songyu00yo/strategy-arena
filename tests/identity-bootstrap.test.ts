@@ -30,6 +30,7 @@ describe("identity initialization barrier", () => {
     expect(fetch).toHaveBeenCalledWith("/api/identity", {
       cache: "no-store",
       credentials: "same-origin",
+      signal: expect.any(AbortSignal),
     });
   });
   it("uses the shared named Web Lock for initialization", async () => {

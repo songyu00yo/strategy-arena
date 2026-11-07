@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ToolRequestSchema, type Stage, type StepStatus } from "./contracts";
 
-export const AGENT_PROTOCOL = "bounded-agent-1";
+export const AGENT_PROTOCOL = "bounded-agent-1.1";
 export const AGENT_LIMITS = {
   modelRequests: 20,
   tools: 12,

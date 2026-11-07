@@ -371,6 +371,125 @@ describe("single necessary-expense list and server execution gate", () => {
 describe("quote attribution and comparison assumptions", () => {
   const quote = "方案报价600元，包含项目未知";
   const userItem = { id: "price", label: "报价", amount: 600, basis: "user" as const, quote };
+  it.each(["可用本机 Node.js 24 环境", "可以使用现有设备", "计划采用开源框架", "软件免费"])(
+    "keeps non-price resource text from becoming a factual zero charge and identifies its repair: %s",
+    (source) => {
+      const candidate = route({
+        complete: true,
+        items: [
+          {
+            id: "node-runtime",
+            label: "运行环境",
+            amount: 0,
+            basis: "user",
+            quote: source,
+          },
+        ],
+      });
+      const original = structuredClone(candidate);
+      let message = "";
+      try {
+        normalizeCostPlan(candidate, source);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toContain("费用事实不能补造报价或把其他项目金额移用");
+      expect(message).toContain("costPlan.items[0]");
+      expect(message).toContain("id=node-runtime");
+      expect(message).toContain('basis=unknown、amount=null、quote=""');
+      expect(message).toContain("estimatedCost=null");
+      expect(message).toContain('basis=assumption、quote=""');
+      expect(message).toContain("假设与核实条件");
+      // Runtime repair feedback is bounded to 500 characters, including the failing item and action.
+      expect(message.length).toBeLessThanOrEqual(500);
+      expect(candidate).toEqual(original);
+    },
+  );
+  it("identifies a later invalid source item and preserves the literal-quote error", () => {
+    const candidate = route({
+      complete: false,
+      items: [
+        item("preflight", "前置核验", null),
+        {
+          id: "node-runtime",
+          label: "运行环境",
+          amount: 0,
+          basis: "user",
+          quote: "可用本机 Node.js 24 环境",
+        },
+      ],
+    });
+    expect(() => normalizeCostPlan(candidate, "其它用户材料")).toThrow(
+      "费用事实必须逐字引用当前用户原文",
+    );
+    expect(() => normalizeCostPlan(candidate, "其它用户材料")).toThrow(
+      "costPlan.items[1]（id=node-runtime）",
+    );
+  });
+  it("accepts an actual same-item zero-yuan quotation while retaining amount matching", () => {
+    const source = "本机运行环境费用0元";
+    const candidate = route({
+      complete: true,
+      items: [
+        {
+          id: "node-runtime",
+          label: "运行环境",
+          amount: 0,
+          basis: "user",
+          quote: source,
+        },
+      ],
+    });
+    expect(normalizeCostPlan(candidate, source)).toMatchObject({
+      estimatedCost: 0,
+      costPlan: { items: [{ amount: 0, basis: "user", quote: source }] },
+    });
+    expect(() => normalizeCostPlan(candidate, "本机运行环境费用1元")).toThrow("逐字引用");
+    expect(() =>
+      normalizeCostPlan(
+        {
+          ...candidate,
+          costPlan: {
+            complete: true,
+            items: [{ ...candidate.costPlan!.items[0], quote: "本机运行环境费用1元" }],
+          },
+        },
+        "本机运行环境费用1元",
+      ),
+    ).toThrow("其他项目金额");
+  });
+  it("accepts the explicit unknown or conditional-assumption correction without inventing user prices", () => {
+    const unknown = route({
+      complete: false,
+      items: [
+        {
+          id: "node-runtime",
+          label: "运行环境费用待核实",
+          basis: "unknown",
+          amount: null,
+          quote: "",
+        },
+      ],
+    });
+    expect(normalizeCostPlan(unknown, "可用本机 Node.js 24 环境").estimatedCost).toBeNull();
+    const assumed = route({
+      complete: true,
+      items: [
+        {
+          id: "node-runtime",
+          label: "既有环境零额假设",
+          basis: "assumption",
+          amount: 0,
+          quote: "",
+        },
+      ],
+    });
+    assumed.steps = ["假设既有环境不另收费，执行前核实授权、运行和服务范围"];
+    expect(normalizeCostPlan(assumed, "可用本机 Node.js 24 环境")).toMatchObject({
+      estimatedCost: 0,
+      costPlan: { items: [{ basis: "assumption", quote: "" }] },
+    });
+  });
   it("rejects nested quotes of one charge without merging independent equal-price items", () => {
     const quoted = (id: string, label: string, quote: string): CostPlan["items"][number] => ({
       id,

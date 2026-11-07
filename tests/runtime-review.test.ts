@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { StructuredOutputDiagnostic } from "../src/lib/server/model";
 import {
   ChallengeSchema,
   type ArenaVersion,
@@ -23,6 +24,7 @@ vi.mock("../src/lib/server/model", () => {
       public uncertain = false,
       public usage?: ModelUsage,
       public repair?: { feedback: string; rejectedOutput: string },
+      public diagnostic?: StructuredOutputDiagnostic,
     ) {
       super(message);
     }
@@ -161,6 +163,35 @@ afterEach(() => {
 });
 
 describe("runtime adversarial review", () => {
+  it("archives safe strict-function diagnostics and known usage without scheduling a repair", async () => {
+    const diagnostic: StructuredOutputDiagnostic = {
+      expectedFunction: "submit_propose",
+      receivedFunctionCount: 2,
+      matchingFunctionCount: 2,
+      stringArgumentCount: 2,
+      unexpectedItemCount: 0,
+      incompleteFunctionCount: 0,
+      finishState: "tool_calls",
+    };
+    const arena = createArena(challenge, "review-owner");
+    fixture.generate.mockRejectedValueOnce(
+      new ModelCallError("合成结构化调用不匹配，已保留用量。", false, usage, undefined, diagnostic),
+    );
+    const snapshot = await advanceArena(arena.id, "review-owner", arena.activeVersionId);
+    expect(snapshot.events.find((entry) => entry.type === "step_failed")?.data).toMatchObject({
+      usage,
+      structureDiagnostic: diagnostic,
+      heldReservationCny: 0,
+    });
+    expect(snapshot.versions[0]).toMatchObject({
+      status: "failed",
+      costCny: usage.estimatedCny,
+      reservedCny: 0,
+    });
+    expect(snapshot.steps.some((step) => step.role.includes(":repair"))).toBe(false);
+    await advanceArena(arena.id, "review-owner", arena.activeVersionId);
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
+  });
   it("does not persist a model interpretation as a newly authorized user fact in revisions", async () => {
     const source = {
       id: "S-runtime-model",

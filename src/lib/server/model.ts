@@ -175,12 +175,80 @@ export function decodeModelJson(output: string): {
     };
   }
 }
+export interface StructuredOutputDiagnostic {
+  expectedFunction: string;
+  receivedFunctionCount: number;
+  matchingFunctionCount: number;
+  stringArgumentCount: number;
+  unexpectedItemCount: number;
+  incompleteFunctionCount: number;
+  finishState:
+    | "completed"
+    | "incomplete"
+    | "failed"
+    | "cancelled"
+    | "tool_calls"
+    | "stop"
+    | "length"
+    | "content_filter"
+    | "missing"
+    | "other";
+}
+function structuredOutputDiagnostic(
+  expectedFunction: string,
+  items: unknown,
+  provider: ModelProvider,
+  finish: unknown,
+): StructuredOutputDiagnostic {
+  type Item = {
+    type?: unknown;
+    name?: unknown;
+    arguments?: unknown;
+    status?: unknown;
+    function?: { name?: unknown; arguments?: unknown };
+  };
+  const output = Array.isArray(items) ? (items as Item[]) : [];
+  const calls =
+    provider === "openai" ? output.filter((item) => item?.type === "function_call") : output;
+  const functions = calls.map((item) => (provider === "openai" ? item : item?.function));
+  // Only counts and a closed finish-state vocabulary cross the provider boundary.
+  return {
+    expectedFunction,
+    receivedFunctionCount: calls.length,
+    matchingFunctionCount: functions.filter((item) => item?.name === expectedFunction).length,
+    stringArgumentCount: functions.filter((item) => typeof item?.arguments === "string").length,
+    unexpectedItemCount: output.filter((item) =>
+      provider === "openai"
+        ? !item || (item.type !== "reasoning" && item.type !== "function_call")
+        : item?.type !== "function",
+    ).length,
+    incompleteFunctionCount:
+      provider === "openai"
+        ? calls.filter((item) => item.status !== undefined && item.status !== "completed").length
+        : 0,
+    finishState:
+      (
+        [
+          "completed",
+          "incomplete",
+          "failed",
+          "cancelled",
+          "tool_calls",
+          "stop",
+          "length",
+          "content_filter",
+        ] as const
+      ).find((state) => state === finish) ??
+      (finish === undefined || finish === null ? "missing" : "other"),
+  };
+}
 export class ModelCallError extends Error {
   constructor(
     message: string,
     public uncertain = false,
     public usage?: ModelUsage,
     public repair?: { feedback: string; rejectedOutput: string },
+    public diagnostic?: StructuredOutputDiagnostic,
   ) {
     super(message);
     this.name = "ModelCallError";
@@ -312,7 +380,7 @@ export function buildMessages(
           .join("，")
       : "";
   const outputRule = strict
-    ? `只调用一次 submit_${kind} 函数提交结构化结果，不输出其他工具或自然语言。在 estimatedCost、estimatedHours、preferred 这三个可空字段中用字符串 \"unknown\" 表示未知，严格模式不要输出 null；其他字段的 unknown 仍保留原含义。`
+    ? `只调用一次 submit_${kind} 函数提交结构化结果，不输出其他工具或自然语言。在 estimatedCost、estimatedHours、preferred 这三个可空字段中用字符串“unknown”表示未知，其字符串内容仅为 unknown，不含额外引号或反斜杠；严格模式不要输出 null；其他字段的 unknown 仍保留原含义。`
     : "输出一个完整 JSON 对象。";
   return [
     {
@@ -827,6 +895,14 @@ async function executeStructured<T>({
       false,
       usage,
     );
+  const diagnostic = strict
+    ? structuredOutputDiagnostic(
+        functionName,
+        c.provider === "openai" ? raw.output : raw.choices?.[0]?.message?.tool_calls,
+        c.provider,
+        c.provider === "openai" ? raw.status : raw.choices?.[0]?.finish_reason,
+      )
+    : undefined;
   let output: string;
   if (c.provider === "openai") {
     if (raw.status === "incomplete" && raw.incomplete_details?.reason === "max_output_tokens")
@@ -834,15 +910,25 @@ async function executeStructured<T>({
         "模型响应未完成（服务商代码 max_output_tokens）；已记录服务商报告用量，不会自动补写。该代码本身不能区分长度限制与结构化协议兼容问题。",
         false,
         usage,
+        undefined,
+        diagnostic,
       );
     if (raw.status !== "completed" || raw.error)
       throw new ModelCallError(
         "模型输出被截断、未完成或失败；已记录实际用量，不会自动补写。",
         false,
         usage,
+        undefined,
+        diagnostic,
       );
     if (!Array.isArray(raw.output))
-      throw new ModelCallError("模型响应缺少结构化输出，已记录实际用量。", false, usage);
+      throw new ModelCallError(
+        "模型响应缺少结构化输出，已记录实际用量。",
+        false,
+        usage,
+        undefined,
+        diagnostic,
+      );
     if (
       raw.output.some(
         (item) =>
@@ -855,6 +941,8 @@ async function executeStructured<T>({
         "模型拒绝了本次请求；已记录实际用量，不会自动重试或替换结果。",
         false,
         usage,
+        undefined,
+        diagnostic,
       );
     if (strict) {
       const calls = raw.output.filter((item) => item?.type === "function_call");
@@ -871,6 +959,8 @@ async function executeStructured<T>({
           "模型未返回唯一且匹配的结构化提交函数，已记录实际用量；不会切换输出模式。",
           false,
           usage,
+          undefined,
+          diagnostic,
         );
       output = calls[0].arguments;
     } else {
@@ -898,6 +988,8 @@ async function executeStructured<T>({
         "模型输出被截断或未正常完成；已记录实际用量，不会自动补写。",
         false,
         usage,
+        undefined,
+        diagnostic,
       );
     if (strict) {
       const calls = choice.message?.tool_calls;
@@ -912,6 +1004,8 @@ async function executeStructured<T>({
           "模型未返回唯一且匹配的结构化提交函数，已记录实际用量；不会切换输出模式。",
           false,
           usage,
+          undefined,
+          diagnostic,
         );
       output = calls[0].function.arguments;
     } else {

@@ -841,6 +841,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
         step.role,
         {
           usage: usage ?? null,
+          ...(modelError?.diagnostic ? { structureDiagnostic: modelError.diagnostic } : {}),
           ...(config.currency === "USD"
             ? { heldReservationUsd: uncertain ? step.reservation : 0 }
             : { heldReservationCny: uncertain ? step.reservation : 0 }),

@@ -379,6 +379,160 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
   });
 });
 
+describe.each(["deepseek", "openai"] as const)(
+  "%s safe strict-function diagnostics",
+  (provider) => {
+    it.each([
+      "two-calls",
+      "wrong-name",
+      "non-string-arguments",
+      "untrusted-finish",
+      "wrong-type",
+    ] as const)("records only safe structure metadata for %s without retrying", async (variant) => {
+      vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "strict-tool");
+      vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com/beta");
+      vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
+      const config = getModelConfig(provider);
+      const args = JSON.stringify({
+        ...strategy,
+        title: "PRIVATE_ARGUMENT_CONTENT",
+        estimatedCost: "unknown",
+      });
+      const functions: { name: string; arguments: unknown }[] = [
+        { name: "submit_propose", arguments: args },
+      ];
+      if (variant === "two-calls") functions.push({ ...functions[0] });
+      if (variant === "wrong-name") functions[0].name = "PRIVATE_FUNCTION_NAME";
+      if (variant === "non-string-arguments")
+        functions[0].arguments = { private: "PRIVATE_ARGUMENT_CONTENT" };
+      const finish =
+        variant === "untrusted-finish"
+          ? "PRIVATE_FINISH_STATE"
+          : provider === "openai"
+            ? "completed"
+            : "tool_calls";
+      const envelope =
+        provider === "openai"
+          ? {
+              id: "synthetic-structure-response",
+              model: config.id,
+              service_tier: "default",
+              status: finish,
+              output: functions.map((call) => ({
+                ...call,
+                type: variant === "wrong-type" ? "PRIVATE_OUTPUT_TYPE" : "function_call",
+                status: "completed",
+              })),
+              usage: {
+                input_tokens: 10,
+                output_tokens: 20,
+                input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+              },
+            }
+          : {
+              id: "synthetic-structure-response",
+              model: config.id,
+              choices: [
+                {
+                  finish_reason: finish,
+                  message: {
+                    content: "PRIVATE_MESSAGE_CONTENT",
+                    tool_calls: functions.map((call) => ({
+                      type: variant === "wrong-type" ? "PRIVATE_OUTPUT_TYPE" : "function",
+                      function: call,
+                    })),
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 10, completion_tokens: 20 },
+            };
+      const fetchDouble = vi.fn().mockResolvedValue(Response.json(envelope));
+      vi.stubGlobal("fetch", fetchDouble);
+      const error = await generateStrategy(input, config).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ModelCallError);
+      if (!(error instanceof ModelCallError)) throw new Error("Expected strict structure failure");
+      const count = variant === "two-calls" ? 2 : 1;
+      const countedCalls = variant === "wrong-type" && provider === "openai" ? 0 : count;
+      expect(error).toMatchObject({
+        uncertain: false,
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+      expect(error.repair).toBeUndefined();
+      expect(error.diagnostic).toEqual({
+        expectedFunction: "submit_propose",
+        receivedFunctionCount: countedCalls,
+        matchingFunctionCount: variant === "wrong-name" ? 0 : countedCalls,
+        stringArgumentCount: variant === "non-string-arguments" ? 0 : countedCalls,
+        unexpectedItemCount: variant === "wrong-type" ? 1 : 0,
+        incompleteFunctionCount: 0,
+        finishState:
+          variant === "untrusted-finish"
+            ? "other"
+            : provider === "openai"
+              ? "completed"
+              : "tool_calls",
+      });
+      expect(JSON.stringify(error.diagnostic)).not.toContain("PRIVATE_");
+      expect(String(error)).not.toContain("PRIVATE_");
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+      expect(billing.reserveBilling).toHaveBeenCalledTimes(1);
+      expect(billing.settleBilling).toHaveBeenCalledTimes(1);
+      expect(billing.holdBilling).not.toHaveBeenCalled();
+    });
+  },
+);
+
+describe("strict unknown sentinel is exact", () => {
+  it.each(["unknown", '"unknown"', String.raw`\"unknown\"`, "unknown "])(
+    "does not silently normalize extra quoting or whitespace: %j",
+    async (sentinel) => {
+      vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "strict-tool");
+      vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com/beta");
+      const output = JSON.stringify({
+        ...strategy,
+        estimatedCost: sentinel,
+        estimatedHours: "unknown",
+      });
+      const fetchDouble = vi.fn().mockResolvedValue(
+        Response.json({
+          id: "synthetic-unknown-response",
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                tool_calls: [
+                  { type: "function", function: { name: "submit_propose", arguments: output } },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 20 },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchDouble);
+      const result = await generateStrategy(input).catch((caught: unknown) => caught);
+      if (sentinel === "unknown") {
+        expect(result).toMatchObject({ value: { estimatedCost: null, estimatedHours: null } });
+      } else {
+        expect(result).toBeInstanceOf(ModelCallError);
+        if (!(result instanceof ModelCallError))
+          throw new Error("Expected unchanged invalid sentinel");
+        expect(result.repair).toMatchObject({
+          feedback: expect.stringContaining("estimatedCost: invalid_type"),
+          rejectedOutput: output,
+        });
+        expect(result.diagnostic).toBeUndefined();
+      }
+      const sent = JSON.parse(fetchDouble.mock.calls[0][1].body).messages[0].content;
+      const rule = sent.slice(sent.indexOf("在 estimatedCost"), sent.indexOf("其他字段的 unknown"));
+      expect(rule).toContain("字符串“unknown”");
+      expect(rule).toContain("字符串内容仅为 unknown，不含额外引号或反斜杠");
+      expect(rule).not.toContain(String.raw`\"`);
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
 describe("provider isolation and native billing with explicit test doubles", () => {
   const gptResponse = (content = JSON.stringify(strategy)) =>
     Response.json({

@@ -51,6 +51,7 @@ test("real identity bootstrap blocks draft creation and history, then one blur a
   let firstTag = "";
   let drafts = 0;
   let draftId = "";
+  let draftFulfilled = false;
   let lists = 0;
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -82,6 +83,7 @@ test("real identity bootstrap blocks draft creation and history, then one blur a
     draftId = (await response.json()).id;
     await new Promise((resolve) => setTimeout(resolve, 100));
     await route.fulfill({ response });
+    draftFulfilled = true;
   });
   try {
     await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -102,7 +104,13 @@ test("real identity bootstrap blocks draft creation and history, then one blur a
     await input.fill(goal);
     await history.click();
     await expect.poll(() => draftId).not.toBe("");
+    await expect.poll(() => draftFulfilled).toBe(true);
     await expect(page.getByRole("dialog", { name: "我的历史与恢复码" })).toBeVisible();
+    await expect(
+      page
+        .getByRole("dialog", { name: "我的历史与恢复码" })
+        .getByRole("button", { name: "刷新", exact: true }),
+    ).toBeEnabled();
     expect(drafts).toBe(1);
     expect(identities).toBe(2);
     const identity = await (await page.request.get("/api/identity")).json();

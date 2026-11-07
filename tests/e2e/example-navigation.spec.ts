@@ -87,10 +87,11 @@ test("explicit UI fixture: initial restore preserves a focused source card throu
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.addInitScript(() => {
+  const stepNumber = (page.viewportSize()?.width ?? 1440) < 650 ? 9 : 1;
+  await page.addInitScript((number) => {
     const probe = window as typeof window & { __arenaRestoreFocusFrames?: boolean };
     const observer = new MutationObserver(() => {
-      const source = document.querySelector<HTMLElement>('[data-step-source="0"][role="button"]');
+      const source = document.querySelector<HTMLElement>(`[aria-label="查看第 ${number} 步"]`);
       if (!source) return;
       observer.disconnect();
       source.focus({ preventScroll: true });
@@ -101,7 +102,7 @@ test("explicit UI fixture: initial restore preserves a focused source card throu
       );
     });
     observer.observe(document, { childList: true, subtree: true });
-  });
+  }, stepNumber);
   const target = completedTarget();
   const calls: string[] = [];
   await page.route("**/api/**", async (route) => {
@@ -136,10 +137,12 @@ test("explicit UI fixture: initial restore preserves a focused source card throu
       ),
     )
     .toBe(true);
-  const source = page.getByRole("button", { name: "查看第 1 步", exact: true });
+  const source = page.getByRole("button", { name: `查看第 ${stepNumber} 步`, exact: true });
   await expect(source).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog", { name: /^第 1 步 ·/ })).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: new RegExp(`^第 ${stepNumber} 步 ·`) }),
+  ).toBeVisible();
   expect(
     calls.every((call) =>
       [

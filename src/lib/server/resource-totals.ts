@@ -21,42 +21,29 @@ export function costPlanGate(plan: CostPlan): string {
 
 /** This validates a declaration and literal provenance, not the real-world quote's truth. */
 export function normalizeCostPlan(strategy: Strategy, provided?: string): Strategy {
-  const plan = strategy.costPlan;
-  if (!plan) return strategy; // Historical data stays readable without manufacturing a breakdown.
+  const declaredPlan = strategy.costPlan;
+  if (!declaredPlan) return strategy; // Historical data stays readable without manufacturing a breakdown.
+  const plan = { ...declaredPlan, items: declaredPlan.items.map((item) => ({ ...item })) };
   const ids = new Set<string>();
   const labels = new Set<string>();
   const quotedCharges: { quote: string; amount: number | null }[] = [];
-  for (const item of plan.items) {
-    if (ids.has(item.id) || labels.has(item.label))
-      throw new Error("必要费用清单存在重复编号或项目，不能重复计算同一支出。");
+  for (const [index, item] of plan.items.entries()) {
+    if (ids.has(item.id)) throw new Error("必要费用清单存在重复编号，不能重复计算同一支出。");
     ids.add(item.id);
-    labels.add(item.label);
     if (item.amount !== null && Math.abs(item.amount * 100 - Math.round(item.amount * 100)) > 1e-6)
       throw new Error("必要费用金额最多保留两位小数，未知金额填写 null。");
     if (item.basis === "unknown" && item.amount !== null)
       throw new Error("未知费用不得填写确定金额或零，情景估计须明确标为假设。");
     if (item.basis === "user") {
       if (!item.quote.trim() || (provided !== undefined && !provided.includes(item.quote)))
-        throw new Error("费用事实必须逐字引用当前用户原文，不能用模型解释冒充报价。");
-      if (!item.quote.includes(item.label))
-        throw new Error("用户提供的费用项目名称须来自所引原文，不得新增报价形式或包含范围。");
+        throw new Error(
+          "费用事实必须逐字引用当前用户原文；quote复制同一项目及金额的原文短句，label可取金额前原文短片段，不添加报价范围。",
+        );
+      const prices = [...item.quote.matchAll(/\d+(?:\.\d+)?\s*元/g)];
       if (item.amount !== null) {
-        const prices = [...item.quote.matchAll(/\d+(?:\.\d+)?\s*元/g)];
-        const clause = item.quote.split(/[，,。；;\n]/).find((part) => part.includes(item.label));
-        const price = clause?.match(/\d+(?:\.\d+)?\s*元/);
-        const gap =
-          clause && price
-            ? clause.slice(clause.indexOf(item.label) + item.label.length, price.index)
-            : "";
-        if (
-          prices.length !== 1 ||
-          !price ||
-          price.index! < (clause?.indexOf(item.label) ?? 0) + item.label.length ||
-          Number.parseFloat(price[0]) !== item.amount ||
-          !/^(?:\s|的|报价|费用|价格|金额|收费|总价|为|是|[:：])*$/.test(gap)
-        )
+        if (prices.length !== 1 || Number.parseFloat(prices[0][0]) !== item.amount)
           throw new Error(
-            "费用事实须逐字引用单项明确的项目与金额片段，不能补造报价或把其他项目金额移用。",
+            "费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额，label可取该句金额前原文短片段。",
           );
       }
       if (item.amount !== null && /假设|如果|若|可能|预计|大约|约\d|是否/.test(item.quote))
@@ -72,8 +59,15 @@ export function normalizeCostPlan(strategy: Strategy, provided?: string): Strate
       )
         throw new Error("同一原文报价被重复列入费用清单，须先核实包含关系再计算。");
       quotedCharges.push({ quote: item.quote, amount: item.amount });
+      // The model's display label is not evidence. Keep only wording derived from the quote.
+      const sourceLabel = (prices.length === 1 ? item.quote.replace(prices[0][0], "") : item.quote)
+        .trim()
+        .replace(/[，,。；;：:\s]+$/u, "");
+      item.label = sourceLabel && sourceLabel.length <= 24 ? sourceLabel : `原文报价${index + 1}`;
     } else if (item.quote)
       throw new Error("假设和未知费用不填写事实引用，成立条件写入项目名称或步骤。");
+    if (labels.has(item.label)) throw new Error("必要费用清单存在重复项目，不能重复计算同一支出。");
+    labels.add(item.label);
   }
   const total = costPlanTotal(plan);
   if (
@@ -84,9 +78,7 @@ export function normalizeCostPlan(strategy: Strategy, provided?: string): Strate
       "全程费用估计与必要费用清单不一致，未知项、未闭合范围或空清单不得推出完整总额。",
     );
   const gate = costPlanGate(plan);
-  const marker = strategy.resources.indexOf(COST_GATE);
-  if (marker >= 0 && strategy.resources.slice(marker) !== gate)
-    throw new Error("服务端费用门槛与必要清单不一致，不得另行维护公式。");
+  // Copied revisions can carry an older server gate. Always regenerate this reserved suffix.
   const resources = strategy.resources.split(COST_GATE)[0].trim();
   const ownFields = [
     strategy.thesis,
@@ -107,7 +99,7 @@ export function normalizeCostPlan(strategy: Strategy, provided?: string): Strate
   const canonicalResources = `${resources}\n${gate}`;
   if (canonicalResources.length > 500)
     throw new Error("资源说明与完整费用清单超过500字，请精简非费用说明和项目名称，保留必要项目。");
-  return { ...strategy, resources: canonicalResources, estimatedCost: total };
+  return { ...strategy, costPlan: plan, resources: canonicalResources, estimatedCost: total };
 }
 
 type TimeUnit = "分钟" | "小时";

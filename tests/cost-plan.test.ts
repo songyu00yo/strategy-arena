@@ -215,7 +215,7 @@ describe("single necessary-expense list and server execution gate", () => {
     ).toEqual({ costPlan: { items: [{ amount: null, basis: "unknown" }] } });
   });
 
-  it("uses the same plan in a revision and rejects a forged server formula", () => {
+  it("uses the same plan in a revision and replaces a copied server formula", () => {
     const strategy = route({
       complete: true,
       items: [item("diagnostic", "已花安全检测费", 20), item("execution", "后续正式执行", null)],
@@ -226,9 +226,10 @@ describe("single necessary-expense list and server execution gate", () => {
     );
     expect(checked.strategy.resources).toContain("已花安全检测费(假设)20元");
     expect(checked.strategy.estimatedCost).toBeNull();
-    expect(() =>
-      normalizeCostPlan({ ...strategy, resources: "【服务端费用门槛】总费用0元" }),
-    ).toThrow("不得另行维护公式");
+    const replaced = normalizeCostPlan({ ...strategy, resources: "【服务端费用门槛】总费用0元" });
+    expect(replaced.resources).not.toContain("总费用0元");
+    expect(replaced.resources).toContain("累计总额未知");
+    expect(normalizeCostPlan(replaced)).toEqual(replaced);
   });
 });
 
@@ -261,7 +262,7 @@ describe("quote attribution and comparison assumptions", () => {
     );
     expect(independent.estimatedCost).toBe(600);
   });
-  it("requires the current literal quote and rejects an invented quote scope", () => {
+  it("requires the current literal quote and discards an invented display-label scope", () => {
     const strategy = route({ complete: false, items: [userItem] });
     expect(normalizeCostPlan(strategy, quote).estimatedCost).toBeNull();
     expect(() => normalizeCostPlan(strategy, "旧条件已不适用")).toThrow("逐字引用");
@@ -278,12 +279,13 @@ describe("quote attribution and comparison assumptions", () => {
     expect(() => normalizeCostPlan(route({ complete: true, items: [userItem] }), quote)).toThrow(
       "包含范围",
     );
-    expect(() =>
-      normalizeCostPlan(
-        route({ complete: false, items: [{ ...userItem, label: "裸车价" }] }),
-        quote,
-      ),
-    ).toThrow("报价形式");
+    const labelled = route({ complete: false, items: [{ ...userItem, label: "裸车价" }] });
+    const before = structuredClone(labelled);
+    const normalized = normalizeCostPlan(labelled, quote);
+    expect(normalized.costPlan?.items[0].label).toBe("方案报价，包含项目未知");
+    expect(normalized.resources).not.toContain("裸车价");
+    expect(normalized.costPlan?.items[0].quote).toBe(quote);
+    expect(labelled).toEqual(before);
     expect(() =>
       normalizeCostPlan(route({ complete: false, items: [{ ...userItem, amount: 500 }] }), quote),
     ).toThrow("补造报价");
@@ -293,6 +295,62 @@ describe("quote attribution and comparison assumptions", () => {
         "若报价600元则采用",
       ),
     ).toThrow("条件或估计");
+  });
+
+  it.each([
+    ["维修费（口头报价）", "现有车的维修口头报价 300 元", "现有车的维修口头报价"],
+    ["维修费", "现有车的维修口头报价 300 元", "现有车的维修口头报价"],
+    ["租金", "房间每月租金报价 300 元", "房间每月租金报价"],
+    ["全包费用（已含税）", "设备租赁费用为300元", "设备租赁费用为"],
+  ])(
+    "derives factual labels from a single literal quote instead of rejecting a shorthand %s",
+    (label, sourceQuote, derived) => {
+      const raw = route({
+        complete: true,
+        items: [{ id: "price", label, amount: 300, basis: "user", quote: sourceQuote }],
+      });
+      const normalized = normalizeCostPlan(raw, sourceQuote);
+      expect(normalized.costPlan?.items[0]).toMatchObject({
+        label: derived,
+        amount: 300,
+        quote: sourceQuote,
+      });
+      expect(normalized.estimatedCost).toBe(300);
+      expect(normalizeCostPlan(normalized, sourceQuote)).toEqual(normalized);
+      expect(raw.costPlan?.items[0].label).toBe(label);
+    },
+  );
+
+  it("uses a short neutral label for a long quote while preserving the complete source", () => {
+    const sourceQuote = `${"当前用户提供的费用范围说明".repeat(3)}报价300元`;
+    const normalized = normalizeCostPlan(
+      route({
+        complete: false,
+        items: [{ ...userItem, label: "免检测费全包价", amount: 300, quote: sourceQuote }],
+      }),
+      sourceQuote,
+    );
+    expect(normalized.costPlan?.items[0].label).toBe("原文报价1");
+    expect(normalized.costPlan?.items[0].quote).toBe(sourceQuote);
+    expect(normalized.resources).not.toContain("免检测费");
+  });
+
+  it("regenerates a copied gate after the cost plan changes without leaving two formulas", () => {
+    const old = normalizeCostPlan(
+      route({ complete: true, items: [item("first", "已知情景", 100)] }),
+    );
+    const updated = normalizeCostPlan({
+      ...old,
+      estimatedCost: null,
+      costPlan: { complete: true, items: [item("first", "更新情景", 200)] },
+    });
+    expect(updated.resources).toContain("更新情景(假设)200元");
+    expect(updated.resources).not.toContain("已知情景");
+    expect(updated.resources.match(/【服务端费用门槛】/g)).toHaveLength(1);
+    expect(normalizeCostPlan(updated)).toEqual(updated);
+    expect(() => normalizeCostPlan({ ...updated, failureCondition: "总费用100元" })).toThrow(
+      "正式门槛",
+    );
   });
 
   it("does not turn a user quote into a superlative or an assumed quote range", () => {

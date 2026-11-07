@@ -823,8 +823,23 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
               .flatMap((attack) =>
                 attack.requests.map((request) => ({ request, attackId: attack.id })),
               );
+      const groupedRequests = new Map<
+        string,
+        { request: import("@/lib/contracts").ToolRequest; attackIds: Set<string> }
+      >();
+      for (const entry of requests) {
+        const key = hashOf(entry.request);
+        const existing = groupedRequests.get(key);
+        if (existing) existing.attackIds.add(entry.attackId);
+        else
+          groupedRequests.set(key, {
+            request: entry.request,
+            attackIds: new Set([entry.attackId]),
+          });
+      }
       evidence = [];
-      for (const [index, entry] of requests.entries()) {
+      for (const [index, entry] of [...groupedRequests.values()].entries()) {
+        const attackIds = [...entry.attackIds];
         const latestState = getVersion(versionId);
         if (
           !["running", "ready"].includes(latestState.status) ||
@@ -862,7 +877,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
               throw error;
             const skipped: import("@/lib/contracts").Evidence = {
               id: `E-${id()}`,
-              attackId: entry.attackId,
+              attackId: attackIds[0],
               actionId: step.id,
               tool: entry.request.tool,
               status: "unavailable",
@@ -875,15 +890,20 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
               assumptions: "",
               createdAt: now(),
             };
+            const skippedEvidence = attackIds.map((attackId) => ({
+              ...structuredClone(skipped),
+              id: `E-${id()}`,
+              attackId,
+            }));
             atomic(() => {
               const latest = getVersion(versionId);
-              latest.evidence.push(skipped);
+              latest.evidence.push(...skippedEvidence);
               saveVersion(latest);
               event(arenaId, versionId, "tool_skipped", error.message, "verify", "tools", {
                 request: entry.request,
               });
             });
-            current.evidence.push(skipped);
+            current.evidence.push(...skippedEvidence);
             continue;
           }
         }
@@ -892,17 +912,23 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           external &&
           current.agent!.toolsUsed < AGENT_LIMITS.tools &&
           current.agent!.externalToolsUsed < AGENT_LIMITS.externalTools;
-        const obtained = (
-          await runAgentTool(
-            current,
-            entry.request,
-            entry.attackId,
-            `${step.id}-tool-${index}`,
-            (amount) => {
-              paidToolUsd = amount;
-            },
-          )
-        ).map((evidence) => ({ ...evidence, actionId: step.id }));
+        const resultEvidence = await runAgentTool(
+          current,
+          entry.request,
+          attackIds[0],
+          `${step.id}-tool-${index}`,
+          (amount) => {
+            paidToolUsd = amount;
+          },
+        );
+        const obtained = attackIds.flatMap((attackId) =>
+          resultEvidence.map((item) => ({
+            ...structuredClone(item),
+            id: `E-${id()}`,
+            attackId,
+            actionId: step.id,
+          })),
+        );
         // Each result is committed before another external request can start.
         atomic(() => {
           const latest = getVersion(versionId);
@@ -1166,14 +1192,21 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       if (
         modelError?.repair &&
         (!action ||
-          (action.kind !== "plan" &&
-            !step.role.includes(":repair") &&
+          ((action.kind === "plan"
+            ? !JSON.parse(action.payload).repairOf
+            : !step.role.includes(":repair")) &&
             modelRequestsUsed(versionId) < AGENT_LIMITS.modelRequests - 1)) &&
         !uncertain &&
         !["paused", "superseded"].includes(version.status) &&
-        !db()
-          .prepare("SELECT id FROM steps WHERE version_id=? AND stage=? AND role=?")
-          .get(versionId, step.stage, repairRole)
+        !(action?.kind === "plan"
+          ? db()
+              .prepare(
+                "SELECT step_id FROM agent_actions WHERE version_id=? AND kind='plan' AND json_extract(payload,'$.repairOf')=?",
+              )
+              .get(versionId, action.step_id)
+          : db()
+              .prepare("SELECT id FROM steps WHERE version_id=? AND stage=? AND role=?")
+              .get(versionId, step.stage, repairRole))
       ) {
         const repairId = id();
         db()
@@ -1181,7 +1214,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
             "INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal) VALUES(?,?,?,?,?,?)",
           )
           .run(repairId, arenaId, versionId, step.stage, repairRole, step.ordinal + 0.01);
-        if (action) copyActionForRetry(version, action, repairId);
+        if (action) copyActionForRetry(version, action, repairId, modelError.repair);
         version.status = "ready";
         version.error = null;
         event(

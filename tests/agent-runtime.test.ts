@@ -22,6 +22,7 @@ const models = vi.hoisted(() => ({
   attack: vi.fn(),
   revise: vi.fn(),
   judge: vi.fn(),
+  estimateStructured: vi.fn(),
   estimate: 0.001,
 }));
 const externalTool = vi.hoisted(() => vi.fn());
@@ -50,7 +51,7 @@ vi.mock("../src/lib/server/model", () => {
       outputPrice: 1,
     }),
     estimateCallCost: () => models.estimate,
-    estimateStructuredCall: () => ({ amount: models.estimate, tokens: 100, currency: "CNY" }),
+    estimateStructuredCall: models.estimateStructured,
     generateStructured: models.plan,
     generateStrategy: models.propose,
     generateAttack: models.attack,
@@ -272,6 +273,9 @@ beforeEach(() => {
   );
   secondDecision = thirdDecision = "judge";
   models.estimate = 0.001;
+  models.estimateStructured
+    .mockReset()
+    .mockImplementation(() => ({ amount: models.estimate, tokens: 100, currency: "CNY" }));
   externalTool.mockReset().mockImplementation(() => {
     throw new Error("External tools are forbidden in this synthetic runtime suite");
   });
@@ -329,7 +333,7 @@ describe("durable bounded agent with synthetic models", () => {
     const judgeInput = models.judge.mock.calls[0][0] as StageInput;
     expect(judgeInput.strategies.every((item) => item.firstAction.includes("第1轮"))).toBe(true);
     expect(modelRequestsUsed(version.id)).toBe(12);
-    expect(version.agent?.toolsUsed).toBe(4);
+    expect(version.agent?.toolsUsed).toBe(2);
     expect(fetch).not.toHaveBeenCalled();
     closeDb();
     expect(getArena(snapshot.id, owner).versions[0]).toEqual(version);
@@ -343,7 +347,7 @@ describe("durable bounded agent with synthetic models", () => {
       true,
     );
     expect(models.plan).toHaveBeenCalledTimes(3);
-    expect(version.agent?.toolsUsed).toBe(5);
+    expect(version.agent?.toolsUsed).toBe(3);
   });
   it("journals the exact structured planner input used for each checkpoint", async () => {
     secondDecision = "supplement";
@@ -356,6 +360,112 @@ describe("durable bounded agent with synthetic models", () => {
       expect(recorded.input_hash).toBe(hashOf(request.input));
     }
     expect(version.agent?.plans).toHaveLength(3);
+  });
+  it("repairs an oversized checkpoint-two plan once using frozen diagnostics and a fresh estimate", async () => {
+    const rejectedOutput = JSON.stringify({ ...plan(2), summary: "长".repeat(614) });
+    const feedback = "summary: too_big（最多500字符；实收614字符）";
+    models.plan.mockImplementation(async (request) => {
+      expect(request.allowRepair).toBe(true);
+      expect(request.system).toContain("summary建议120至180字");
+      expect(request.system).toContain("绝不超过500字符");
+      if (request.input.checkpoint === 2 && !request.input.repairFeedback)
+        throw new ModelCallError("Synthetic summary too long", false, usage, {
+          feedback,
+          rejectedOutput,
+        });
+      return { value: plan(request.input.checkpoint), usage };
+    });
+    const completed = await drive(arena());
+    const version = assertCompleted(completed, 1);
+    expect(version.agent?.plans.map((item) => item.checkpoint)).toEqual([1, 2]);
+    expect(models.plan).toHaveBeenCalledTimes(3);
+    expect(modelRequestsUsed(version.id)).toBe(13);
+    const repairRequest = models.plan.mock.calls.find(
+      ([request]) => request.input.repairFeedback,
+    )![0];
+    expect(repairRequest.input).toMatchObject({
+      checkpoint: 2,
+      repairFeedback: feedback,
+      rejectedOutput,
+    });
+    const repairAction = actionFor(repairRequest.attemptId)!;
+    const sourceId = JSON.parse(repairAction.payload).repairOf;
+    expect(sourceId).not.toBe(repairAction.step_id);
+    expect(JSON.parse(repairAction.dependencies)).toEqual(
+      JSON.parse(actionFor(sourceId)!.dependencies),
+    );
+    expect(JSON.parse(repairAction.input_body!)).toEqual(repairRequest.input);
+    expect(repairAction.input_hash).toBe(hashOf(repairRequest.input));
+    const estimation = models.estimateStructured.mock.calls.find(
+      ([request]) => request.attemptId === repairAction.step_id,
+    )![0];
+    expect(estimation.input).toEqual(repairRequest.input);
+    expect(JSON.parse(actionFor(sourceId)!.input_body!)).not.toHaveProperty("repairFeedback");
+    expect(version.costCny).toBeCloseTo(usage.estimatedCny * 13);
+    expect(version.reservedCny).toBe(0);
+  });
+  it("permits one independent repair per planning checkpoint without counting rejected plans as committed", async () => {
+    secondDecision = "supplement";
+    const failed = new Set<number>();
+    models.plan.mockImplementation(async (request) => {
+      const checkpoint = request.input.checkpoint as number;
+      if (!failed.has(checkpoint)) {
+        failed.add(checkpoint);
+        throw new ModelCallError("Synthetic schema failure", false, usage, {
+          feedback: `checkpoint-${checkpoint} summary too long`,
+          rejectedOutput: `rejected-checkpoint-${checkpoint}`,
+        });
+      }
+      expect(request.input.repairFeedback).toBe(`checkpoint-${checkpoint} summary too long`);
+      expect(request.input.rejectedOutput).toBe(`rejected-checkpoint-${checkpoint}`);
+      return { value: plan(checkpoint), usage };
+    });
+    const version = assertCompleted(await drive(arena()), 3);
+    expect(version.agent?.plans.map((item) => item.checkpoint)).toEqual([1, 2, 3]);
+    expect(models.plan).toHaveBeenCalledTimes(6);
+    expect(modelRequestsUsed(version.id)).toBe(16);
+    const repairs = version.agent!.actions.filter(
+      (action) => action.kind === "plan" && JSON.parse(actionFor(action.id)!.payload).repairOf,
+    );
+    expect(repairs).toHaveLength(3);
+    expect(
+      new Set(repairs.map((action) => JSON.parse(actionFor(action.id)!.payload).repairOf)).size,
+    ).toBe(3);
+  });
+  it("stops after a failed planner repair instead of creating a repair chain", async () => {
+    models.plan.mockRejectedValue(
+      new ModelCallError("Synthetic repeated schema failure", false, usage, {
+        feedback: "summary too long",
+        rejectedOutput: "rejected",
+      }),
+    );
+    const failed = await drive(arena());
+    expect(failed.versions[0]).toMatchObject({ status: "failed", verdict: { outcome: "partial" } });
+    expect(failed.versions[0].agent?.plans).toHaveLength(0);
+    expect(models.plan).toHaveBeenCalledTimes(2);
+    expect(modelRequestsUsed(failed.activeVersionId)).toBe(2);
+    expect(failed.steps).toHaveLength(2);
+    expect(failed.steps.every((step) => step.status === "failed")).toBe(true);
+  });
+  it("requires a newly affordable reservation before a planner repair is sent", async () => {
+    models.plan.mockRejectedValueOnce(
+      new ModelCallError("Synthetic malformed plan", false, usage, {
+        feedback: "summary too long",
+        rejectedOutput: "rejected",
+      }),
+    );
+    const created = arena();
+    const first = await advanceArena(created.id, owner, created.activeVersionId);
+    expect(first.versions[0].status).toBe("ready");
+    models.estimate = 100;
+    const stopped = await advanceArena(created.id, owner, created.activeVersionId);
+    expect(stopped.versions[0]).toMatchObject({
+      status: "paused",
+      verdict: { outcome: "partial" },
+      reservedCny: 0,
+    });
+    expect(models.plan).toHaveBeenCalledTimes(1);
+    expect(modelRequestsUsed(created.activeVersionId)).toBe(1);
   });
   it("runs six attacks across two rounds and reads only the latest revision per role", async () => {
     secondDecision = "second_round";
@@ -446,8 +556,15 @@ describe("durable bounded agent with synthetic models", () => {
       value: {
         ...attack(input, attemptId),
         requests: [
-          { tool: "search_materials", query: "课程教材" },
-          { tool: "calculate", expression: "1+2", assumptions: "只核验示例运算" },
+          {
+            tool: "search_materials",
+            query: `课程教材${input.role}第${actionFor(attemptId)!.round}轮`,
+          },
+          {
+            tool: "calculate",
+            expression: "1+2",
+            assumptions: `只核验${input.role}第${actionFor(attemptId)!.round}轮示例运算`,
+          },
         ],
       },
       usage,
@@ -514,6 +631,26 @@ describe("durable bounded agent with synthetic models", () => {
     expect(version.agent?.plans).toHaveLength(3);
     expect(version.attacks).toHaveLength(6);
     expect(completed.steps.filter((step) => step.status === "failed")).toHaveLength(1);
+    expect(version.costCny).toBeCloseTo(usage.estimatedCny * 20);
+  });
+  it("counts a planner repair inside the twenty-request two-round allowance", async () => {
+    secondDecision = "supplement";
+    thirdDecision = "second_round";
+    models.plan.mockImplementation(async (request) => {
+      if (request.input.checkpoint === 2 && !request.input.repairFeedback)
+        throw new ModelCallError("Synthetic plan too long", false, usage, {
+          feedback: "summary too long",
+          rejectedOutput: "rejected",
+        });
+      return { value: plan(request.input.checkpoint), usage };
+    });
+    const completed = await drive(arena());
+    const version = assertCompleted(completed, 1);
+    expect(modelRequestsUsed(version.id)).toBe(20);
+    expect(models.plan).toHaveBeenCalledTimes(4);
+    expect(version.agent?.plans).toHaveLength(3);
+    expect(version.attacks).toHaveLength(6);
+    expect(models.judge).toHaveBeenCalledTimes(1);
     expect(version.costCny).toBeCloseTo(usage.estimatedCny * 20);
   });
   it("does not dispatch the same claimed planner twice during concurrent advance", async () => {
@@ -631,7 +768,12 @@ describe("durable bounded agent with synthetic models", () => {
     ).toMatchObject({ count: 0 });
   });
   it("retains an uncertain planner reservation and never silently replays it", async () => {
-    models.plan.mockRejectedValueOnce(new ModelCallError("Synthetic lost connection", true));
+    models.plan.mockRejectedValueOnce(
+      new ModelCallError("Synthetic lost connection", true, undefined, {
+        feedback: "do not retry unknown",
+        rejectedOutput: "unconfirmed",
+      }),
+    );
     const snapshot = arena();
     const failed = await advanceArena(snapshot.id, owner, snapshot.activeVersionId);
     expect(failed.versions[0]).toMatchObject({
@@ -774,6 +916,194 @@ describe("durable bounded agent with synthetic models", () => {
     );
     expect(snapshot.versions[0].toolReservedUsd).toBe(0);
     expect(snapshot.versions[0].status).toBe("completed");
+    const skipped = snapshot.versions[0].evidence.filter(
+      (entry) => entry.title === "工具费用额度不足",
+    );
+    expect(skipped).toHaveLength(3);
+    expect(new Set(skipped.map((entry) => entry.id)).size).toBe(3);
+    expect(skipped.map((entry) => entry.attackId).sort()).toEqual(
+      snapshot.versions[0].attacks.map((entry) => entry.id).sort(),
+    );
+  });
+  describe("single-action tool deduplication with synthetic MCP results", () => {
+    beforeEach(() => {
+      vi.stubEnv("ARENA_SEARCH_PROVIDER", "tavily");
+      vi.stubEnv("TAVILY_API_KEY", "synthetic-key");
+      vi.stubEnv("ARENA_TOOL_BATCH_ID", "synthetic-deduplication");
+      models.attack.mockImplementation(async (input, _config, attemptId) => ({
+        value: {
+          ...attack(input, attemptId),
+          requests: input.role === "B" ? [] : [{ tool: "search_web", query: "公开课程试听安排" }],
+        },
+        usage,
+      }));
+      externalTool.mockImplementation(async ({ attemptId, request }) => ({
+        attemptId,
+        status: "found",
+        query: request.query,
+        sources: [
+          {
+            id: "W-synthetic-shared-source",
+            url: "https://example.com/course",
+            title: "合成公开课程材料",
+            text: "合成资料仅用于工具去重回归。",
+            accessedAt: "2026-11-08T01:00:00.000Z",
+            contentHash: hashOf("synthetic shared source"),
+            query: request.query,
+            trust: "untrusted",
+            basis: "assumption",
+          },
+        ],
+        estimated: true,
+        estimatedUsd: 0.008,
+      }));
+    });
+    it("executes identical requests once and attributes separate evidence with the same source snapshot to each attack", async () => {
+      models.attack.mockImplementation(async (input, _config, attemptId) => ({
+        value: {
+          ...attack(input, attemptId),
+          requests:
+            input.role === "B"
+              ? []
+              : Array.from({ length: input.role === "A" ? 2 : 1 }, () => ({
+                  tool: "search_web",
+                  query: "公开课程试听安排",
+                })),
+        },
+        usage,
+      }));
+      const version = assertCompleted(await drive(arena()));
+      const shared = version.evidence.filter((item) => item.tool === "search_web");
+      expect(externalTool).toHaveBeenCalledTimes(1);
+      expect(version.agent).toMatchObject({ toolsUsed: 2, externalToolsUsed: 1 });
+      expect(version.toolCostUsd).toBeCloseTo(0.008);
+      expect(version.toolReservedUsd).toBe(0);
+      expect(shared).toHaveLength(2);
+      expect(new Set(shared.map((item) => item.id)).size).toBe(2);
+      expect(shared.map((item) => item.attackId).sort()).toEqual(
+        version.attacks
+          .filter((item) => item.from !== "B")
+          .map((item) => item.id)
+          .sort(),
+      );
+      expect(shared[0].references).toEqual(shared[1].references);
+      expect(shared[0].references?.[0]).toMatchObject({
+        accessedAt: "2026-11-08T01:00:00.000Z",
+        contentHash: hashOf("synthetic shared source"),
+        url: "https://example.com/course",
+      });
+      expect(shared[0].sourceIds).toEqual(shared[1].sourceIds);
+      expect(shared[0].createdAt).toBe(shared[1].createdAt);
+      expect(shared[0].actionId).toBe(shared[1].actionId);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+    it("keeps different exact parameters separate even when queries differ only by whitespace", async () => {
+      models.attack.mockImplementation(async (input, _config, attemptId) => ({
+        value: {
+          ...attack(input, attemptId),
+          requests:
+            input.role === "B"
+              ? []
+              : [
+                  {
+                    tool: "search_web",
+                    query: input.role === "A" ? "公开课程试听安排" : "公开课程试听安排 ",
+                  },
+                ],
+        },
+        usage,
+      }));
+      const version = assertCompleted(await drive(arena()));
+      expect(externalTool).toHaveBeenCalledTimes(2);
+      expect(externalTool.mock.calls.map(([input]) => input.request.query)).toEqual([
+        "公开课程试听安排",
+        "公开课程试听安排 ",
+      ]);
+      expect(version.agent).toMatchObject({ toolsUsed: 3, externalToolsUsed: 2 });
+      expect(version.toolCostUsd).toBeCloseTo(0.016);
+    });
+    it("reuses a known failed result without automatically sending the same paid request again", async () => {
+      externalTool.mockImplementation(async ({ attemptId, request }) => ({
+        attemptId,
+        query: request.query,
+        status: "error",
+        sources: [],
+        error: "Synthetic confirmed tool failure",
+        estimated: true,
+        estimatedUsd: 0.004,
+      }));
+      const snapshot = await drive(arena());
+      const version = assertCompleted(snapshot);
+      const failed = version.evidence.filter((item) => item.tool === "search_web");
+      expect(failed).toHaveLength(2);
+      expect(failed.every((item) => item.status === "error")).toBe(true);
+      expect(new Set(failed.map((item) => item.id)).size).toBe(2);
+      expect(version.toolCostUsd).toBeCloseTo(0.004);
+      expect(version.toolReservedUsd).toBe(0);
+      expect(version.agent).toMatchObject({ toolsUsed: 2, externalToolsUsed: 1 });
+      await advanceArena(snapshot.id, owner, snapshot.activeVersionId);
+      expect(externalTool).toHaveBeenCalledTimes(1);
+    });
+    it("persists shared successful evidence before a distinct uncertain request and retains only one uncertain reservation", async () => {
+      const found = externalTool.getMockImplementation()!;
+      externalTool.mockImplementation(async (input) =>
+        input.request.query === "结果待确认的合成查询"
+          ? { status: "uncertain", sources: [], error: "Synthetic response lost", estimated: true }
+          : found(input),
+      );
+      models.attack.mockImplementation(async (input, _config, attemptId) => ({
+        value: {
+          ...attack(input, attemptId),
+          requests: [
+            {
+              tool: "search_web",
+              query: input.role === "B" ? "结果待确认的合成查询" : "公开课程试听安排",
+            },
+          ],
+        },
+        usage,
+      }));
+      const snapshot = await drive(arena());
+      const version = snapshot.versions[0];
+      const shared = version.evidence.filter((item) => item.tool === "search_web");
+      expect(version.status).toBe("uncertain");
+      expect(shared).toHaveLength(2);
+      expect(shared.every((item) => item.status === "found")).toBe(true);
+      expect(shared.map((item) => item.attackId).sort()).toEqual(
+        version.attacks
+          .filter((item) => item.from !== "B")
+          .map((item) => item.id)
+          .sort(),
+      );
+      expect(version.agent).toMatchObject({ toolsUsed: 3, externalToolsUsed: 2 });
+      expect(version.toolCostUsd).toBeCloseTo(0.008);
+      expect(version.toolReservedUsd).toBeCloseTo(0.008);
+      expect(models.judge).not.toHaveBeenCalled();
+      await advanceArena(snapshot.id, owner, snapshot.activeVersionId);
+      expect(externalTool).toHaveBeenCalledTimes(2);
+    });
+    it("performs the same request anew in a later action and in a new version", async () => {
+      secondDecision = "second_round";
+      const first = await drive(arena());
+      const version = assertCompleted(first);
+      expect(externalTool).toHaveBeenCalledTimes(2);
+      expect(version.agent).toMatchObject({ toolsUsed: 3, externalToolsUsed: 2 });
+      expect(
+        new Set(
+          version.evidence
+            .filter((item) => item.tool === "search_web")
+            .map((item) => item.actionId),
+        ).size,
+      ).toBe(2);
+      const second = await drive(
+        newVersion(first.id, owner, challenge, "合成条件重赛，重新核验来源"),
+      );
+      const latest = second.versions.find((item) => item.id === second.activeVersionId)!;
+      expect(latest.status).toBe("completed");
+      expect(externalTool).toHaveBeenCalledTimes(4);
+      expect(latest.toolCostUsd).toBeCloseTo(0.016);
+      expect(latest.agent).toMatchObject({ toolsUsed: 3, externalToolsUsed: 2 });
+    });
   });
   it("reports a missing frozen corpus as a persistence failure instead of an empty search", async () => {
     const created = arena();

@@ -469,6 +469,7 @@ export interface StructuredRequest<T> {
   config?: ModelConfig;
   attemptId?: string;
   onPreview?: ModelPreviewCallback;
+  allowRepair?: boolean;
 }
 // Operational reservation ceiling, not a claim about the providers' undocumented tokenizers.
 // Enforced for <=1536px decoded images; reported usage above the reservation stops the draft.
@@ -614,7 +615,7 @@ export async function generateStructured<T>(
     attemptId: request.attemptId ?? randomUUID(),
     estimatedTokens: estimate.tokens,
     estimatedCost: estimate.amount,
-    allowRepair: false,
+    allowRepair: request.allowRepair === true,
     onPreview: request.onPreview,
     stage: request.name,
   });

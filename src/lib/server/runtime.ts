@@ -41,6 +41,7 @@ import {
   agentConfigurationHash,
 } from "./agent";
 import { draftWriter } from "./model-drafts";
+import { CostPlanValidationError } from "./resource-totals";
 import { allSources } from "./intakes";
 import { SCHEMA_VERSION } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
@@ -994,7 +995,10 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
               ? validateVerdict(result!.value as Verdict, input, frozenSources)
               : result?.value;
     } catch (error) {
-      const feedback = error instanceof Error ? error.message.slice(0, 500) : "协议引用不合法";
+      const feedback =
+        error instanceof Error
+          ? error.message.slice(0, error instanceof CostPlanValidationError ? 12000 : 500)
+          : "协议引用不合法";
       throw new ModelCallError(`协议校验未通过：${feedback}`, false, result?.usage, {
         feedback,
         rejectedOutput: JSON.stringify(result?.value).slice(0, 24000),

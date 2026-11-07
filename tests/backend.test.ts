@@ -315,6 +315,57 @@ describe("durable execution and ownership", () => {
     expect(repaired.versions[0].costCny).toBe(0.08);
     expect(repaired.events.filter((e) => e.type === "protocol_repair_scheduled")).toHaveLength(1);
   });
+  it("passes all local cost diagnostics beyond 500 characters into one paid repair", async () => {
+    const source = "未来24周生活费每月2000元，6个月12000元。已有运行环境。";
+    const arena = createArena({ ...challenge, materials: source, budget: 18000 }, "owner");
+    const malformed = result();
+    malformed.value.estimatedCost = null;
+    malformed.value.costPlan = {
+      complete: false,
+      items: [
+        {
+          id: "living",
+          label: "生活费",
+          amount: 12000,
+          basis: "user",
+          quote: "每月2000元，6个月12000元",
+        },
+        { id: "runtime", label: "运行环境", amount: 0, basis: "user", quote: "已有运行环境" },
+      ],
+    };
+    malformed.value.steps = ["确认累计总额不超过18000元后再作不可撤回承诺。"];
+    const corrected = structuredClone(malformed);
+    corrected.value.costPlan!.items[0].quote = "未来24周生活费每月2000元，6个月12000元";
+    corrected.value.costPlan!.items[1] = {
+      id: "runtime",
+      label: "运行环境费用待核实",
+      amount: null,
+      basis: "unknown",
+      quote: "",
+    };
+    corrected.value.steps = ["完整费用清单累计总额已核实且不超过18000元后才可正式执行。"];
+    model.generate.mockResolvedValueOnce(malformed).mockImplementationOnce(async (input) => {
+      expect(input.repairFeedback.length).toBeGreaterThan(500);
+      expect(input.repairFeedback).toContain("costPlan.items[0]（id=living）");
+      expect(input.repairFeedback).toContain("costPlan.items[1]（id=runtime）");
+      expect(input.repairFeedback).toContain("steps[0] 费用正文格式");
+      expect(JSON.parse(input.rejectedOutput)).toEqual(malformed.value);
+      return corrected;
+    });
+    const failed = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(failed.versions[0].strategies).toHaveLength(0);
+    expect(
+      failed.events.filter((entry) => entry.type === "protocol_repair_scheduled"),
+    ).toHaveLength(1);
+    const repaired = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(model.generate).toHaveBeenCalledTimes(2);
+    expect(repaired.versions[0]).toMatchObject({ status: "ready", costCny: 0.08, reservedCny: 0 });
+    expect(repaired.versions[0].strategies).toHaveLength(1);
+    expect(repaired.steps.filter((step) => step.status === "failed")).toHaveLength(1);
+    expect(
+      repaired.events.filter((entry) => entry.type === "protocol_repair_scheduled"),
+    ).toHaveLength(1);
+  });
   it("bounds known-format repair to one attempt and charges both failed responses", async () => {
     const arena = createArena(challenge, "owner");
     model.generate.mockImplementation(async () => result("B"));

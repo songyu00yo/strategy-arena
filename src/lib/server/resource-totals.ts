@@ -78,6 +78,14 @@ export function costPlanGate(plan: CostPlan): string {
   return `${COST_GATE}${terms.join(" + ") || "必要费用清单缺失"}。${total === null ? "累计总额未知，补齐范围与金额后才可判断正式执行是否满足原总预算" : `含已花投入的累计支出估计合计${total}元，正式执行前与原总预算比较，已花投入只计一次`}。清单范围是方案声明，未由算术验证。`;
 }
 
+/** Schema-bounded local diagnostics, all preserved for the one permitted repair. */
+export class CostPlanValidationError extends AggregateError {
+  constructor(issues: Error[]) {
+    super(issues, issues.map((issue) => issue.message).join("\n"));
+    this.name = "CostPlanValidationError";
+  }
+}
+
 /** This validates a declaration and literal provenance, not the real-world quote's truth. */
 export function normalizeCostPlan(
   strategy: Strategy,
@@ -86,22 +94,26 @@ export function normalizeCostPlan(
 ): Strategy {
   const declaredPlan = strategy.costPlan;
   if (!declaredPlan) return strategy; // Historical data stays readable without manufacturing a breakdown.
+  const issues: Error[] = [];
   const plan = { ...declaredPlan, items: declaredPlan.items.map((item) => ({ ...item })) };
   const ids = new Set<string>();
   const labels = new Set<string>();
   const quotedCharges: { quote: string; amount: number | null; recurring: boolean }[] = [];
   for (const [index, item] of plan.items.entries()) {
-    if (ids.has(item.id)) throw new Error("必要费用清单存在重复编号，不能重复计算同一支出。");
+    if (ids.has(item.id))
+      issues.push(new Error("必要费用清单存在重复编号，不能重复计算同一支出。"));
     ids.add(item.id);
     if (item.amount !== null && Math.abs(item.amount * 100 - Math.round(item.amount * 100)) > 1e-6)
-      throw new Error("必要费用金额最多保留两位小数，未知金额填写 null。");
+      issues.push(new Error("必要费用金额最多保留两位小数，未知金额填写 null。"));
     if (item.basis === "unknown" && item.amount !== null)
-      throw new Error("未知费用不得填写确定金额或零，情景估计须明确标为假设。");
+      issues.push(new Error("未知费用不得填写确定金额或零，情景估计须明确标为假设。"));
     if (item.basis === "user") {
       const correction = `费用项目 costPlan.items[${index}]（id=${item.id}）。没有同项用户金额时，改为 basis=unknown、amount=null、quote=""，并将 estimatedCost=null。有明确情景假设时可用 basis=assumption、quote=""，在步骤说明金额的假设与核实条件。零额也须同项0元原文，已有环境或开源不证明零费用。`;
       if (!item.quote.trim() || (provided !== undefined && !provided.includes(item.quote)))
-        throw new Error(
-          `费用事实必须逐字引用当前用户原文；quote复制同一项目及金额的原文短句，label可取金额前原文短片段，不添加报价范围。${correction}`,
+        issues.push(
+          new Error(
+            `费用事实必须逐字引用当前用户原文；quote复制同一项目及金额的原文短句，label可取金额前原文短片段，不添加报价范围。${correction}`,
+          ),
         );
       const prices = [...item.quote.matchAll(/\d+(?:\.\d+)?\s*元/g)];
       // One item may state both its monthly charge and an explicit, arithmetically bound total.
@@ -126,14 +138,16 @@ export function normalizeCostPlan(
           !recurringTotalMatches &&
           (prices.length !== 1 || Number.parseFloat(prices[0][0]) !== item.amount)
         )
-          throw new Error(
-            `费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额。同项“每月X元，N个月Y元”可引用总额，但X×N必须等于Y且amount=Y。label可取原文短片段。${correction}`,
+          issues.push(
+            new Error(
+              `费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额。同项“每月X元，N个月Y元”可引用总额，但X×N必须等于Y且amount=Y。label可取原文短片段。${correction}`,
+            ),
           );
       }
       if (item.amount !== null && /假设|如果|若|可能|预计|大约|约\d|是否/.test(item.quote))
-        throw new Error("带假设、条件或估计的报价不得当作已确定费用，保留未知或标为假设。");
+        issues.push(new Error("带假设、条件或估计的报价不得当作已确定费用，保留未知或标为假设。"));
       if (plan.complete && /(?:包含|范围|含项).{0,12}(?:未知|未确认|待核实)/.test(item.quote))
-        throw new Error("报价包含范围仍未知，必要费用范围不得声明完整。");
+        issues.push(new Error("报价包含范围仍未知，必要费用范围不得声明完整。"));
       if (
         quotedCharges.some(
           (charge) =>
@@ -141,7 +155,7 @@ export function normalizeCostPlan(
             (charge.quote.includes(item.quote) || item.quote.includes(charge.quote)),
         )
       )
-        throw new Error("同一原文报价被重复列入费用清单，须先核实包含关系再计算。");
+        issues.push(new Error("同一原文报价被重复列入费用清单，须先核实包含关系再计算。"));
       quotedCharges.push({
         quote: item.quote,
         amount: item.amount,
@@ -156,8 +170,9 @@ export function normalizeCostPlan(
       const sourceLabel = quotedLabel.trim().replace(/[，,。；;：:\s]+$/u, "");
       item.label = sourceLabel && sourceLabel.length <= 24 ? sourceLabel : `原文报价${index + 1}`;
     } else if (item.quote)
-      throw new Error("假设和未知费用不填写事实引用，成立条件写入项目名称或步骤。");
-    if (labels.has(item.label)) throw new Error("必要费用清单存在重复项目，不能重复计算同一支出。");
+      issues.push(new Error("假设和未知费用不填写事实引用，成立条件写入项目名称或步骤。"));
+    if (labels.has(item.label))
+      issues.push(new Error("必要费用清单存在重复项目，不能重复计算同一支出。"));
     labels.add(item.label);
   }
   const total = costPlanTotal(plan);
@@ -165,26 +180,34 @@ export function normalizeCostPlan(
     strategy.estimatedCost !== null &&
     (total === null || Math.abs(strategy.estimatedCost - total) > 1e-8)
   )
-    throw new Error(
-      "全程费用估计与必要费用清单不一致，未知项、未闭合范围或空清单不得推出完整总额。",
+    issues.push(
+      new Error("全程费用估计与必要费用清单不一致，未知项、未闭合范围或空清单不得推出完整总额。"),
     );
   const gate = costPlanGate(plan);
   // Copied revisions can carry an older server gate. Always regenerate this reserved suffix.
   const resources = strategy.resources.split(COST_GATE)[0].trim();
   const ownFields = [
-    strategy.thesis,
-    ...strategy.steps,
-    resources,
-    strategy.firstAction,
-    strategy.failureCondition,
-    ...strategy.claims.map((claim) => claim.text),
+    { path: "thesis", text: strategy.thesis },
+    ...strategy.steps.map((text, index) => ({ path: `steps[${index}]`, text })),
+    { path: "resources", text: resources },
+    { path: "firstAction", text: strategy.firstAction },
+    { path: "failureCondition", text: strategy.failureCondition },
+    ...strategy.claims.map((claim, index) => ({ path: `claims[${index}].text`, text: claim.text })),
   ];
   for (const field of ownFields) {
-    assertCanonicalCostReference(field, budget);
+    try {
+      assertCanonicalCostReference(field.text, budget);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      issues.push(new Error(`${field.path} ${error.message}`));
+    }
   }
   const canonicalResources = `${resources}\n${gate}`;
   if (canonicalResources.length > 500)
-    throw new Error("资源说明与完整费用清单超过500字，请精简非费用说明和项目名称，保留必要项目。");
+    issues.push(
+      new Error("资源说明与完整费用清单超过500字，请精简非费用说明和项目名称，保留必要项目。"),
+    );
+  if (issues.length) throw new CostPlanValidationError(issues);
   return { ...strategy, costPlan: plan, resources: canonicalResources, estimatedCost: total };
 }
 

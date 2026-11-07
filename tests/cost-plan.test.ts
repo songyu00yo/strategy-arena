@@ -14,6 +14,7 @@ import {
 } from "../src/lib/contracts";
 import {
   assertCanonicalCostReference,
+  CostPlanValidationError,
   costPlanTotal,
   normalizeCostPlan,
 } from "../src/lib/server/resource-totals";
@@ -457,6 +458,45 @@ describe("quote attribution and comparison assumptions", () => {
         "本机运行环境费用1元",
       ),
     ).toThrow("其他项目金额");
+  });
+  it("reports the recorded missing-item quote and prose gate together before its only repair", () => {
+    const source = "未来24周生活费每月2000元，6个月12000元";
+    const candidate = route({
+      complete: false,
+      items: [
+        {
+          id: "living",
+          label: "生活费",
+          amount: 12000,
+          basis: "user",
+          quote: "每月2000元，6个月12000元",
+        },
+      ],
+    });
+    candidate.steps = [
+      "先确认书面offer当前有效",
+      "核实完整费用清单累计总额及是否遗漏必要支出；不以工资抵扣支出，确认累计总额不超过18000元后再作不可撤回承诺。",
+    ];
+    const original = structuredClone(candidate);
+    let failure: unknown;
+    try {
+      normalizeCostPlan(candidate, source, 18000);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(CostPlanValidationError);
+    expect((failure as CostPlanValidationError).errors).toHaveLength(2);
+    expect((failure as Error).message).toContain("costPlan.items[0]（id=living）");
+    expect((failure as Error).message).toContain("steps[1] 费用正文格式");
+    expect(candidate).toEqual(original);
+    const quoteOnlyFixed = structuredClone(candidate);
+    quoteOnlyFixed.costPlan!.items[0].quote = source;
+    expect(() => normalizeCostPlan(quoteOnlyFixed, source, 18000)).toThrow("费用正文格式");
+    const proseOnlyFixed = structuredClone(candidate);
+    proseOnlyFixed.steps[1] = "完整费用清单累计总额已核实且不超过18000元后才可正式执行。";
+    expect(() => normalizeCostPlan(proseOnlyFixed, source, 18000)).toThrow("其他项目金额");
+    proseOnlyFixed.costPlan!.items[0].quote = source;
+    expect(() => normalizeCostPlan(proseOnlyFixed, source, 18000)).not.toThrow();
   });
   it("accepts the recorded same-item monthly and six-month total quotation without changing its source", () => {
     const source = "未来24周生活费每月2000元，6个月12000元";

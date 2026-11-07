@@ -67,3 +67,5 @@ PLAYWRIGHT_CHANNEL=chrome E2E_PORT=3100 pnpm test:e2e
 `scripts/agent-smoke.ts` 默认只检查配置状态。显式传入 `--run` 后，使用合成任务执行真实自主推演、DeepSeek 联网和模型流式验收。调用方提供私有配置、原中央账本绝对路径与 `ARENA_ACCEPTANCE_BATCH_ID`，脚本只在独立验收目录创建应用数据库。
 
 该脚本复用当前账本额度，保留原有未知请求，记录新增用量和原账本行哈希。协议完成、代理语义审查、真人评价和公网部署分别记录。
+
+本轮免费检查、真实调用费用和未通过项分别记录于验收报告。[验收报告](agent-upgrade-acceptance.md)

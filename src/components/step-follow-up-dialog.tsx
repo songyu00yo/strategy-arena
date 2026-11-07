@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { ArenaVersion } from "@/lib/contracts";
 import type { StepContext } from "@/lib/step-context";
+import { DisclosureMotion } from "./disclosure-motion";
 import { Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
 import "./step-follow-up-dialog.css";
@@ -32,6 +33,8 @@ export function StepFollowUpDialog({
   onSubmit,
   onAdjustConditions,
 }: StepFollowUpDialogProps) {
+  const quoteId = useId();
+  const [showQuote, setShowQuote] = useState(false);
   const [text, setText] = useState("");
   const [failure, setFailure] = useState("");
   const motion = useRef<OverlayMotionHandle>(null);
@@ -40,7 +43,7 @@ export function StepFollowUpDialog({
     if (!motion.current?.close()) onClose();
   };
   return (
-    <Modal title="补充这一步" trigger={trigger} onClose={onClose} motionRef={motion}>
+    <Modal title="补充这一步" trigger={trigger} onClose={onClose} motionRef={motion} side>
       <form
         className="step-follow-up"
         aria-busy={pending}
@@ -69,27 +72,40 @@ export function StepFollowUpDialog({
         }}
       >
         <div className="step-follow-up-source">
-          <span>
-            V{version.number} · {context.title}
-          </span>
-          <blockquote>{context.quote}</blockquote>
+          <div className="step-follow-up-source-row">
+            <span title={`V${version.number} · ${context.title}`}>
+              V{version.number} · {context.title.split(" · ")[0]}
+            </span>
+            <button
+              type="button"
+              className="text-button"
+              aria-expanded={showQuote}
+              aria-controls={quoteId}
+              onClick={() => setShowQuote(!showQuote)}
+            >
+              {showQuote ? "收起原文" : "查看原文"}
+            </button>
+          </div>
+          <DisclosureMotion open={showQuote} id={quoteId}>
+            <blockquote>{context.quote}</blockquote>
+          </DisclosureMotion>
         </div>
         <label className="field">
-          <span>你想补充什么，或对哪里有疑问？</span>
+          <span>补充或质疑</span>
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
             minLength={3}
             maxLength={1000}
             required
-            rows={4}
+            rows={3}
+            data-overlay-autofocus
             readOnly={pending}
-            placeholder="例如：这里漏算了交通时间；我更在意稳定性；这条证据能说明什么？"
+            placeholder="这里漏了什么条件，或哪一点你不认同？"
           />
         </label>
         {onAdjustConditions && (
           <p className="step-follow-up-shortcuts">
-            预算、时间或偏好变了？
             <button
               type="button"
               className="text-button"
@@ -108,8 +124,8 @@ export function StepFollowUpDialog({
         )}
         <p className="step-follow-up-notice">
           {demo
-            ? "演示中的内容和用量均为预设。提交只开启一轮预设播放，不调用模型、不计费。"
-            : "提交后会从头推演一个新版本，并产生模型费用。这条记录和旧版本会保留，补充内容会作为待复核意见。"}
+            ? "演示只播放预设内容，不调用模型、不计费。"
+            : "确认后新建真实推演并计费，原记录保留。"}
         </p>
         {(error || failure) && (
           <p className="step-follow-up-error" role="alert">

@@ -74,7 +74,12 @@ test("explicit UI fixture: editing a recorded challenge is free and only confirm
   await expect(trigger).toContainText("挑战");
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "挑战这条判断", exact: true });
-  await expect(dialog).toContainText(claim.text);
+  await expect(dialog.locator("blockquote")).toBeHidden();
+  await dialog.getByRole("button", { name: "查看原文", exact: true }).click();
+  await expect(dialog.locator("blockquote")).toBeVisible();
+  await expect(dialog.locator("blockquote")).toHaveText(claim.text);
+  await dialog.getByRole("button", { name: "收起原文", exact: true }).click();
+  await expect(dialog.locator("blockquote")).toBeHidden();
   await dialog.getByRole("textbox").fill("测试：这个判断缺少新的照护条件，请重新核验。");
   expect(calls.filter((call) => call.startsWith("POST"))).toEqual([]);
   await dialog.getByRole("button", { name: "取消", exact: true }).click();

@@ -166,6 +166,7 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
   await page.getByRole("button", { name: "调整条件" }).click();
   const edit = page.getByRole("dialog", { name: "调整条件" });
   await edit.getByLabel("预算上限", { exact: false }).fill("150");
+  await edit.getByRole("button", { name: /^补充说明/ }).click();
   await edit.getByLabel("补充说明", { exact: false }).fill("测试：预算减少到 150 元。");
   await edit.getByRole("button", { name: "按新条件重新推演" }).click();
   await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
@@ -242,6 +243,7 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
     const newGoal = "测试任务：条件改变以后只制作一支更短的知识视频。";
     await edit.getByRole("button", { name: /^完整编辑/ }).click();
     await edit.getByLabel("目标", { exact: true }).fill(newGoal);
+    await edit.getByRole("button", { name: /^补充说明/ }).click();
     await edit.getByLabel("补充说明", { exact: false }).fill("测试旧请求延迟到达。");
     await edit.getByRole("button", { name: "按新条件重新推演" }).click();
     await expect(page.getByRole("heading", { name: newGoal })).toBeVisible();

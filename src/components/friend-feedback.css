@@ -26,6 +26,22 @@
 .version-comparison {
   min-width: 0;
 }
+.compact-claim-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.compact-claim-source .text-button {
+  font-size: 12px;
+}
+.compact-claim-quote {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .version-comparison > .text-button {
   font-size: 11px;
   padding: 3px 6px;

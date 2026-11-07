@@ -1,35 +1,48 @@
 .step-follow-up {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
-.step-follow-up-source {
-  border-left: 2px solid var(--blue, #2459d3);
-  padding-left: 14px;
+.step-follow-up-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
-.step-follow-up-source > span {
+.step-follow-up-source-row > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted, #646464);
+  font-size: 12px;
+}
+.step-follow-up-source-row > button {
+  flex: none;
+  white-space: nowrap;
   font-size: 12px;
 }
 .step-follow-up-source blockquote {
   margin: 8px 0 0;
-  max-height: 30vh;
+  border-left: 2px solid var(--blue, #2459d3);
+  padding-left: 10px;
+  max-height: 180px;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.65;
 }
 .step-follow-up-notice,
 .step-follow-up-shortcuts {
   margin: 0;
   color: var(--muted, #646464);
   font-size: 12px;
-  line-height: 1.75;
+  line-height: 1.65;
 }
 .step-follow-up-shortcuts {
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
+  justify-content: flex-end;
 }
 .step-follow-up-error {
   margin: 0;
@@ -41,7 +54,7 @@
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 @media (max-width: 480px) {
   .step-follow-up-actions {

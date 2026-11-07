@@ -110,6 +110,7 @@ test("explicit UI fixture: choose a concrete model, inspect its reason and prese
     dialog.getByRole("option", { name: "DeepSeek V4.1 Flash", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
   await dialog.getByRole("option", { name: "GPT 6.1 Terra", exact: true }).click();
+  await dialog.getByRole("button", { name: /^补充说明/ }).click();
   await dialog.getByLabel("补充说明", { exact: false }).fill("测试：手动切换 GPT");
   await dialog.getByRole("button", { name: "按新条件重新推演" }).click();
   expect(requests[1].modelMode).toBe("gpt-6.1-terra");
@@ -135,7 +136,18 @@ test("explicit UI fixture: choose a concrete model, inspect its reason and prese
   await page.keyboard.press("Escape");
   await expect(information).not.toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "调整条件", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "回到当前版本", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "选择推演版本" })).toHaveValue(
+    "fixture-version-2",
+  );
   await page.getByRole("button", { name: "调整条件" }).click();
+  await dialog.getByRole("button", { name: /^完整编辑/ }).click();
+  await dialog.getByRole("button", { name: /^选择模型，当前/ }).click();
+  await expect(dialog.getByRole("option", { name: "GPT 6.1 Terra", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.screenshot({
     path: testInfo.outputPath("explicit-model-selector-mobile.png"),
     fullPage: true,

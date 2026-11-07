@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   CreateArenaRequestSchema,
   ModelModeSchema,
@@ -13,6 +13,7 @@ import type { RecordedExample } from "@/lib/recorded-examples";
 import type { StepContext } from "@/lib/step-context";
 import { routeModel } from "@/lib/model-routing";
 import type { Health } from "./use-arena";
+import { DisclosureMotion } from "./disclosure-motion";
 import { Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
 import { ModelSelector } from "./model-selector";
@@ -35,6 +36,10 @@ export function RecordedChallenge({
   onClose,
   onAdjustConditions,
 }: RecordedChallengeProps) {
+  const quoteId = useId();
+  const goalId = useId();
+  const [showQuote, setShowQuote] = useState(false);
+  const [showGoal, setShowGoal] = useState(false);
   const [text, setText] = useState("");
   const [mode, setMode] = useState<ModelMode>(() => {
     const recorded = ModelModeSchema.safeParse(
@@ -138,6 +143,7 @@ export function RecordedChallenge({
       trigger={target.trigger}
       onClose={close}
       motionRef={motion}
+      side
     >
       <form
         ref={form}
@@ -194,19 +200,50 @@ export function RecordedChallenge({
           }
         }}
       >
-        <p className="recorded-challenge-goal">
-          <strong>原题</strong>
-          {version.challenge.goal}
-        </p>
-        <div className="recorded-challenge-quote">
-          <span>
-            {target.context ? target.context.title : `路线 ${target.strategy?.id}`} ·
-            旧模型判断，待复核
-          </span>
-          <blockquote>{quote}</blockquote>
+        <div className="recorded-challenge-source">
+          <div className="recorded-challenge-source-row">
+            <span
+              title={target.context?.title ?? `路线 ${target.strategy?.id} · ${target.claimId}`}
+            >
+              V{version.number} ·{" "}
+              {target.context
+                ? target.context.title.split(" · ")[0]
+                : `路线 ${target.strategy?.id}`}
+            </span>
+            <button
+              type="button"
+              className="text-button"
+              aria-expanded={showGoal}
+              aria-controls={goalId}
+              onClick={() => {
+                setShowGoal(!showGoal);
+                if (!showGoal) setShowQuote(false);
+              }}
+            >
+              {showGoal ? "收起原题" : "查看原题"}
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              aria-expanded={showQuote}
+              aria-controls={quoteId}
+              onClick={() => {
+                setShowQuote(!showQuote);
+                if (!showQuote) setShowGoal(false);
+              }}
+            >
+              {showQuote ? "收起原文" : "查看原文"}
+            </button>
+          </div>
+          <DisclosureMotion open={showGoal} id={goalId}>
+            <p className="recorded-challenge-goal">{version.challenge.goal}</p>
+          </DisclosureMotion>
+          <DisclosureMotion open={showQuote} id={quoteId}>
+            <blockquote className="recorded-challenge-quote">{quote}</blockquote>
+          </DisclosureMotion>
         </div>
         <label className="field">
-          <span>{target.context ? "你想补充什么，或对哪里有疑问？" : "你认为哪里有问题？"}</span>
+          <span>{target.context ? "补充或质疑" : "你认为哪里有问题？"}</span>
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
@@ -214,13 +251,20 @@ export function RecordedChallenge({
             maxLength={1000}
             required
             disabled={pending}
-            rows={4}
-            placeholder="指出缺失的条件、有问题的前提，或补充反证。"
+            rows={3}
+            data-overlay-autofocus
+            placeholder="这里漏了什么条件，或哪一点你不认同？"
           />
         </label>
-        {onAdjustConditions && (
-          <p className="recorded-challenge-notice">
-            预算、时间或偏好变了？{" "}
+        <div className="recorded-challenge-tools">
+          <ModelSelector
+            mode={mode}
+            onChange={setMode}
+            challenge={{ ...version.challenge, materials }}
+            providers={options}
+            disabled={pending}
+          />
+          {onAdjustConditions && (
             <button
               type="button"
               className="text-button"
@@ -236,18 +280,9 @@ export function RecordedChallenge({
             >
               调整条件
             </button>
-          </p>
-        )}
-        <ModelSelector
-          mode={mode}
-          onChange={setMode}
-          challenge={{ ...version.challenge, materials }}
-          providers={options}
-          disabled={pending}
-        />
-        <p className="recorded-challenge-notice">
-          填写补充或质疑免费。点击开始后，将按所选模型从头新建真实推演并计费。原题、限制和你的补充一起提交，旧模型判断作为待复核材料，原记录会保留。
-        </p>
+          )}
+        </div>
+        <p className="recorded-challenge-notice">确认后新建真实推演并计费，原记录保留。</p>
         {(blocked || error) && (
           <p className="recorded-challenge-error" role="alert">
             {error || blocked}

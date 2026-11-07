@@ -1,6 +1,6 @@
 // Explicit synthetic API fixtures. These checks never contact a model provider.
 import { readFileSync } from "node:fs";
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route, type Locator } from "@playwright/test";
 import type { ArenaSnapshot, Challenge, ModelMode } from "../../src/lib/contracts";
 import type { RecordedExamplePayload } from "../../src/lib/recorded-examples";
 import { stepContext } from "../../src/lib/step-context";
@@ -104,10 +104,12 @@ for (const [label, field, value, key] of [
     });
     await page.goto(`/?arena=${snapshot.id}`);
     if (key === "budget") await page.getByRole("button", { name: /^预算上限\s*¥300$/ }).click();
+    else if (key === "timeHours")
+      await page.getByRole("button", { name: /^可用时间\s*7 小时$/ }).click();
     else await page.getByRole("button", { name: "调整条件", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "调整条件", exact: true });
-    if (key === "budget")
-      await expect(dialog.getByLabel("预算上限", { exact: false })).toBeFocused();
+    if (key === "budget" || key === "timeHours")
+      await expect(dialog.getByLabel(field, { exact: false })).toBeFocused();
     const submit = dialog.getByRole("button", { name: "按新条件重新推演", exact: true });
     await expect(submit).toBeDisabled();
     await submit.evaluate((button) => {
@@ -115,11 +117,22 @@ for (const [label, field, value, key] of [
       (button as HTMLButtonElement).click();
     });
     expect(requests).toEqual([]);
+    if (key !== "budget")
+      await dialog
+        .getByRole("button", { name: key === "timeHours" ? "时间" : "偏好", exact: true })
+        .click();
     await dialog.getByLabel(field, { exact: false }).fill(value);
-    await expect(dialog.getByLabel("补充说明", { exact: false })).toHaveValue("");
+    await expect(dialog.getByLabel("补充说明", { exact: false })).toBeHidden();
+    await expect(dialog.getByRole("button", { name: /^补充说明/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
     await expect(dialog.getByRole("region", { name: "本次修改", exact: true })).toContainText(
       value,
     );
+    await dialog.getByRole("button", { name: "展开改动", exact: true }).click();
+    await expect(dialog.locator(".condition-editor-diff")).toContainText(value);
+    await dialog.getByRole("button", { name: "收起改动", exact: true }).click();
     await submit.click();
     await expect(dialog).toBeHidden();
     expect(requests).toHaveLength(1);
@@ -193,7 +206,12 @@ for (const [stepId, number] of [
     try {
       await page.goto(`/?arena=${snapshot.id}`);
       const dialog = await openSource(page, number);
+      await expect(dialog.locator("blockquote")).toBeHidden();
+      await dialog.getByRole("button", { name: "查看原文", exact: true }).click();
+      await expect(dialog.locator("blockquote")).toBeVisible();
       await expect(dialog.locator("blockquote")).toHaveText(source.quote);
+      await dialog.getByRole("button", { name: "收起原文", exact: true }).click();
+      await expect(dialog.locator("blockquote")).toBeHidden();
       const text = "测试：这里还需考虑交通和等待时间。";
       await dialog.getByRole("textbox").fill(text);
       const submit = dialog.getByRole("button", { name: "补充后重新推演", exact: true });
@@ -334,6 +352,7 @@ for (const entry of ["stale condition submission", "step supplement to condition
     if (entry === "stale condition submission") {
       await page.getByRole("button", { name: "调整条件", exact: true }).click();
       await conditions.getByLabel("预算上限", { exact: false }).fill("150");
+      await conditions.getByRole("button", { name: /^补充说明/ }).click();
       await conditions.getByLabel("补充说明", { exact: false }).fill(draftNote);
     } else {
       const supplement = await openSource(page, 1);
@@ -389,6 +408,84 @@ for (const entry of ["stale condition submission", "step supplement to condition
     expect(posts).toHaveLength(entry === "stale condition submission" ? 1 : 0);
   });
 }
+
+test("explicit UI fixture: compact input drawers preserve desktop context and fit a 390px screen", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const snapshot = completedSnapshot();
+  const posts: string[] = [];
+  await interceptAllApis(page, snapshot, async (route) => {
+    posts.push(new URL(route.request().url()).pathname);
+    await route.fulfill({
+      status: 500,
+      json: { error: "This input layout fixture must not submit." },
+    });
+  });
+  await page.goto(`/?arena=${snapshot.id}`);
+  await page.getByRole("button", { name: "调整条件", exact: true }).click();
+  const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+  await expect(conditions).toBeVisible();
+  const desktop = await conditions.boundingBox();
+  expect(desktop).not.toBeNull();
+  expect(desktop!.width).toBeLessThanOrEqual(440);
+  expect(desktop!.x).toBeGreaterThanOrEqual(1280 / 2);
+  expect(desktop!.x + desktop!.width).toBeLessThanOrEqual(1280);
+  const reference = page.locator(".condition-trigger").filter({ hasText: "硬性限制" });
+  await expect(reference).toBeVisible();
+  const referenceBox = await reference.boundingBox();
+  expect(referenceBox).not.toBeNull();
+  expect(referenceBox!.x + referenceBox!.width).toBeLessThan(desktop!.x);
+  expect(referenceBox!.y).toBeGreaterThanOrEqual(0);
+  expect(referenceBox!.y + referenceBox!.height).toBeLessThanOrEqual(900);
+  await conditions.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(conditions).toBeHidden();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const compact = async (dialog: Locator) => {
+    await expect(dialog).toBeVisible();
+    const box = await dialog.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeLessThanOrEqual(370);
+    expect(box!.height).toBeLessThanOrEqual(560);
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+    expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+  };
+  await page.getByRole("button", { name: "调整条件", exact: true }).click();
+  await compact(conditions);
+  await expect(conditions.getByLabel("预算上限", { exact: false })).toBeFocused();
+  await expect(conditions.getByLabel("可投入时间", { exact: false })).toBeHidden();
+  await expect(conditions.getByLabel("更看重什么", { exact: false })).toBeHidden();
+  for (const name of ["时间", "限制", "偏好", "预算"]) {
+    const switcher = conditions.getByRole("button", { name, exact: true });
+    await expect(switcher).toBeInViewport();
+    await switcher.click();
+    await expect(switcher).toHaveAttribute("aria-pressed", "true");
+  }
+  await conditions.getByLabel("预算上限", { exact: false }).fill("150");
+  const confirm = conditions.getByRole("button", { name: "按新条件重新推演", exact: true });
+  await expect(confirm).toBeEnabled();
+  await expect(confirm).toBeInViewport();
+  await conditions.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(conditions).toBeHidden();
+  const supplement = await openSource(page, 1);
+  await compact(supplement);
+  await expect(supplement.locator("blockquote")).toBeHidden();
+  await supplement.getByRole("textbox").fill("测试：在小屏幕上也能直接填写补充意见。");
+  const submit = supplement.getByRole("button", { name: "补充后重新推演", exact: true });
+  await expect(submit).toBeEnabled();
+  await expect(submit).toBeInViewport();
+  await supplement.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(supplement).toBeHidden();
+  expect(posts).toEqual([]);
+});
 
 test("explicit UI fixture: recorded conditions stay free until explicit confirmation creates a sourced real task", async ({
   page,

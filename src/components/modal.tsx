@@ -8,6 +8,7 @@ export function Modal({
   children,
   onClose,
   wide = false,
+  side = false,
   motionRef,
   trigger,
 }: {
@@ -15,6 +16,7 @@ export function Modal({
   children: React.ReactNode;
   onClose: () => void;
   wide?: boolean;
+  side?: boolean;
   motionRef?: Ref<OverlayMotionHandle>;
   trigger?: HTMLElement | null;
 }) {
@@ -28,7 +30,7 @@ export function Modal({
   return (
     <dialog
       ref={panel}
-      className={`modal overlay-motion ${wide ? "wide-modal" : ""}`}
+      className={`modal overlay-motion ${wide ? "wide-modal" : ""} ${side ? "modal-side" : ""}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();

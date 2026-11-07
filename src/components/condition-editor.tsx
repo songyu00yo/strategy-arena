@@ -17,6 +17,12 @@ const domains = [
   ["work", "工作业务"],
   ["creation", "内容创作"],
 ] as const;
+const quickFields = [
+  ["budget", "预算"],
+  ["timeHours", "时间"],
+  ["constraints", "限制"],
+  ["preferences", "偏好"],
+] as const;
 
 export function ConditionEditor({
   initial,
@@ -46,6 +52,9 @@ export function ConditionEditor({
   }));
   const [modelMode, setModelMode] = useState(initialModelMode);
   const [complete, setComplete] = useState(false);
+  const [field, setField] = useState(initialFocus);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const form = useRef<HTMLFormElement>(null);
@@ -75,8 +84,11 @@ export function ConditionEditor({
     setValue((current) => ({ ...current, [key]: next }));
     setError("");
   };
-  const focus = (key: typeof initialFocus) =>
-    initialFocus === key ? { "data-overlay-autofocus": true } : {};
+  const fieldFocus = { "data-overlay-autofocus": true, "data-disclosure-autofocus": true };
+  const summary = [
+    ...changes.map((change) => `${change.label}：${change.detail}`),
+    ...(modelChanged ? ["本轮模型已修改"] : []),
+  ].join("；");
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -93,243 +105,296 @@ export function ConditionEditor({
 
   return (
     <form ref={form} className="condition-editor" onSubmit={submit} noValidate aria-busy={pending}>
-      <p className="condition-editor-intro">直接修改条件，确认后会保留旧版本，再推演一轮。</p>
-      <fieldset className="condition-editor-fields" disabled={busy}>
-        <legend className="sr-only">本轮条件</legend>
-        <div className="condition-editor-grid">
-          <label className="field">
-            <span>
-              预算上限 <small>元</small>
-            </span>
-            <input
-              {...focus("budget")}
-              type="number"
-              min="0"
-              max="100000000"
-              step="any"
-              value={value.budget ?? ""}
-              onChange={(event) =>
-                set("budget", event.target.value === "" ? null : Number(event.target.value))
-              }
-              placeholder="不限"
-            />
-          </label>
-          <label className="field">
-            <span>
-              可投入时间 <small>总计 / 小时</small>
-            </span>
-            <input
-              {...focus("timeHours")}
-              type="number"
-              min="0.01"
-              max="100000"
-              step="any"
-              value={value.timeHours ?? ""}
-              onChange={(event) =>
-                set("timeHours", event.target.value === "" ? null : Number(event.target.value))
-              }
-              placeholder="不限"
-            />
-          </label>
-          <label className="field">
-            <span>
-              硬性限制 <small>必须遵守</small>
-            </span>
-            <textarea
-              {...focus("constraints")}
-              value={value.constraints}
-              onChange={(event) => set("constraints", event.target.value)}
-              maxLength={3000}
-              rows={2}
-              placeholder="例如：两周内完成、不能增加人手"
-            />
-          </label>
-          <label className="field">
-            <span>
-              更看重什么 <small>尽量满足</small>
-            </span>
-            <textarea
-              {...focus("preferences")}
-              value={value.preferences}
-              onChange={(event) => set("preferences", event.target.value)}
-              maxLength={1500}
-              rows={2}
-              placeholder="例如：更看重长期收益、希望简单上手"
-            />
-          </label>
-        </div>
-        <button
-          type="button"
-          className="condition-editor-toggle"
-          onClick={() => setComplete(!complete)}
-          aria-expanded={complete}
-          aria-controls={`${id}-complete`}
-        >
-          <span>
-            完整编辑 <small>目标、方案、材料和模型</small>
-          </span>
-          <ChevronDown size={16} className={complete ? "is-open" : ""} aria-hidden="true" />
-        </button>
-        <DisclosureMotion open={complete} id={`${id}-complete`}>
-          <div className="condition-editor-complete">
-            <label className="field">
-              <span>目标</span>
-              <textarea
-                value={value.goal}
-                onChange={(event) => set("goal", event.target.value)}
-                minLength={8}
-                maxLength={3000}
-                rows={3}
-              />
-            </label>
-            <div className="field">
-              <span>
-                已有备选方案 <small>最多 3 个</small>
-              </span>
-              {value.options.map((option, index) => (
-                <div className="option-row" key={index}>
-                  <span className="option-index">{String(index + 1).padStart(2, "0")}</span>
+      <div className="condition-editor-body">
+        <fieldset className="condition-editor-fields" disabled={busy}>
+          <legend className="sr-only">本轮条件</legend>
+          <div className="condition-editor-switches" role="group" aria-label="选择要修改的条件">
+            {quickFields.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={field === key}
+                aria-controls={`${id}-field`}
+                onClick={() => setField(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <DisclosureMotion open id={`${id}-field`} contentKey={field}>
+            <div className="condition-editor-current">
+              {field === "budget" ? (
+                <label className="field">
+                  <span>
+                    预算上限 <small>元</small>
+                  </span>
                   <input
-                    aria-label={`备选方案 ${index + 1}`}
-                    value={option}
+                    {...fieldFocus}
+                    type="number"
+                    min="0"
+                    max="100000000"
+                    step="any"
+                    value={value.budget ?? ""}
+                    onChange={(event) =>
+                      set("budget", event.target.value === "" ? null : Number(event.target.value))
+                    }
+                    placeholder="不限"
+                  />
+                </label>
+              ) : field === "timeHours" ? (
+                <label className="field">
+                  <span>
+                    可投入时间 <small>总计 / 小时</small>
+                  </span>
+                  <input
+                    {...fieldFocus}
+                    type="number"
+                    min="0.01"
+                    max="100000"
+                    step="any"
+                    value={value.timeHours ?? ""}
                     onChange={(event) =>
                       set(
-                        "options",
-                        value.options.map((item, at) => (at === index ? event.target.value : item)),
+                        "timeHours",
+                        event.target.value === "" ? null : Number(event.target.value),
                       )
                     }
-                    maxLength={300}
+                    placeholder="不限"
                   />
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={`删除备选方案 ${index + 1}`}
-                    onClick={() =>
-                      set(
-                        "options",
-                        value.options.filter((_, at) => at !== index),
-                      )
-                    }
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-              ))}
-              {value.options.length < 3 && (
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => set("options", [...value.options, ""])}
-                >
-                  <Plus size={14} />
-                  添加一个选项
-                </button>
+                </label>
+              ) : field === "constraints" ? (
+                <label className="field">
+                  <span>
+                    硬性限制 <small>必须遵守</small>
+                  </span>
+                  <textarea
+                    {...fieldFocus}
+                    value={value.constraints}
+                    onChange={(event) => set("constraints", event.target.value)}
+                    maxLength={3000}
+                    rows={2}
+                    placeholder="例如：两周内完成、不能增加人手"
+                  />
+                </label>
+              ) : (
+                <label className="field">
+                  <span>
+                    更看重什么 <small>尽量满足</small>
+                  </span>
+                  <textarea
+                    {...fieldFocus}
+                    value={value.preferences}
+                    onChange={(event) => set("preferences", event.target.value)}
+                    maxLength={1500}
+                    rows={2}
+                    placeholder="例如：更看重长期收益、希望简单上手"
+                  />
+                </label>
               )}
             </div>
-            <label className="field">
-              <span>
-                参考材料 <small>包含已填写的个人处境</small>
-              </span>
-              <textarea
-                value={value.materials}
-                onChange={(event) => set("materials", event.target.value)}
-                maxLength={20000}
-                rows={4}
-              />
-            </label>
-            <div className="field">
-              <span>问题领域</span>
-              <div className="domain-row" role="group" aria-label="问题领域">
-                {domains.map(([domain, label]) => (
+          </DisclosureMotion>
+          <button
+            type="button"
+            className="condition-editor-toggle"
+            onClick={() => setComplete(!complete)}
+            aria-expanded={complete}
+            aria-controls={`${id}-complete`}
+          >
+            <span>
+              完整编辑 <small>目标、方案、材料和模型</small>
+            </span>
+            <ChevronDown size={16} className={complete ? "is-open" : ""} aria-hidden="true" />
+          </button>
+          <DisclosureMotion open={complete} id={`${id}-complete`}>
+            <div className="condition-editor-complete">
+              <label className="field">
+                <span>目标</span>
+                <textarea
+                  value={value.goal}
+                  onChange={(event) => set("goal", event.target.value)}
+                  minLength={8}
+                  maxLength={3000}
+                  rows={3}
+                />
+              </label>
+              <div className="field">
+                <span>
+                  已有备选方案 <small>最多 3 个</small>
+                </span>
+                {value.options.map((option, index) => (
+                  <div className="option-row" key={index}>
+                    <span className="option-index">{String(index + 1).padStart(2, "0")}</span>
+                    <input
+                      aria-label={`备选方案 ${index + 1}`}
+                      value={option}
+                      onChange={(event) =>
+                        set(
+                          "options",
+                          value.options.map((item, at) =>
+                            at === index ? event.target.value : item,
+                          ),
+                        )
+                      }
+                      maxLength={300}
+                    />
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={`删除备选方案 ${index + 1}`}
+                      onClick={() =>
+                        set(
+                          "options",
+                          value.options.filter((_, at) => at !== index),
+                        )
+                      }
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                ))}
+                {value.options.length < 3 && (
                   <button
                     type="button"
-                    key={domain}
-                    className={`domain-chip ${value.domain === domain ? "selected" : ""}`}
-                    aria-pressed={value.domain === domain}
-                    onClick={() => set("domain", domain)}
+                    className="text-button"
+                    onClick={() => set("options", [...value.options, ""])}
                   >
-                    {label}
+                    <Plus size={14} />
+                    添加一个选项
                   </button>
-                ))}
+                )}
               </div>
-            </div>
-            {!demo && (
-              <ModelSelector
-                mode={modelMode}
-                onChange={setModelMode}
-                challenge={value}
-                providers={modelProviders}
-                disabled={busy}
-              />
-            )}
-          </div>
-        </DisclosureMotion>
-      </fieldset>
-
-      <section
-        className="condition-editor-preview"
-        aria-label="本次修改"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        <h3>本次修改{changed && <span>{changes.length + Number(modelChanged)} 项</span>}</h3>
-        {!changed ? (
-          <p>修改任一条件后，这里会显示前后变化。</p>
-        ) : (
-          <ul>
-            {changes.map((change) => (
-              <li key={change.key}>
-                <strong>{change.label}</strong>
-                <div className="condition-editor-diff">
-                  <span>
-                    <small>原来</small>
-                    <span>{change.before || "未填写"}</span>
-                  </span>
-                  <ArrowRight size={14} aria-hidden="true" />
-                  <span>
-                    <small>现在</small>
-                    <span>{change.after || "未填写"}</span>
-                  </span>
+              <label className="field">
+                <span>
+                  参考材料 <small>包含已填写的个人处境</small>
+                </span>
+                <textarea
+                  value={value.materials}
+                  onChange={(event) => set("materials", event.target.value)}
+                  maxLength={20000}
+                  rows={4}
+                />
+              </label>
+              <div className="field">
+                <span>问题领域</span>
+                <div className="domain-row" role="group" aria-label="问题领域">
+                  {domains.map(([domain, label]) => (
+                    <button
+                      type="button"
+                      key={domain}
+                      className={`domain-chip ${value.domain === domain ? "selected" : ""}`}
+                      aria-pressed={value.domain === domain}
+                      onClick={() => set("domain", domain)}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
-              </li>
-            ))}
-            {modelChanged && (
-              <li>
-                <strong>本轮模型</strong>
-                <p>
-                  {modelLabel(initialModelMode, previousRoute.modelId)} →{" "}
-                  {modelLabel(modelMode, route.modelId)}
-                </p>
-              </li>
-            )}
-          </ul>
-        )}
-      </section>
-      <label className="field condition-editor-note">
-        <span>
-          补充说明 <small>选填</small>
-        </span>
-        <input
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
+              </div>
+              {!demo && (
+                <ModelSelector
+                  mode={modelMode}
+                  onChange={setModelMode}
+                  challenge={value}
+                  providers={modelProviders}
+                  disabled={busy}
+                />
+              )}
+            </div>
+          </DisclosureMotion>
+        </fieldset>
+
+        <section className="condition-editor-preview" aria-label="本次修改">
+          <p
+            className="condition-editor-summary"
+            aria-live="polite"
+            aria-atomic="true"
+            title={summary || undefined}
+          >
+            {summary || "还没有修改条件"}
+          </p>
+          {changed && (
+            <button
+              type="button"
+              className="condition-editor-expand"
+              aria-expanded={previewOpen}
+              aria-controls={`${id}-changes`}
+              onClick={() => setPreviewOpen(!previewOpen)}
+            >
+              {previewOpen ? "收起改动" : "展开改动"}
+              <ChevronDown size={13} className={previewOpen ? "is-open" : ""} aria-hidden="true" />
+            </button>
+          )}
+          <DisclosureMotion open={changed && previewOpen} id={`${id}-changes`}>
+            <ul>
+              {changes.map((change) => (
+                <li key={change.key}>
+                  <strong>{change.label}</strong>
+                  <div className="condition-editor-diff">
+                    <span>
+                      <small>原来</small>
+                      <span>{change.before || "未填写"}</span>
+                    </span>
+                    <ArrowRight size={14} aria-hidden="true" />
+                    <span>
+                      <small>现在</small>
+                      <span>{change.after || "未填写"}</span>
+                    </span>
+                  </div>
+                </li>
+              ))}
+              {modelChanged && (
+                <li>
+                  <strong>本轮模型</strong>
+                  <p>
+                    {modelLabel(initialModelMode, previousRoute.modelId)} →{" "}
+                    {modelLabel(modelMode, route.modelId)}
+                  </p>
+                </li>
+              )}
+            </ul>
+          </DisclosureMotion>
+        </section>
+        <button
+          type="button"
+          className="condition-editor-toggle condition-editor-note-toggle"
+          onClick={() => setNoteOpen(!noteOpen)}
+          aria-expanded={noteOpen}
+          aria-controls={`${id}-note`}
           disabled={busy}
-          maxLength={600}
-          placeholder="还有什么需要说明的？"
-        />
-      </label>
-      {modelUnavailable && (
-        <p className="form-error" role="alert">
-          当前模型未配置。请在“完整编辑”中选择可用模型。
-        </p>
-      )}
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
+        >
+          <span>
+            补充说明 <small>选填</small>
+          </span>
+          <ChevronDown size={14} className={noteOpen ? "is-open" : ""} aria-hidden="true" />
+        </button>
+        <DisclosureMotion open={noteOpen} id={`${id}-note`}>
+          <label className="field condition-editor-note">
+            <span>
+              补充说明 <small>选填</small>
+            </span>
+            <input
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              disabled={busy}
+              maxLength={600}
+              placeholder="还有什么需要说明的？"
+            />
+          </label>
+        </DisclosureMotion>
+        {modelUnavailable && (
+          <p className="form-error" role="alert">
+            当前模型未配置。请在“完整编辑”中选择可用模型。
+          </p>
+        )}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
       <div className="condition-editor-bottom">
         <p className="form-assurance">
-          {demo ? "演示模式，不调用模型。" : "确认后会调用模型，产生本轮费用。"}
+          {demo ? "演示模式，不调用模型，不计费。" : "确认后新建真实推演并计费，原记录保留。"}
         </p>
         <div className="submit-actions">
           <button type="button" className="secondary-button" onClick={onCancel}>

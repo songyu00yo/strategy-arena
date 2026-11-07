@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -28,6 +28,7 @@ import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
 import { ConditionEditor } from "@/components/condition-editor";
 import { StepFollowUpDialog } from "@/components/step-follow-up-dialog";
+import { DisclosureMotion } from "@/components/disclosure-motion";
 import { VersionComparison } from "@/components/version-comparison";
 import { challengeChanges } from "@/lib/challenge-changes";
 import type { StepContext } from "@/lib/step-context";
@@ -138,6 +139,8 @@ export default function Page() {
     returnTo: string | null;
   } | null>(null);
   const [challengeText, setChallengeText] = useState("");
+  const [claimOriginalOpen, setClaimOriginalOpen] = useState(false);
+  const claimQuoteId = useId();
   const [stopConfirm, setStopConfirm] = useState(false);
   const [overlayVersionId, setOverlayVersionId] = useState<string | null>(null);
   const editMotion = useRef<OverlayMotionHandle>(null);
@@ -451,6 +454,7 @@ export default function Page() {
                       document.activeElement instanceof HTMLElement ? document.activeElement : null,
                   });
                   setChallengeText("");
+                  setClaimOriginalOpen(false);
                 }}
                 onFollowUp={
                   historical
@@ -852,7 +856,7 @@ export default function Page() {
         <Modal
           title="调整条件"
           trigger={editSource.trigger}
-          wide
+          side
           motionRef={editMotion}
           onClose={() => {
             releaseVersionPin();
@@ -941,6 +945,7 @@ export default function Page() {
         <Modal
           title="质疑这条判断"
           trigger={claimTarget.trigger}
+          side
           motionRef={claimMotion}
           onClose={() => {
             releaseVersionPin();
@@ -948,10 +953,25 @@ export default function Page() {
           }}
         >
           <div className="challenge-dialog">
-            <span className="eyebrow">路线 {claimTarget.strategy.id} / 关键判断</span>
-            <blockquote>
-              {claimTarget.strategy.claims.find((c) => c.id === claimTarget.claimId)?.text}
-            </blockquote>
+            <div className="compact-claim-source">
+              <span className="eyebrow">
+                V{claimTarget.version.number} · 路线 {claimTarget.strategy.id}
+              </span>
+              <button
+                type="button"
+                className="text-button"
+                aria-expanded={claimOriginalOpen}
+                aria-controls={claimQuoteId}
+                onClick={() => setClaimOriginalOpen(!claimOriginalOpen)}
+              >
+                {claimOriginalOpen ? "收起原文" : "查看原文"}
+              </button>
+            </div>
+            <DisclosureMotion open={claimOriginalOpen} id={claimQuoteId}>
+              <blockquote className="compact-claim-quote">
+                {claimTarget.strategy.claims.find((c) => c.id === claimTarget.claimId)?.text}
+              </blockquote>
+            </DisclosureMotion>
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
@@ -992,7 +1012,7 @@ export default function Page() {
                   minLength={3}
                   maxLength={1000}
                   required
-                  rows={4}
+                  rows={3}
                   placeholder="这里漏了什么条件，或哪一点你不认同？"
                 />
               </label>

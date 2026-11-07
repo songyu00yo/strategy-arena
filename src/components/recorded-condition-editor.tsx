@@ -156,11 +156,8 @@ export function RecordedConditionEditor({
     }
   }
   return (
-    <Modal title="调整条件" trigger={trigger} onClose={close} motionRef={motion} wide>
+    <Modal title="调整条件" trigger={trigger} onClose={close} motionRef={motion} side>
       <div ref={root} className="recorded-challenge">
-        <p className="recorded-challenge-notice">
-          修改和查看免费。确认后会按所选模型从头创建真实推演并计费，原案例不会改变。旧模型意见会标为待复核材料。
-        </p>
         {(blocked || error) && (
           <p className="recorded-challenge-error" role="alert">
             {error || blocked}

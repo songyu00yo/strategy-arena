@@ -1,10 +1,14 @@
 .condition-editor {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  max-height: calc(100dvh - 132px);
 }
-.condition-editor-intro {
-  margin: 0 0 18px;
-  color: var(--quiet);
-  font-size: 14px;
+.condition-editor-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 3px;
+  scrollbar-width: thin;
 }
 .condition-editor-fields {
   min-width: 0;
@@ -12,10 +16,34 @@
   padding: 0;
   border: 0;
 }
-.condition-editor-grid {
+.condition-editor-switches {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--sunken);
+}
+.condition-editor-switches button {
+  min-height: 34px;
+  border-radius: 6px;
+  color: var(--quiet);
+  font-size: 13px;
+}
+.condition-editor-switches button[aria-pressed="true"] {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgb(27 28 25 / 8%);
+  font-weight: 600;
+}
+.condition-editor-current {
+  padding: 14px 0 4px;
+}
+.condition-editor .field {
+  gap: 5px;
+}
+.condition-editor .field > span:first-child {
+  font-size: 13px;
 }
 .condition-editor .field input,
 .condition-editor .field textarea {
@@ -23,6 +51,7 @@
 }
 .condition-editor textarea {
   resize: vertical;
+  max-height: 180px;
 }
 .condition-editor-toggle {
   display: flex;
@@ -30,56 +59,69 @@
   justify-content: space-between;
   gap: 12px;
   width: 100%;
-  min-height: 48px;
-  margin-top: 12px;
+  min-height: 36px;
+  margin-top: 4px;
   color: var(--blue);
   text-align: left;
-  font-size: 14px;
+  font-size: 13px;
 }
 .condition-editor-toggle small {
-  margin-left: 8px;
+  margin-left: 6px;
   color: var(--quiet);
   font-size: 12px;
 }
-.condition-editor-toggle svg {
+.condition-editor-toggle svg,
+.condition-editor-expand svg {
   flex-shrink: 0;
   transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-.condition-editor-toggle svg.is-open {
+.condition-editor-toggle svg.is-open,
+.condition-editor-expand svg.is-open {
   transform: rotate(180deg);
 }
 .condition-editor-complete {
   display: grid;
-  gap: 16px;
-  padding: 8px 0 18px;
+  gap: 12px;
+  padding: 8px 0 14px;
 }
 .condition-editor .domain-row {
   margin-top: 0;
 }
 .condition-editor-preview {
-  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--paper);
 }
-.condition-editor-preview h3 {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0;
-  font-size: 14px;
-}
-.condition-editor-preview h3 > span {
-  color: var(--quiet);
-  font-size: 12px;
-  font-weight: 400;
+.condition-editor-preview > div {
+  grid-column: 1 / -1;
 }
 .condition-editor-preview p {
   margin: 6px 0 0;
   font-size: 13px;
   color: var(--quiet);
   overflow-wrap: anywhere;
+}
+.condition-editor-preview .condition-editor-summary {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.condition-editor-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 30px;
+  color: var(--blue);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .condition-editor-preview ul {
   display: grid;
@@ -120,38 +162,47 @@
   color: var(--quiet);
 }
 .condition-editor-note {
-  margin-top: 16px;
+  padding: 2px 0 8px;
 }
 .condition-editor-bottom {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 18px;
+  flex: none;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 .condition-editor-bottom > p {
   margin: 0;
+  width: 100%;
+  font-size: 12px;
+}
+.condition-editor-bottom .submit-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  width: 100%;
+  gap: 8px;
+}
+.condition-editor-bottom .primary-button {
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  padding: 9px 10px;
+  font-size: 13px;
+}
+.condition-editor-bottom .secondary-button {
+  padding: 9px 12px;
+  font-size: 13px;
 }
 .condition-editor :disabled {
   cursor: not-allowed;
 }
-@media (max-width: 560px) {
-  .condition-editor-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-  .condition-editor-toggle small {
-    display: block;
-    margin-left: 0;
-  }
-  .condition-editor-bottom .submit-actions {
-    width: 100%;
-    justify-content: flex-end;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  .condition-editor-toggle svg {
+  .condition-editor-toggle svg,
+  .condition-editor-expand svg {
     transition: none;
   }
 }

@@ -59,6 +59,12 @@ describe("bounded explicit circular execution prerequisites", () => {
     expect(() => assertNoCircularPreconditions(text)).toThrow("执行前置条件存在循环");
   });
 
+  it("rejects the complete recorded thesis with a budget qualifier before the repeated action", () => {
+    const thesis =
+      "待验证的方案假设：利用现有旧车，先零成本静态查验车架与刹车，通过后再索取书面分项封顶报价（工时、配件、检测费、锁具、维修后复检标准）。口头报价300元范围未明，检测、配件、锁具均未知；只有封顶合计≤650元且维修后安全复检达标才在已知封顶费用内维修。任一关键金额未知或超限即退出本路线，不追加投入；退出后是否转其他路线由用户另行决定，本路线不代为承诺。";
+    expect(() => assertNoCircularPreconditions(thesis)).toThrow("执行前置条件存在循环");
+  });
+
   it.each([
     "维修前安全检查通过才维修；维修后复检达标再通勤。",
     "先在用户允许的封顶额度内支付诊断费取得结论，无论通过与否都计入已花；通过前不付正式维修费。",
@@ -73,6 +79,7 @@ describe("bounded explicit circular execution prerequisites", () => {
     "解释维修后复检达标才执行维修这个错误句。",
     "维修后复检达标才执行维修是否存在循环？",
     "维修后安全复检达标，才支付已经约定的维修尾款。",
+    "维修后复检通过才安排维修尾款支付。",
   ])(
     "does not reinterpret proper sequences, rework, quotes, negations or discussion: %s",
     (text) => {

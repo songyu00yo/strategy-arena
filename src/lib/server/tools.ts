@@ -514,7 +514,8 @@ export function assertNoCircularPreconditions(text: string): void {
   const clauseText = String.raw`[^。；;！？?!\n]`;
   const postActionCheck = `(?:完成|完毕|结束)?(?:之)?后(?=${clauseText}{0,45}(?:复检|验收|检查|检测|核验))${clauseText}{0,60}?`;
   const passedCondition = `(?:通过|达标|合格)${clauseText}{0,8}?`;
-  const sameActionGate = String.raw`(?:才|方可)(?:能|可)?(?:(?:允许|执行|进行|开始|安排|启动)(?:进行|执行)?\1|\1(?=$|[，,。；;]))`;
+  const executionQualifier = `(?:在${clauseText}{1,16}内)?`;
+  const sameActionGate = String.raw`(?:才|方可)(?:能|可)?${executionQualifier}(?:(?:允许|执行|进行|开始|安排|启动)(?:进行|执行)?\1|\1(?=$|[，,。；;]))`;
   const cycle = new RegExp(action + postActionCheck + passedCondition + sameActionGate, "gu");
   for (const sentence of ownText.split(/[。；;\n]/)) {
     if (/[?？]|是否|能否/.test(sentence)) continue;
@@ -525,7 +526,8 @@ export function assertNoCircularPreconditions(text: string): void {
         /(?:不应|不得|不能|不要|避免|并非|不是)[^，,。；;]{0,12}$/.test(prefix) ||
         /讨论|解释|原文|示例|错误句/.test(prefix) ||
         /未(?:能)?通过|没通过|未达标|不达标|不合格|未合格|不通过/.test(match[0]) ||
-        /^(?:下一|另一|其他|新一|第[二三四五六七八九十\d]|后续)/.test(after)
+        /^(?:下一|另一|其他|新一|第[二三四五六七八九十\d]|后续)/.test(after) ||
+        /^(?:尾款|款项|费用|价款)(?:支付|结算|付清|付款|收取)/.test(after)
       )
         continue;
       throw new Error(

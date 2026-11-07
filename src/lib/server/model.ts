@@ -298,13 +298,26 @@ export function buildMessages(
   const outputSchema = strict
     ? strictOutputSchema(kind, input, schema, provider)
     : z.toJSONSchema(schema);
+  const judgeLimits =
+    kind === "judge"
+      ? Object.entries(z.toJSONSchema(schema).properties ?? {})
+          .flatMap(([name, property]) =>
+            ["conditions", "uncertainties", "nextActions"].includes(name) &&
+            property &&
+            typeof property === "object" &&
+            typeof property.maxItems === "number"
+              ? [`${name} 最多 ${property.maxItems} 项`]
+              : [],
+          )
+          .join("，")
+      : "";
   const outputRule = strict
     ? `只调用一次 submit_${kind} 函数提交结构化结果，不输出其他工具或自然语言。在 estimatedCost、estimatedHours、preferred 这三个可空字段中用字符串 \"unknown\" 表示未知，严格模式不要输出 null；其他字段的 unknown 仍保留原含义。`
     : "输出一个完整 JSON 对象。";
   return [
     {
       role: "system",
-      content: `${SYSTEM}\n${context}\n${protocol}\n${outputRule}\n${referenceInstructions(kind, input)}\n输出 json 格式的 Schema：${JSON.stringify(outputSchema)}\n严格遵守字段长度与数组数量。steps 建议 4 项、最多 6 项，claims 最多 3 项，responses 最多 6 项。若数据含 repairFeedback，只修正 rejectedOutput 中指出的格式或引用问题，保持合法内容和证据不变；这是唯一一次格式修复机会。`,
+      content: `${SYSTEM}\n${context}\n${protocol}\n${outputRule}\n${referenceInstructions(kind, input)}\n输出 json 格式的 Schema：${JSON.stringify(outputSchema)}\n严格遵守字段长度与数组数量。steps 建议 4 项、最多 6 项，claims 最多 3 项，responses 最多 6 项。${judgeLimits ? `本轮裁决：${judgeLimits}。` : ""}若数据含 repairFeedback，只修正 rejectedOutput 中指出的格式或引用问题，保持合法内容和证据不变；数组超项时合并同类内容以满足明确上限，保留全部硬限制、证据和未知，不凭空删改事实；这是唯一一次格式修复机会。`,
     },
     {
       role: "user",
@@ -927,12 +940,43 @@ async function executeStructured<T>({
         : undefined,
     );
   }
-  const parsed = schema.safeParse(strict ? restoreStrictNulls(decoded) : decoded);
+  const validationInput = strict ? restoreStrictNulls(decoded) : decoded;
+  const parsed = schema.safeParse(validationInput);
   if (!parsed.success) {
     const paths = parsed.error.issues
       .slice(0, 5)
-      .map((issue) => `${issue.path.join(".")}: ${issue.code}`)
-      .join("；");
+      .map((issue) => {
+        const path = issue.path.map(String).join(".").slice(0, 160);
+        const label = `${path}: ${issue.code}`;
+        if (issue.code !== "too_big" && issue.code !== "too_small") return label;
+        const maximum = issue.code === "too_big";
+        const bound = maximum ? issue.maximum : issue.minimum;
+        const unit =
+          issue.origin === "array" ? "项" : issue.origin === "string" ? "字符" : "（数值）";
+        const rule = maximum
+          ? issue.inclusive === false
+            ? "少于"
+            : "最多"
+          : issue.inclusive === false
+            ? "多于"
+            : "至少";
+        const value = issue.path.reduce<unknown>(
+          (parent, key) =>
+            parent && typeof parent === "object" && Object.hasOwn(parent, key)
+              ? (parent as Record<PropertyKey, unknown>)[key]
+              : undefined,
+          validationInput,
+        );
+        const count =
+          issue.origin === "array" && Array.isArray(value)
+            ? value.length
+            : issue.origin === "string" && typeof value === "string"
+              ? value.length
+              : undefined;
+        return `${label}（${rule}${bound}${unit}；${maximum ? "maximum" : "minimum"}=${bound}${count === undefined ? "" : `；实收${count}${unit}`}）`;
+      })
+      .join("；")
+      .slice(0, 1500);
     throw new ModelCallError(
       `模型返回的内容格式有误（${paths}），已记录用量。`,
       false,

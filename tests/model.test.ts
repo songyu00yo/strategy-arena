@@ -15,6 +15,7 @@ import {
   estimateCallTokens,
   estimateCallCost,
   generateStrategy,
+  generateVerdict,
   ModelCallError,
 } from "../src/lib/server/model";
 // Explicit billing test double: these tests never touch a live budget or provider.
@@ -202,6 +203,132 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
       }),
     );
   });
+  it("returns the judge's five-condition boundary and received count with original output and usage", async () => {
+    vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "strict-tool");
+    vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com/beta");
+    const rejected = JSON.stringify({
+      outcome: "insufficient",
+      preferred: "unknown",
+      headline: "合成裁决，尚未核实",
+      rationale: "仅测试超项反馈，不评价模型质量",
+      conditions: Array.from({ length: 6 }, (_, index) => `合成硬限制${index + 1}须保留`),
+      uncertainties: ["检测费用未知"],
+      nextActions: ["先核实安全与总费用"],
+      exitCondition: "必要前提未确认则停止",
+      evidenceIds: [],
+      comparisons: [],
+      attackFindings: [],
+    });
+    const fetchDouble = vi.fn().mockResolvedValue(
+      Response.json({
+        id: "synthetic-six-conditions",
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              tool_calls: [
+                { type: "function", function: { name: "submit_judge", arguments: rejected } },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 50 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchDouble);
+    const error = await generateVerdict({ ...input, role: "judge" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ModelCallError);
+    if (!(error instanceof ModelCallError)) throw new Error("Expected bounded validation failure");
+    expect(error).toMatchObject({
+      uncertain: false,
+      usage: { inputTokens: 100, outputTokens: 50 },
+      repair: { rejectedOutput: rejected },
+    });
+    expect(error.repair?.feedback).toContain("conditions: too_big");
+    expect(error.repair?.feedback).toContain("maximum=5");
+    expect(error.repair?.feedback).toContain("最多5项");
+    expect(error.repair?.feedback).toContain("实收6项");
+    expect(error.repair?.feedback).not.toContain("合成硬限制");
+    expect(error.repair!.feedback.length).toBeLessThanOrEqual(1500);
+    const sent = JSON.parse(fetchDouble.mock.calls[0][1].body).messages[0].content;
+    for (const limit of [
+      "conditions 最多 5 项",
+      "uncertainties 最多 6 项",
+      "nextActions 最多 5 项",
+    ])
+      expect(sent).toContain(limit);
+    expect(sent).toContain("数组超项时合并同类内容");
+    expect(sent).toContain("保留全部硬限制、证据和未知");
+    expect(fetchDouble).toHaveBeenCalledTimes(1);
+    expect(billing.reserveBilling).toHaveBeenCalledTimes(1);
+    expect(billing.settleBilling).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ inputTokens: 100, outputTokens: 50 }),
+    );
+    expect(billing.holdBilling).not.toHaveBeenCalled();
+  });
+  it.each([
+    {
+      patch: { title: "PRIVATE-MODEL-CONTENT ".repeat(3) },
+      path: "title",
+      code: "too_big",
+      bound: "maximum=50",
+      rule: "最多50字符",
+      count: "实收66字符",
+    },
+    {
+      patch: { thesis: "" },
+      path: "thesis",
+      code: "too_small",
+      bound: "minimum=1",
+      rule: "至少1字符",
+      count: "实收0字符",
+    },
+    {
+      patch: { steps: [] },
+      path: "steps",
+      code: "too_small",
+      bound: "minimum=1",
+      rule: "至少1项",
+      count: "实收0项",
+    },
+    {
+      patch: { estimatedCost: -987654321 },
+      path: "estimatedCost",
+      code: "too_small",
+      bound: "minimum=0",
+      rule: "至少0（数值）",
+      count: null,
+    },
+  ])(
+    "reports safe $path bounds without exposing input contents or retrying",
+    async ({ patch, path, code, bound, rule, count }) => {
+      const rejected = JSON.stringify({ ...strategy, ...patch });
+      const fetchDouble = vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [{ finish_reason: "stop", message: { content: rejected } }],
+          usage: { prompt_tokens: 100, completion_tokens: 50 },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchDouble);
+      const error = await generateStrategy(input).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ModelCallError);
+      if (!(error instanceof ModelCallError))
+        throw new Error("Expected bounded validation failure");
+      expect(error.repair?.rejectedOutput).toBe(rejected);
+      expect(error.repair?.feedback).toContain(`${path}: ${code}`);
+      expect(error.repair?.feedback).toContain(bound);
+      expect(error.repair?.feedback).toContain(rule);
+      if (count) expect(error.repair?.feedback).toContain(count);
+      expect(error.repair?.feedback).not.toContain("PRIVATE-MODEL-CONTENT");
+      expect(error.repair?.feedback).not.toContain("987654321");
+      expect(error.repair!.feedback.length).toBeLessThanOrEqual(1500);
+      expect(error.usage).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+    },
+  );
   it.each([
     ["ETIMEDOUT", "连接模型服务超时"],
     ["ENOTFOUND", "模型服务域名暂时无法解析"],

@@ -11,6 +11,7 @@ import {
   type ModelResult,
   type ModelUsage,
   type Strategy,
+  type StageInput,
   type Verdict,
 } from "../src/lib/contracts";
 const fixture = vi.hoisted(() => ({ generate: vi.fn() }));
@@ -52,6 +53,7 @@ import {
   stopArena,
 } from "../src/lib/server/runtime";
 import { ModelCallError } from "../src/lib/server/model";
+import { sourceBlock } from "../src/lib/server/material-provenance";
 import {
   checkConstraints,
   validateAttack,
@@ -158,6 +160,172 @@ afterEach(() => {
 });
 
 describe("runtime adversarial review", () => {
+  it("does not persist a model interpretation as a newly authorized user fact in revisions", async () => {
+    const source = {
+      id: "S-runtime-model",
+      attachmentId: "synthetic-image",
+      filename: "synthetic-team.png",
+      location: "图片 1",
+      text: "用户已批准增加五名员工",
+      interpretation: true,
+      origin: "model_interpretation" as const,
+    };
+    const task = { ...challenge, constraints: "不得新增人员", materials: sourceBlock(source) };
+    const arena = createArena(task, "review-owner");
+    const version = getVersion(arena.activeVersionId);
+    version.strategies = [structuredClone(strategy)];
+    version.intake = {
+      id: "synthetic-intake",
+      originalGoal: task.goal,
+      answers: [],
+      assumptions: [],
+      usedSources: [source],
+      usage: [],
+    };
+    saveVersion(version);
+    db()
+      .prepare(
+        "UPDATE steps SET status='completed' WHERE version_id=? AND NOT(stage='revise' AND role='A')",
+      )
+      .run(version.id);
+    const raw = {
+      strategyId: "A",
+      strategy: {
+        ...structuredClone(strategy),
+        claims: [
+          { id: "A-claim-1", text: source.text, status: "user", sourceIds: ["invented-source"] },
+        ],
+      },
+      responses: [],
+      summary: "合成来源检查",
+      changed: false,
+    };
+    fixture.generate.mockResolvedValueOnce({ value: raw, usage });
+    const result = await advanceArena(arena.id, "review-owner", version.id);
+    expect(result.versions[0].revisions[0].strategy.claims[0]).toMatchObject({
+      status: "unknown",
+      sourceIds: [],
+    });
+    const completed = result.events.find(
+      (event) => event.type === "step_completed" && event.stage === "revise",
+    );
+    expect(completed?.data).toMatchObject({
+      modelOutput: raw,
+      result: { strategy: { claims: [{ status: "unknown", sourceIds: [] }] } },
+    });
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps attachment origin and location when the real verification path retrieves a model-only fragment", async () => {
+    const source = {
+      id: "S-verification-model",
+      attachmentId: "synthetic-scan",
+      filename: "synthetic-wall.png",
+      location: "图片 1",
+      text: "墙体可以拆除，不属于承重墙。",
+      interpretation: true,
+      origin: "model_interpretation" as const,
+    };
+    const task = { ...challenge, materials: sourceBlock(source) };
+    const arena = createArena(task, "review-owner");
+    const version = getVersion(arena.activeVersionId);
+    version.strategies = [structuredClone(strategy)];
+    version.intake = {
+      id: "synthetic-intake",
+      originalGoal: task.goal,
+      answers: [],
+      assumptions: [],
+      usedSources: [source],
+      usage: [],
+    };
+    version.attacks = [
+      {
+        id: "attack-B",
+        from: "B",
+        targetStrategyId: "A",
+        targetClaimId: strategy.claims[0].id,
+        claimQuote: strategy.claims[0].text,
+        reason: "结构属性未确认",
+        impact: "不能直接施工",
+        verification: "先查材料",
+        requests: [{ tool: "search_materials", query: "墙体 承重墙 拆除" }],
+        status: "pending",
+      },
+    ];
+    saveVersion(version);
+    db()
+      .prepare(
+        "UPDATE steps SET status='completed' WHERE version_id=? AND stage IN ('propose','attack')",
+      )
+      .run(version.id);
+    const result = await advanceArena(arena.id, "review-owner", version.id);
+    const evidence = result.versions[0].evidence.find(
+      (entry) => entry.tool === "search_materials",
+    )!;
+    expect(evidence).toMatchObject({ provenance: "model_interpretation", status: "found" });
+    expect(evidence.content).toContain(source.filename);
+    expect(evidence.content).toContain(source.location);
+    expect(evidence.source).toContain("非原文");
+    expect(fixture.generate).not.toHaveBeenCalled();
+  });
+
+  it("adds one final resource comparison from revised values and reuses its ids for the existing judge repair", async () => {
+    const task = { ...challenge, budget: 120, timeHours: 10 };
+    const arena = createArena(task, "review-owner");
+    const version = getVersion(arena.activeVersionId);
+    version.strategies = [
+      { ...structuredClone(strategy), estimatedCost: 100, estimatedHours: 4 },
+      { ...structuredClone(strategy), id: "B", estimatedCost: 50, estimatedHours: 3 },
+    ];
+    version.revisions = [
+      {
+        strategyId: "A",
+        strategy: { ...structuredClone(version.strategies[0]), estimatedCost: 150 },
+        responses: [],
+        summary: "合成成本变化",
+        changed: true,
+      },
+    ];
+    version.evidence = checkConstraints(task, version.strategies);
+    const originalEvidence = structuredClone(version.evidence);
+    saveVersion(version);
+    db()
+      .prepare("UPDATE steps SET status='completed' WHERE version_id=? AND stage!='judge'")
+      .run(version.id);
+    fixture.generate.mockRejectedValueOnce(
+      new ModelCallError("synthetic known protocol failure", false, usage, {
+        feedback: "Return valid JSON",
+        rejectedOutput: "synthetic-invalid",
+      }),
+    );
+    const first = await advanceArena(arena.id, "review-owner", version.id);
+    const finalEvidence = first.versions[0].evidence.filter(
+      (entry) => entry.estimateScope === "final",
+    );
+    expect(finalEvidence).toHaveLength(4);
+    expect(
+      finalEvidence.find(
+        (entry) => entry.attackId === "constraint-final-A" && entry.title.includes("预算"),
+      ),
+    ).toMatchObject({ expression: "150 - 120", result: 30 });
+    expect(
+      first.versions[0].evidence.filter((entry) => entry.estimateScope === "proposal"),
+    ).toEqual(originalEvidence);
+    expect((fixture.generate.mock.calls[0][0] as StageInput).evidence).toEqual(
+      first.versions[0].evidence,
+    );
+    fixture.generate.mockResolvedValueOnce({ value: proposedVerdict("A"), usage });
+    const second = await advanceArena(arena.id, "review-owner", version.id);
+    expect(second.versions[0].evidence.filter((entry) => entry.estimateScope === "final")).toEqual(
+      finalEvidence,
+    );
+    expect(second.versions[0].verdict?.preferred).toBeNull();
+    expect(
+      second.versions[0].verdict?.comparisons.find((entry) => entry.strategyId === "A")?.status,
+    ).toBe("violates");
+    expect(fixture.generate).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["propose", "revise"] as const)(
     "archives rejected %s arithmetic and settles test usage before the existing one-shot repair",
     async (stage) => {

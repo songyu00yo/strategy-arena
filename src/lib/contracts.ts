@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MODEL_IDS } from "./model-catalog";
 
-export const SCHEMA_VERSION = "1.0.0";
+export const SCHEMA_VERSION = "1.1.0";
 export const STAGES = ["propose", "attack", "verify", "revise", "judge"] as const;
 export type Stage = (typeof STAGES)[number];
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -100,6 +100,10 @@ export const EvidenceSchema = z.object({
   content: z.string().max(6000),
   source: short,
   sourceIds: z.array(z.string()).default([]),
+  provenance: z
+    .enum(["user_text", "document", "model_transcription", "model_interpretation", "unknown"])
+    .optional(),
+  estimateScope: z.enum(["proposal", "final"]).optional(),
   expression: z.string().nullable().default(null),
   result: z.number().nullable().default(null),
   assumptions: z.string().default(""),

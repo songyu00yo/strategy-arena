@@ -1,10 +1,14 @@
 /** Service integration with an explicit structured-model test double; never sends network requests. */
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { closeDb, db } from "../src/lib/server/db";
 import {
   IntakeAnalysisSchema,
+  UpdateIntakeSchema,
   type IntakeDraft,
   type IntakeQuestion,
 } from "../src/lib/intake-contracts";
@@ -107,6 +111,56 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe("guided task preparation with synthetic model output", () => {
+  it("saves partial answers before a model change without inventing skipped or unknown answers", async () => {
+    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+    const questions = [question("headcount"), question("permission"), question("untouched")];
+    fixture.generate.mockResolvedValueOnce(result(analysis({ ready: false, questions })));
+    draft = await analyzeIntake(draft.id, "alice", operation(draft));
+    draft = updateIntake(draft.id, "alice", {
+      revision: draft.revision,
+      answerMode: "draft",
+      answers: [
+        { questionId: "headcount", state: "answered", value: "只有两名成员" },
+        { questionId: "permission", state: "skipped", value: "" },
+      ],
+    });
+    expect(draft).toMatchObject({ status: "questions", round: 1, questions });
+    expect(draft.answers.map((answer) => answer.questionId)).toEqual(["headcount", "permission"]);
+    expect(getIntake(draft.id, "alice").answers).toEqual(draft.answers);
+    const recorded = structuredClone(draft.answers);
+    draft = updateIntake(draft.id, "alice", { revision: draft.revision, modelMode: "gpt-6.1-sol" });
+    expect(draft.answers).toEqual(recorded);
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
+    fixture.generate.mockResolvedValueOnce(result(analysis({ ready: false, questions })));
+    draft = await analyzeIntake(draft.id, "alice", operation(draft));
+    expect(draft.questions.map((entry) => entry.id)).toEqual(["untouched"]);
+    expect(draft.answers).toEqual(recorded);
+  });
+
+  it("finishing a partially saved round replaces omitted answers with one explicit skipped record", async () => {
+    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+    fixture.generate.mockResolvedValueOnce(
+      result(analysis({ ready: false, questions: [question()] })),
+    );
+    draft = await analyzeIntake(draft.id, "alice", operation(draft));
+    draft = updateIntake(draft.id, "alice", {
+      revision: draft.revision,
+      answerMode: "draft",
+      answers: [{ questionId: "budget", state: "answered", value: "100元" }],
+    });
+    draft = updateIntake(draft.id, "alice", { revision: draft.revision, answers: [] });
+    expect(draft.answers).toHaveLength(1);
+    expect(draft.answers[0]).toMatchObject({ questionId: "budget", state: "skipped", value: "" });
+  });
+
+  it("accepts the optional draft-save mode only with answers, keeping legacy completion compatible", () => {
+    expect(UpdateIntakeSchema.safeParse({ revision: 0, answerMode: "draft" }).success).toBe(false);
+    expect(
+      UpdateIntakeSchema.safeParse({ revision: 0, answers: [], answerMode: "draft" }).success,
+    ).toBe(true);
+    expect(UpdateIntakeSchema.safeParse({ revision: 0, answers: [] }).success).toBe(true);
+  });
+
   it("defaults to Terra, isolates owners and omits private configuration", () => {
     const draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     expect(draft).toMatchObject({
@@ -693,7 +747,7 @@ describe("lazy retention at every existing-draft read entry", () => {
     ).toBeUndefined();
     expect(() => getIntakeAttachment(draft.id, "alice", draft.attachments[0].id)).toThrow("未找到");
   });
-  it("deletes expired bytes on direct attachment GET, including stale local pending records", async () => {
+  it("deletes expired bytes and an orphan operation that never recorded a call or reservation", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     draft = await addIntakeAttachment(
       draft.id,
@@ -707,9 +761,6 @@ describe("lazy retention at every existing-draft read entry", () => {
         "INSERT INTO intake_operations(id,draft_id,revision,body,state,updated_at) VALUES(?,?,?,?,?,?)",
       )
       .run(operationId, draft.id, draft.revision, "{}", "pending", expiredAt());
-    db()
-      .prepare("INSERT INTO intake_calls(id,operation_id,kind,state,created_at) VALUES(?,?,?,?,?)")
-      .run(randomUUID(), operationId, "analysis", "pending", expiredAt());
     db().prepare("UPDATE intake_drafts SET updated_at=? WHERE id=?").run(expiredAt(), draft.id);
     expect(() => getIntakeAttachment(draft.id, "alice", draft.attachments[0].id)).toThrow("未找到");
     expect(
@@ -719,6 +770,74 @@ describe("lazy retention at every existing-draft read entry", () => {
       db().prepare("SELECT id FROM intake_calls WHERE operation_id=?").get(operationId),
     ).toBeUndefined();
     expect(fixture.hold).not.toHaveBeenCalled();
+  });
+  it.each(["draft GET", "attachment GET", "new draft cleanup"] as const)(
+    "recovers a dispatched call after a 25h restart before %s can expire its audit",
+    async (entry) => {
+      const directory = mkdtempSync(join(tmpdir(), "arena-intake-restart-"));
+      closeDb();
+      vi.stubEnv("ARENA_DATABASE_PATH", join(directory, "intakes.sqlite"));
+      try {
+        let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+        const bytes = Buffer.from("material for an interrupted provider request");
+        draft = await addIntakeAttachment(draft.id, "alice", bytes, "interrupted.txt");
+        fixture.generate.mockReturnValueOnce(new Promise(() => {}));
+        const op = operation(draft);
+        void analyzeIntake(draft.id, "alice", op);
+        expect(fixture.generate).toHaveBeenCalledTimes(1);
+        const call = db()
+          .prepare("SELECT id FROM intake_calls WHERE operation_id=? AND state='pending'")
+          .get(op.operationId) as { id: string };
+        expect(call).toBeTruthy();
+        const reservation = getIntake(draft.id, "alice").reservedUsd;
+        expect(reservation).toBeGreaterThan(0);
+        const interruptedAt = Date.now() - 25 * 60 * 60 * 1000;
+        db()
+          .prepare("UPDATE intake_operations SET updated_at=? WHERE id=?")
+          .run(interruptedAt, op.operationId);
+        db()
+          .prepare("UPDATE intake_drafts SET updated_at=? WHERE id=?")
+          .run(interruptedAt, draft.id);
+        // Reopen persisted state with no original worker or provider response available.
+        closeDb();
+        fixture.generate.mockReset();
+        if (entry === "draft GET") expect(getIntake(draft.id, "alice").status).toBe("uncertain");
+        else if (entry === "attachment GET")
+          expect(
+            getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
+          ).toBe(true);
+        else createIntake("bob", { goal, modelMode: "gpt-6.1-terra" });
+        const recovered = getIntake(draft.id, "alice");
+        expect(recovered).toMatchObject({ status: "uncertain", reservedUsd: reservation });
+        expect(
+          getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
+        ).toBe(true);
+        expect(
+          db().prepare("SELECT state FROM intake_operations WHERE id=?").get(op.operationId),
+        ).toMatchObject({ state: "uncertain" });
+        expect(
+          db().prepare("SELECT state FROM intake_calls WHERE id=?").get(call.id),
+        ).toMatchObject({ state: "uncertain" });
+        expect(fixture.hold).toHaveBeenCalledExactlyOnceWith(call.id);
+        await expect(analyzeIntake(draft.id, "alice", operation(recovered))).rejects.toThrow(
+          "结果待确认",
+        );
+        expect(fixture.generate).not.toHaveBeenCalled();
+      } finally {
+        closeDb();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+  it("retains an expired reservation even when its local call record is missing", () => {
+    const draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+    const body = { ...draft, status: "analyzing", reservedUsd: 0.02 };
+    db()
+      .prepare("UPDATE intake_drafts SET body=?,updated_at=? WHERE id=?")
+      .run(JSON.stringify(body), expiredAt(), draft.id);
+    expect(getIntake(draft.id, "alice")).toMatchObject({ status: "uncertain", reservedUsd: 0.02 });
+    expect(fixture.hold).not.toHaveBeenCalled();
+    expect(fixture.generate).not.toHaveBeenCalled();
   });
   it.each(["draft", "operation", "call"] as const)(
     "retains an expired %s uncertainty record through owned reads and new-draft cleanup",

@@ -36,6 +36,7 @@ import {
   executeAttackTools,
   checkConstraints,
   assertStrategyArithmetic,
+  proposedClaims,
   validateAttack,
   validateRevision,
   validateVerdict,
@@ -582,6 +583,14 @@ function claim(
       } else break;
     }
     if (!step) return null;
+    if (step.stage === "judge" && !version.evidence.some((e) => e.estimateScope === "final")) {
+      const finalStrategies = version.strategies.map(
+        (strategy) =>
+          version.revisions.find((revision) => revision.strategyId === strategy.id)?.strategy ??
+          strategy,
+      );
+      version.evidence.push(...checkConstraints(version.challenge, finalStrategies, "final"));
+    }
     const input = inputFor(version, step);
     if (step.stage !== "verify") {
       if (!config.configured)
@@ -657,7 +666,11 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       step.stage === "verify"
         ? [
             ...input.attacks.flatMap((attack) =>
-              executeAttackTools(attack, input.challenge.materials),
+              executeAttackTools(
+                attack,
+                input.challenge.materials,
+                getVersion(versionId).intake?.usedSources,
+              ),
             ),
             ...checkConstraints(input.challenge, input.strategies),
           ]
@@ -677,7 +690,11 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
               input.strategies,
             )
           : step.stage === "revise"
-            ? validateRevision(result!.value as Revision, input)
+            ? validateRevision(
+                result!.value as Revision,
+                input,
+                getVersion(versionId).intake?.usedSources,
+              )
             : step.stage === "judge"
               ? validateVerdict(result!.value as Verdict, input)
               : result?.value;
@@ -697,24 +714,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       settle(version, step, result?.usage);
       if (step.stage === "propose") {
         const strategy = value as Strategy;
-        const userText = [
-          input.challenge.goal,
-          input.challenge.constraints,
-          input.challenge.preferences,
-          input.challenge.materials,
-          ...input.challenge.options,
-        ].join("\n");
-        strategy.claims = strategy.claims.map((c, index) => ({
-          ...c,
-          id: `${strategy.id}-claim-${index + 1}`,
-          status:
-            c.status === "estimate"
-              ? "estimate"
-              : c.status === "user" && userText.includes(c.text)
-                ? "user"
-                : "unknown",
-          sourceIds: [],
-        }));
+        strategy.claims = proposedClaims(strategy, input.challenge, version.intake?.usedSources);
         const duplicate = version.strategies.some((other) => strategiesDuplicate(other, strategy));
         const duplicateRetryExists = db()
           .prepare("SELECT id FROM steps WHERE version_id=? AND stage='propose' AND role=?")

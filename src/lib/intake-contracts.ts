@@ -71,18 +71,29 @@ export const CreateIntakeSchema = z.object({
   goal: z.string().max(3000).default(""),
   modelMode: ModelModeSchema.default("gpt-6.1-terra"),
 });
-export const UpdateIntakeSchema = z.object({
-  revision: z.number().int().nonnegative(),
-  goal: z.string().max(3000).optional(),
-  modelMode: ModelModeSchema.optional(),
-  answers: z.array(AnswerSchema).max(3).optional(),
-  summary: z
-    .object({
-      challenge: ChallengeSchema,
-      assumptions: z.array(z.string().max(500)).max(6),
-    })
-    .optional(),
-});
+export const UpdateIntakeSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    goal: z.string().max(3000).optional(),
+    modelMode: ModelModeSchema.optional(),
+    answers: z.array(AnswerSchema).max(3).optional(),
+    answerMode: z.enum(["draft", "complete"]).optional(),
+    summary: z
+      .object({
+        challenge: ChallengeSchema,
+        assumptions: z.array(z.string().max(500)).max(6),
+      })
+      .optional(),
+  })
+  .refine(
+    (value) =>
+      value.answerMode === undefined ||
+      (value.answers !== undefined && value.summary === undefined),
+    {
+      message: "回答保存方式只能与本轮回答一起提交。",
+      path: ["answerMode"],
+    },
+  );
 export const AnalyzeIntakeSchema = z.object({
   revision: z.number().int().nonnegative(),
   operationId: z.string().uuid(),

@@ -1,4 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { MaterialSource } from "../intake-contracts";
+import {
+  materialSpans,
+  materialSpanAt,
+  originalUserText,
+  type MaterialSpan,
+} from "./material-provenance";
 import type {
   Attack,
   Challenge,
@@ -15,22 +22,37 @@ export interface MaterialChunk {
   start: number;
   end: number;
   line: number;
+  provenance?: MaterialSpan;
 }
-export function chunkMaterials(materials: string): MaterialChunk[] {
+export function chunkMaterials(materials: string, sources: MaterialSource[] = []): MaterialChunk[] {
   const chunks: MaterialChunk[] = [];
+  const spans = materialSpans(materials, sources);
   const pattern = /[^\r\n]+/g;
   for (const match of materials.matchAll(pattern)) {
-    for (let offset = 0; offset < match[0].length; offset += 500) {
-      const text = match[0].slice(offset, offset + 500);
-      if (!text.trim()) continue;
-      const start = match.index! + offset;
-      chunks.push({
-        id: `M-${createHash("sha256").update(materials).digest("hex").slice(0, 10)}-${start}`,
-        text,
-        start,
-        end: start + text.length,
-        line: materials.slice(0, start).split("\n").length,
-      });
+    const lineStart = match.index!;
+    const lineEnd = lineStart + match[0].length;
+    const boundaries = [
+      ...new Set([
+        lineStart,
+        lineEnd,
+        ...spans
+          .flatMap((span) => [span.start, span.end])
+          .filter((position) => position > lineStart && position < lineEnd),
+      ]),
+    ].sort((a, b) => a - b);
+    for (let segment = 0; segment < boundaries.length - 1; segment++) {
+      for (let start = boundaries[segment]; start < boundaries[segment + 1]; start += 500) {
+        const text = materials.slice(start, Math.min(start + 500, boundaries[segment + 1]));
+        if (!text.trim()) continue;
+        chunks.push({
+          id: `M-${createHash("sha256").update(materials).digest("hex").slice(0, 10)}-${start}`,
+          text,
+          start,
+          end: start + text.length,
+          line: materials.slice(0, start).split("\n").length,
+          provenance: materialSpanAt(spans, start, start + text.length),
+        });
+      }
     }
   }
   return chunks;
@@ -47,8 +69,12 @@ function terms(text: string): string[] {
   );
   return [...segmented, ...bigrams];
 }
-export function searchMaterials(materials: string, query: string): MaterialChunk[] {
-  const chunks = chunkMaterials(materials);
+export function searchMaterials(
+  materials: string,
+  query: string,
+  sources: MaterialSource[] = [],
+): MaterialChunk[] {
+  const chunks = chunkMaterials(materials, sources);
   if (!chunks.length) return [];
   const docs = chunks.map((c) => terms(c.text));
   const queryTerms = [...new Set(terms(query))];
@@ -132,7 +158,27 @@ function baseEvidence(
     createdAt: new Date().toISOString(),
   };
 }
-export function executeAttackTools(attack: Attack, materials: string): Evidence[] {
+const materialLabels = {
+  user_text: "用户填写的材料",
+  document: "文件正文",
+  model_transcription: "模型转录，待核对原文件",
+  model_interpretation: "模型解读，非原文",
+  unknown: "旧材料片段，来源方式未记录",
+} as const;
+
+/** Retrieval confirms that text exists, not that an interpretation is independently verified. */
+function usableEvidence(evidence: Evidence) {
+  return (
+    (evidence.status === "found" || evidence.status === "calculated") &&
+    !["model_transcription", "model_interpretation", "unknown"].includes(evidence.provenance ?? "")
+  );
+}
+
+export function executeAttackTools(
+  attack: Attack,
+  materials: string,
+  sources: MaterialSource[] = [],
+): Evidence[] {
   if (!attack.requests.length)
     return [
       {
@@ -144,23 +190,56 @@ export function executeAttackTools(attack: Attack, materials: string): Evidence[
         source: "协议检查：未调用检索工具",
       },
     ];
-  return attack.requests.map((request) => {
+  return attack.requests.flatMap<Evidence>((request) => {
     if (request.tool === "search_materials") {
-      const results = searchMaterials(materials, request.query);
-      return {
-        ...baseEvidence(attack.id),
-        tool: request.tool,
-        status: results.length ? "found" : "unavailable",
-        title: `材料检索：${request.query}`,
-        content: results.length
-          ? results
-              .map((c) => `[${c.id}] 第 ${c.line} 行 / 字符 ${c.start}–${c.end}\n${c.text}`)
+      const results = searchMaterials(materials, request.query, sources);
+      if (!results.length)
+        return {
+          ...baseEvidence(attack.id),
+          tool: request.tool,
+          status: "unavailable",
+          title: `材料检索：${request.query}`,
+          content: "提供的材料中未找到相关内容。未执行公开搜索。",
+          source: "本次提供的材料",
+        } satisfies Evidence;
+      const groups = new Map<NonNullable<Evidence["provenance"]>, MaterialChunk[]>();
+      for (const chunk of results) {
+        const origin = chunk.provenance?.origin ?? "user_text";
+        groups.set(origin, [...(groups.get(origin) ?? []), chunk]);
+      }
+      return [...groups].map(
+        ([origin, chunks]) =>
+          ({
+            ...baseEvidence(attack.id),
+            tool: request.tool,
+            status: "found",
+            provenance: origin,
+            title: `材料检索：${request.query} · ${materialLabels[origin]}`,
+            content: chunks
+              .map((chunk) => {
+                const ref = chunk.provenance;
+                const location = ref?.filename
+                  ? `文件：${ref.filename}；位置：${ref.location ?? "未记录"}\n`
+                  : "";
+                return `[${chunk.id}] ${materialLabels[origin]}\n${location}第 ${chunk.line} 行 / 字符 ${chunk.start}–${chunk.end}\n${chunk.text}`;
+              })
               .join("\n\n")
-          : "提供的文字材料中未找到相关内容。未执行公开搜索。",
-        source: "用户提供的文字材料 / BM25",
-        sourceIds: results.map((c) => c.id),
-        assumptions: "以下为原文命中；不能证明材料本身真实或适用于当前情景。",
-      } satisfies Evidence;
+              .slice(0, 6000),
+            source: materialLabels[origin],
+            sourceIds: [
+              ...new Set(
+                chunks.flatMap((chunk) => [
+                  chunk.id,
+                  ...(chunk.provenance?.sourceId ? [chunk.provenance.sourceId] : []),
+                ]),
+              ),
+            ],
+            assumptions:
+              origin === "document" || origin === "user_text"
+                ? "只确认材料中存在这些文字，不能证明材料本身真实或适用于当前情景。"
+                : "保留此片段供核对；模型读取和解读、来源方式未记录的文字，都不是独立的原文或事实核验，不能据此把观点标为已证实。",
+          }) satisfies Evidence,
+      );
     }
     try {
       const result = calculate(request.expression);
@@ -189,7 +268,11 @@ export function executeAttackTools(attack: Attack, materials: string): Evidence[
     }
   });
 }
-export function checkConstraints(challenge: Challenge, strategies: Strategy[]): Evidence[] {
+export function checkConstraints(
+  challenge: Challenge,
+  strategies: Strategy[],
+  scope: "proposal" | "final" = "proposal",
+): Evidence[] {
   return strategies.flatMap((strategy) => {
     const checks: Evidence[] = [];
     for (const [name, limit, estimate, unit] of [
@@ -198,18 +281,21 @@ export function checkConstraints(challenge: Challenge, strategies: Strategy[]): 
     ] as const) {
       if (limit === null) continue;
       checks.push({
-        ...baseEvidence(`constraint-${strategy.id}`),
+        ...baseEvidence(
+          scope === "final" ? `constraint-final-${strategy.id}` : `constraint-${strategy.id}`,
+        ),
         tool: "constraint_check",
+        estimateScope: scope,
         status: estimate === null ? "unavailable" : "calculated",
-        title: `${strategy.id} 路线${name}检查`,
+        title: `${strategy.id} 路线${name}检查 · ${scope === "final" ? "裁决前最终方案" : "初始提案"}`,
         content:
           estimate === null
             ? `限制 ${limit} ${unit}，但该方案没有可比较的估计，仍待核验。`
             : `方案估计 ${estimate} ${unit}，用户限制 ${limit} ${unit}；${estimate > limit ? "按此估计超出" : "按此估计未超出"}。模型估计尚非实际测量。`,
-        source: "用户限制与策略估计比较",
+        source: `${scope === "final" ? "裁决前最终方案" : "初始提案"}估计与用户限制比较`,
         expression: estimate === null ? null : `${estimate} - ${limit}`,
         result: estimate === null ? null : estimate - limit,
-        assumptions: "只比较已给出的数字，不证明估计准确；其他文字限制仍需核实。",
+        assumptions: `仅适用于${scope === "final" ? "当前最终方案" : "初始提案，不能代替最终修订核验"}。只比较已给出的数字，不证明估计准确或覆盖全程；文字限制仍需核实。`,
       });
     }
     return checks;
@@ -234,7 +320,38 @@ function actionable(strategy: Strategy) {
     estimatedHours: strategy.estimatedHours,
   });
 }
-export function validateRevision(revision: Revision, input: StageInput): Revision {
+function userText(challenge: Challenge, sources: MaterialSource[]) {
+  return [
+    challenge.goal,
+    challenge.constraints,
+    challenge.preferences,
+    originalUserText(challenge.materials, sources),
+    ...challenge.options,
+  ].join("\n");
+}
+export function proposedClaims(
+  strategy: Strategy,
+  challenge: Challenge,
+  sources: MaterialSource[] = [],
+) {
+  const provided = userText(challenge, sources);
+  return strategy.claims.map((claim, index) => ({
+    ...claim,
+    id: `${strategy.id}-claim-${index + 1}`,
+    status:
+      claim.status === "estimate"
+        ? ("estimate" as const)
+        : claim.status === "user" && provided.includes(claim.text)
+          ? ("user" as const)
+          : ("unknown" as const),
+    sourceIds: [],
+  }));
+}
+export function validateRevision(
+  revision: Revision,
+  input: StageInput,
+  sources: MaterialSource[] = [],
+): Revision {
   const original = input.strategies.find((s) => s.id === revision.strategyId);
   if (!original || revision.strategy.id !== original.id || revision.strategyId !== input.role)
     throw new Error("修订策略与本轮角色不匹配。");
@@ -253,9 +370,7 @@ export function validateRevision(revision: Revision, input: StageInput): Revisio
       throw new Error("修订的证据引用与攻击不对应。");
   }
   const changed = actionable(original) !== actionable(revision.strategy);
-  const successful = input.evidence.filter(
-    (e) => e.status === "found" || e.status === "calculated",
-  );
+  const successful = input.evidence.filter(usableEvidence);
   const responses = revision.responses.map((r) => {
     const evidenceIds = r.evidenceIds.filter((id) => successful.some((e) => e.id === id));
     if (r.decision !== "unresolved" && !evidenceIds.length)
@@ -285,12 +400,21 @@ export function validateRevision(revision: Revision, input: StageInput): Revisio
     });
   // A supported claim must have a real evidence/source reference.
   const sourceIds = new Set(successful.flatMap((e) => [e.id, ...e.sourceIds]));
-  const claims = revision.strategy.claims.map((c) =>
-    c.status === "supported" &&
-    (!c.sourceIds.length || c.sourceIds.some((id) => !sourceIds.has(id)))
-      ? { ...c, status: "unknown" as const, sourceIds: [] }
-      : c,
-  );
+  const provided = userText(input.challenge, sources);
+  const claims = revision.strategy.claims.map((claim) => {
+    if (claim.status === "user")
+      return {
+        ...claim,
+        status: provided.includes(claim.text) ? ("user" as const) : ("unknown" as const),
+        sourceIds: [],
+      };
+    if (
+      claim.status === "supported" &&
+      (!claim.sourceIds.length || claim.sourceIds.some((id) => !sourceIds.has(id)))
+    )
+      return { ...claim, status: "unknown" as const, sourceIds: [] };
+    return { ...claim, sourceIds: claim.sourceIds.filter((id) => sourceIds.has(id)) };
+  });
   return { ...revision, changed, responses, strategy: { ...revision.strategy, claims } };
 }
 /** Bounded text checks, not fact verification: only numeric equations and direct yuan
@@ -379,11 +503,7 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
   const strategies = input.strategies.map(
     (s) => input.revisions.find((r) => r.strategyId === s.id)?.strategy || s,
   );
-  const successful = new Set(
-    input.evidence
-      .filter((e) => e.status === "found" || e.status === "calculated")
-      .map((e) => e.id),
-  );
+  const successful = new Set(input.evidence.filter(usableEvidence).map((e) => e.id));
   if (verdict.evidenceIds.some((id) => !input.evidence.some((e) => e.id === id)))
     throw new Error("裁决引用了不存在的证据。请原样复制 Evidence.id，不要使用材料 sourceId。");
   const findings = input.attacks.map((a) => {

@@ -27,6 +27,10 @@ const strategy = {
   failureCondition: "没有可用作品",
   estimatedCost: null,
   estimatedHours: 8,
+  costPlan: {
+    complete: false,
+    items: [{ id: "c1", label: "费用范围待确认", amount: null, basis: "unknown", quote: "" }],
+  },
 };
 function response(
   content = JSON.stringify(strategy),

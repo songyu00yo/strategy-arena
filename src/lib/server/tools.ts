@@ -1,7 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { MaterialSource } from "../intake-contracts";
 import { normalizedRevisionSummary } from "./revision-summary";
-import { assertDeclaredResourceArithmetic, assertStrategyResourceTotals } from "./resource-totals";
+import {
+  assertDeclaredResourceArithmetic,
+  assertStrategyResourceTotals,
+  costPlanGate,
+  costPlanTotal,
+  normalizeCostPlan,
+} from "./resource-totals";
 import {
   materialSpans,
   materialSpanAt,
@@ -275,7 +281,8 @@ export function checkConstraints(
   strategies: Strategy[],
   scope: "proposal" | "final" = "proposal",
 ): Evidence[] {
-  return strategies.flatMap((strategy) => {
+  return strategies.flatMap((candidate) => {
+    const strategy = normalizeCostPlan(candidate);
     const checks: Evidence[] = [];
     for (const [name, limit, estimate, unit] of [
       ["预算", challenge.budget, strategy.estimatedCost, "元"],
@@ -297,7 +304,7 @@ export function checkConstraints(
         source: `${scope === "final" ? "裁决前最终方案" : "初始提案"}估计与用户限制比较`,
         expression: estimate === null ? null : `${estimate} - ${limit}`,
         result: estimate === null ? null : estimate - limit,
-        assumptions: `仅适用于${scope === "final" ? "当前最终方案" : "初始提案，不能代替最终修订核验"}。只比较已给出的数字，不证明估计准确或覆盖全程；文字限制仍需核实。`,
+        assumptions: `仅适用于${scope === "final" ? "当前最终方案" : "初始提案，不能代替最终修订核验"}。只比较已给出的数字，不证明估计准确或覆盖全程；文字限制仍需核实。${name === "预算" && strategy.costPlan ? costPlanGate(strategy.costPlan) : ""}`,
       });
     }
     return checks;
@@ -320,6 +327,7 @@ function actionable(strategy: Strategy) {
     failureCondition: strategy.failureCondition,
     estimatedCost: strategy.estimatedCost,
     estimatedHours: strategy.estimatedHours,
+    costPlan: strategy.costPlan,
   });
 }
 function userText(challenge: Challenge, sources: MaterialSource[]) {
@@ -349,6 +357,21 @@ export function proposedClaims(
     sourceIds: [],
   }));
 }
+export function normalizeStrategyResources(
+  strategy: Strategy,
+  challenge: Challenge,
+  sources: MaterialSource[] = [],
+): Strategy {
+  assertStrategyArithmetic(strategy);
+  const normalized = normalizeCostPlan(strategy, userText(challenge, sources));
+  if (!normalized.costPlan) return normalized;
+  const prefix = "待验证的方案假设，";
+  const thesis = normalized.thesis.startsWith(prefix)
+    ? normalized.thesis
+    : prefix + normalized.thesis;
+  if (thesis.length > 500) throw new Error("方案假设说明超过500字，请保留成立条件并精简表述。");
+  return { ...normalized, thesis };
+}
 export function validateRevision(
   revision: Revision,
   input: StageInput,
@@ -357,7 +380,7 @@ export function validateRevision(
   const original = input.strategies.find((s) => s.id === revision.strategyId);
   if (!original || revision.strategy.id !== original.id || revision.strategyId !== input.role)
     throw new Error("修订策略与本轮角色不匹配。");
-  assertStrategyArithmetic(revision.strategy);
+  const strategy = normalizeStrategyResources(revision.strategy, input.challenge, sources);
   const eligible = input.attacks.filter((a) => a.targetStrategyId === original.id);
   const seen = new Set<string>();
   for (const r of revision.responses) {
@@ -371,7 +394,7 @@ export function validateRevision(
     )
       throw new Error("修订的证据引用与攻击不对应。");
   }
-  const changed = actionable(original) !== actionable(revision.strategy);
+  const changed = actionable(original) !== actionable(strategy);
   const successful = input.evidence.filter(usableEvidence);
   const responses = revision.responses.map((r) => {
     const evidenceIds = r.evidenceIds.filter((id) => successful.some((e) => e.id === id));
@@ -422,7 +445,7 @@ export function validateRevision(
     summary: normalizedRevisionSummary(revision.summary, revision.responses, responses, changed),
     changed,
     responses,
-    strategy: { ...revision.strategy, claims },
+    strategy: { ...strategy, claims },
   };
 }
 /** Bounded text checks, not fact verification: explicit numeric equations, same-unit
@@ -484,6 +507,7 @@ export function assertExplicitArithmetic(text: string): void {
  * allocations. A learning plan may discuss an incorrect equation without asserting it;
  * questions, quoted sources and ambiguous or partial allocations stay untouched. */
 export function assertStrategyArithmetic(strategy: Strategy): void {
+  normalizeCostPlan(strategy);
   assertStrategyResourceTotals(strategy);
   const resourceEquation =
     /^(?:(?:预算|费用|成本|支出|投入|工时|用时|时间)(?:总计|合计|小计|累计)?|总计|合计|小计|累计)\s*(?:为|是|[:：])?\s*[()\d\s.+\-*/%×÷]+\s*=\s*[+\-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:元|小时)\.?$/;
@@ -501,7 +525,11 @@ export function assertStrategyArithmetic(strategy: Strategy): void {
     }
   }
 }
-export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
+export function validateVerdict(
+  verdict: Verdict,
+  input: StageInput,
+  sources: MaterialSource[] = [],
+): Verdict {
   for (const field of [
     verdict.headline,
     verdict.rationale,
@@ -511,8 +539,8 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
     verdict.exitCondition,
   ])
     assertExplicitArithmetic(field);
-  const strategies = input.strategies.map(
-    (s) => input.revisions.find((r) => r.strategyId === s.id)?.strategy || s,
+  const strategies = input.strategies.map((s) =>
+    normalizeCostPlan(input.revisions.find((r) => r.strategyId === s.id)?.strategy || s),
   );
   const successful = new Set(input.evidence.filter(usableEvidence).map((e) => e.id));
   if (verdict.evidenceIds.some((id) => !input.evidence.some((e) => e.id === id)))
@@ -532,11 +560,29 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
     };
   });
   const comparisons = strategies.map((s) => {
-    const existing = verdict.comparisons.find((c) => c.strategyId === s.id);
+    const candidate = verdict.comparisons.find((c) => c.strategyId === s.id);
+    let existing = candidate;
+    if (candidate?.basis === "user") {
+      if (!candidate.quote?.trim() || !userText(input.challenge, sources).includes(candidate.quote))
+        throw new Error("比较事实必须逐字引用当前用户原文，不能以片段证明额外排序或报价范围。");
+      // Only the literal quote is retained as a fact. Any ranking or inference needs an assumption.
+      existing = { ...candidate, reason: `用户原文为“${candidate.quote}”，保留原有条件与范围。` };
+    } else if (candidate?.basis) {
+      if (candidate.quote) throw new Error("假设与未知比较不得伪造事实引用。");
+      const prefix = candidate.basis === "assumption" ? "按假设比较，" : "尚待核实，";
+      existing = {
+        ...candidate,
+        reason: candidate.reason.startsWith(prefix) ? candidate.reason : prefix + candidate.reason,
+      };
+    }
+    const cost = s.costPlan ? costPlanTotal(s.costPlan) : s.estimatedCost;
+    const knownCost = s.costPlan
+      ? s.costPlan.items.reduce((sum, item) => sum + (item.amount ?? 0), 0)
+      : cost;
     if (
       (input.challenge.budget !== null &&
-        s.estimatedCost !== null &&
-        s.estimatedCost > input.challenge.budget) ||
+        knownCost !== null &&
+        knownCost > input.challenge.budget) ||
       (input.challenge.timeHours !== null &&
         s.estimatedHours !== null &&
         s.estimatedHours > input.challenge.timeHours)
@@ -549,8 +595,10 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
     // A separate unknown must not erase an already identified conflict.
     if (existing?.status === "violates") return existing;
     const missingResources: string[] = [];
-    if (input.challenge.budget !== null && s.estimatedCost === null)
+    if (input.challenge.budget !== null && cost === null)
       missingResources.push("缺少完整支出估算，尚不能确认满足预算上限。");
+    if (input.challenge.budget !== null && s.costPlan?.items.some((item) => item.basis !== "user"))
+      missingResources.push("费用清单含假设或未知，算术不能证明实际支出满足上限。");
     if (input.challenge.timeHours !== null && s.estimatedHours === null)
       missingResources.push("缺少全程工时估算，尚不能确认满足总工时上限。");
     if (missingResources.length)
@@ -579,6 +627,24 @@ export function validateVerdict(verdict: Verdict, input: StageInput): Verdict {
     );
   });
   let result = { ...verdict, comparisons, attackFindings: findings };
+  if (
+    strategies.some((strategy) => strategy.costPlan) ||
+    verdict.comparisons.some((comparison) => comparison.basis)
+  ) {
+    // Whole-field attribution also covers ranking prose outside the structured comparisons.
+    // It does not certify that the model's premises or inference are sound.
+    const prefix = "待验证的比较假设，以所列条件为前提，";
+    const rationale = result.rationale.startsWith(prefix)
+      ? result.rationale
+      : prefix + result.rationale;
+    const headlinePrefix = "条件性判断，";
+    const headline = result.headline.startsWith(headlinePrefix)
+      ? result.headline
+      : headlinePrefix + result.headline;
+    if (rationale.length > 500 || headline.length > 500)
+      throw new Error("条件性比较说明超过500字，请保留成立条件并精简表述。");
+    result = { ...result, rationale, headline };
+  }
   if (result.preferred && !strategies.some((s) => s.id === result.preferred))
     throw new Error("裁决选择了不存在的策略。");
   if (strategies.length < 2 && !["infeasible", "partial"].includes(result.outcome))

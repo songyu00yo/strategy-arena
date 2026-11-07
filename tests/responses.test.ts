@@ -45,6 +45,10 @@ const strategy = {
   failureCondition: "没有可发布作品",
   estimatedCost: "unknown",
   estimatedHours: 8,
+  costPlan: {
+    complete: false,
+    items: [{ id: "c1", label: "费用范围待确认", amount: null, basis: "unknown", quote: "" }],
+  },
 };
 const usage = {
   input_tokens: 1000,

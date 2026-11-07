@@ -52,6 +52,10 @@ const strategy = {
   failureCondition: "没有素材",
   estimatedCost: null,
   estimatedHours: 8,
+  costPlan: {
+    complete: false,
+    items: [{ id: "c1", label: "费用范围待确认", amount: null, basis: "unknown", quote: "" }],
+  },
 };
 beforeEach(() => {
   vi.resetAllMocks();

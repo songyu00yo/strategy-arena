@@ -39,7 +39,7 @@ import {
   ModelCallError,
 } from "../src/lib/server/model";
 import {
-  assertStrategyArithmetic,
+  normalizeStrategyResources,
   checkConstraints,
   executeAttackTools,
   proposedClaims,
@@ -206,7 +206,7 @@ function settle(
 function normalizeStrategy(strategy: Strategy, input: StageInput): Strategy {
   if (strategy.id !== input.role)
     throw new Error("Proposal role does not match its assigned strategy ID.");
-  assertStrategyArithmetic(strategy);
+  strategy = normalizeStrategyResources(strategy, input.challenge);
   return {
     ...strategy,
     claims: proposedClaims(strategy, input.challenge),

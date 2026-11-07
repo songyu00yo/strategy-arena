@@ -3,9 +3,9 @@ import { z } from "zod";
 import sharp from "sharp";
 import {
   AttackSchema,
-  RevisionSchema,
-  StrategySchema,
-  VerdictSchema,
+  GeneratedStrategySchema,
+  GeneratedRevisionSchema,
+  GeneratedVerdictSchema,
   SCHEMA_VERSION,
   type ModelResult,
   type ModelFormatNormalization,
@@ -280,10 +280,10 @@ function connectionFailure(error: unknown, aborted: boolean, elapsedMs: number) 
   return `${category}，本次已等待 ${(Math.max(0, elapsedMs) / 1000).toFixed(1)} 秒。暂时无法确认这次请求是否完成。预留费用会保留，本步骤不会自动重试。`;
 }
 const stageSchemas = {
-  propose: StrategySchema,
+  propose: GeneratedStrategySchema,
   attack: AttackSchema,
-  revise: RevisionSchema,
-  judge: VerdictSchema,
+  revise: GeneratedRevisionSchema,
+  judge: GeneratedVerdictSchema,
 };
 function maxInputTokens(input: StageInput, config: ModelConfig) {
   return (
@@ -1084,7 +1084,7 @@ export const generateStrategy = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
   attemptId?: string,
-) => generate("propose", input, StrategySchema, config, attemptId);
+) => generate("propose", input, GeneratedStrategySchema, config, attemptId);
 export const generateAttack = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
@@ -1094,12 +1094,12 @@ export const generateRevision = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
   attemptId?: string,
-) => generate("revise", input, RevisionSchema, config, attemptId);
+) => generate("revise", input, GeneratedRevisionSchema, config, attemptId);
 export const generateVerdict = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
   attemptId?: string,
-) => generate("judge", input, VerdictSchema, config, attemptId);
+) => generate("judge", input, GeneratedVerdictSchema, config, attemptId);
 // The legacy evaluator aggregates CNY only. Refuse USD until its aggregation is upgraded.
 export function generateEvaluation(
   kind: Kind,

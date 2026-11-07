@@ -24,7 +24,13 @@ const billingFixture = {
   developmentMaxUsdMicros: 120_000_000,
   finalReserveUsdMicros: 80_000_000,
   revision: 1,
-  activeStage: { id: "fixture" },
+  activeStage: {
+    id: "fixture",
+    usdLimitMicros: 10_000_000,
+    requestLimit: 300,
+    tokenLimit: 5_000_000,
+    usage: { committedUsdMicros: 100, requests: 1, tokens: 20 },
+  },
   committedUsdMicros: 100,
   requests: 1,
   tokens: 20,
@@ -126,11 +132,28 @@ test("passes only trusted proxy variables and appends loopback bypasses for both
   });
 });
 
-test("uses audited 300, 400, 650 or 700 request caps without adjusting the ledger or other ceilings", async (t) => {
+test("uses audited cumulative limits without adjusting the ledger or runtime ceilings", async (t) => {
   const { directory, options, deps } = fixture(t);
-  for (const requestLimit of [300, 400, 650, 700]) {
+  for (const [requestLimit, tokenLimit] of [
+    [300, 5_000_000],
+    [400, 5_000_000],
+    [650, 5_000_000],
+    [700, 5_000_000],
+    [900, 7_000_000],
+  ]) {
     let reads = 0;
-    const summary = { ...billingFixture, requestLimit, requests: 243 };
+    const summary = {
+      ...billingFixture,
+      requestLimit,
+      tokenLimit,
+      requests: 243,
+      activeStage: {
+        ...billingFixture.activeStage,
+        usdLimitMicros: 4_000_000,
+        requestLimit: 200,
+        tokenLimit: 2_000_000,
+      },
+    };
     const before = structuredClone(summary);
     const config = await prepareLivePreview(options, {
       ...deps,
@@ -142,11 +165,13 @@ test("uses audited 300, 400, 650 or 700 request caps without adjusting the ledge
     assert.equal(reads, 1);
     assert.equal(config.env.ARENA_BILLING_REQUEST_LIMIT, String(requestLimit));
     assert.equal(config.env.ARENA_BILLING_USD_LIMIT, "10");
-    assert.equal(config.env.ARENA_BILLING_TOKEN_LIMIT, "5000000");
+    assert.equal(config.env.ARENA_BILLING_TOKEN_LIMIT, String(tokenLimit));
+    assert.equal(config.env.ARENA_RUN_BUDGET_USD, "2");
+    assert.equal(config.env.ARENA_GLOBAL_BUDGET_USD, "10");
     assert.deepEqual(summary, before);
     assert.equal(existsSync(join(directory, "data")), false);
   }
-  for (const requestLimit of [299, 701, 300.5])
+  for (const requestLimit of [0, -1, 1_000_000_000_001, 300.5, NaN, Infinity, "900"])
     await assert.rejects(
       prepareLivePreview(options, {
         ...deps,
@@ -197,11 +222,21 @@ test("never silently raises existing ledger caps or launches when shared allowan
   for (const change of [
     { usdLimitMicros: 2_000_000 },
     { usdLimitMicros: 10_000_001 },
-    { requestLimit: 100 },
-    { tokenLimit: 2_000_000 },
-    { tokenLimit: 5_000_001 },
+    { tokenLimit: 0 },
+    { tokenLimit: -1 },
+    { tokenLimit: 7_000_000.5 },
+    { tokenLimit: 1_000_000_000_001 },
+    { tokenLimit: NaN },
+    { tokenLimit: Infinity },
+    { tokenLimit: "7000000" },
     { revision: 0 },
+    { revision: undefined },
+    { revision: NaN },
+    { revision: 1.5 },
     { activeStage: null },
+    { committedUsdMicros: NaN },
+    { requests: -1 },
+    { tokens: undefined },
   ])
     await assert.rejects(
       prepareLivePreview(options, {
@@ -219,6 +254,49 @@ test("never silently raises existing ledger caps or launches when shared allowan
       prepareLivePreview(options, {
         ...deps,
         readBillingStatus: () => ({ ...billingFixture, ...change }),
+      }),
+      /exhausted/,
+    );
+});
+
+test("rejects malformed or exhausted audited stages", async (t) => {
+  const { options, deps } = fixture(t);
+  for (const change of [
+    { id: "" },
+    { usdLimitMicros: 10_000_001 },
+    { requestLimit: 301 },
+    { tokenLimit: 5_000_001 },
+    { usdLimitMicros: 0 },
+    { requestLimit: NaN },
+    { tokenLimit: 1.5 },
+    { usage: undefined },
+    { usage: { committedUsdMicros: 0, requests: 0, tokens: NaN } },
+  ])
+    await assert.rejects(
+      prepareLivePreview(options, {
+        ...deps,
+        readBillingStatus: () => ({
+          ...billingFixture,
+          activeStage: { ...billingFixture.activeStage, ...change },
+        }),
+      }),
+      /already have audited/,
+    );
+  for (const change of [
+    { committedUsdMicros: 10_000_000 },
+    { requests: 300 },
+    { tokens: 5_000_000 },
+  ])
+    await assert.rejects(
+      prepareLivePreview(options, {
+        ...deps,
+        readBillingStatus: () => ({
+          ...billingFixture,
+          activeStage: {
+            ...billingFixture.activeStage,
+            usage: { ...billingFixture.activeStage.usage, ...change },
+          },
+        }),
       }),
       /exhausted/,
     );
@@ -274,7 +352,7 @@ test("CLI check uses the actual read-only billing API and never starts the synth
     import {openBillingLedger, changeBillingLimits} from './src/lib/server/billing.ts';
     const databasePath = process.argv[1]; openBillingLedger({databasePath}).close();
     changeBillingLimits({databasePath, expected:{revision:0,usdLimit:2,requestLimit:100,tokenLimit:2000000},
-      limits:{usdLimit:10,requestLimit:300,tokenLimit:5000000}, stage:{id:'fixture',usdLimit:10,requestLimit:300,tokenLimit:5000000},reason:'temporary CLI fixture'});
+      limits:{usdLimit:10,requestLimit:900,tokenLimit:7000000}, stage:{id:'fixture',usdLimit:4,requestLimit:200,tokenLimit:2000000},reason:'temporary CLI fixture'});
   `,
       options.billingDatabase,
     ],

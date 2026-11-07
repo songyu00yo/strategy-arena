@@ -1,4 +1,114 @@
-import type { Strategy } from "../contracts";
+import type { CostPlan, Strategy } from "../contracts";
+
+const COST_GATE = "【服务端费用门槛】";
+
+/** A declared scope is not proof of completeness. Unknown amounts never become zero. */
+export function costPlanTotal(plan: CostPlan): number | null {
+  if (!plan.complete || !plan.items.length || plan.items.some((item) => item.amount === null))
+    return null;
+  const total = plan.items.reduce((sum, item) => sum + Math.round(item.amount! * 100), 0);
+  return total / 100;
+}
+
+export function costPlanGate(plan: CostPlan): string {
+  const terms = plan.items.map(
+    (item) =>
+      `${item.label}(${item.basis === "user" ? "用户提供" : item.basis === "assumption" ? "假设" : "未知"})${item.amount === null ? "待核实" : `${item.amount}元`}`,
+  );
+  const total = costPlanTotal(plan);
+  return `${COST_GATE}${terms.join(" + ") || "必要费用清单缺失"}。${total === null ? "累计总额未知，补齐范围与金额后才可判断正式执行是否满足原总预算" : `含已花投入的累计支出估计合计${total}元，正式执行前与原总预算比较，已花投入只计一次`}。清单范围是方案声明，未由算术验证。`;
+}
+
+/** This validates a declaration and literal provenance, not the real-world quote's truth. */
+export function normalizeCostPlan(strategy: Strategy, provided?: string): Strategy {
+  const plan = strategy.costPlan;
+  if (!plan) return strategy; // Historical data stays readable without manufacturing a breakdown.
+  const ids = new Set<string>();
+  const labels = new Set<string>();
+  const quotedCharges: { quote: string; amount: number | null }[] = [];
+  for (const item of plan.items) {
+    if (ids.has(item.id) || labels.has(item.label))
+      throw new Error("必要费用清单存在重复编号或项目，不能重复计算同一支出。");
+    ids.add(item.id);
+    labels.add(item.label);
+    if (item.amount !== null && Math.abs(item.amount * 100 - Math.round(item.amount * 100)) > 1e-6)
+      throw new Error("必要费用金额最多保留两位小数，未知金额填写 null。");
+    if (item.basis === "unknown" && item.amount !== null)
+      throw new Error("未知费用不得填写确定金额或零，情景估计须明确标为假设。");
+    if (item.basis === "user") {
+      if (!item.quote.trim() || (provided !== undefined && !provided.includes(item.quote)))
+        throw new Error("费用事实必须逐字引用当前用户原文，不能用模型解释冒充报价。");
+      if (!item.quote.includes(item.label))
+        throw new Error("用户提供的费用项目名称须来自所引原文，不得新增报价形式或包含范围。");
+      if (item.amount !== null) {
+        const prices = [...item.quote.matchAll(/\d+(?:\.\d+)?\s*元/g)];
+        const clause = item.quote.split(/[，,。；;\n]/).find((part) => part.includes(item.label));
+        const price = clause?.match(/\d+(?:\.\d+)?\s*元/);
+        const gap =
+          clause && price
+            ? clause.slice(clause.indexOf(item.label) + item.label.length, price.index)
+            : "";
+        if (
+          prices.length !== 1 ||
+          !price ||
+          price.index! < (clause?.indexOf(item.label) ?? 0) + item.label.length ||
+          Number.parseFloat(price[0]) !== item.amount ||
+          !/^(?:\s|的|报价|费用|价格|金额|收费|总价|为|是|[:：])*$/.test(gap)
+        )
+          throw new Error(
+            "费用事实须逐字引用单项明确的项目与金额片段，不能补造报价或把其他项目金额移用。",
+          );
+      }
+      if (item.amount !== null && /假设|如果|若|可能|预计|大约|约\d|是否/.test(item.quote))
+        throw new Error("带假设、条件或估计的报价不得当作已确定费用，保留未知或标为假设。");
+      if (plan.complete && /(?:包含|范围|含项).{0,12}(?:未知|未确认|待核实)/.test(item.quote))
+        throw new Error("报价包含范围仍未知，必要费用范围不得声明完整。");
+      if (
+        quotedCharges.some(
+          (charge) =>
+            charge.amount === item.amount &&
+            (charge.quote.includes(item.quote) || item.quote.includes(charge.quote)),
+        )
+      )
+        throw new Error("同一原文报价被重复列入费用清单，须先核实包含关系再计算。");
+      quotedCharges.push({ quote: item.quote, amount: item.amount });
+    } else if (item.quote)
+      throw new Error("假设和未知费用不填写事实引用，成立条件写入项目名称或步骤。");
+  }
+  const total = costPlanTotal(plan);
+  if (
+    strategy.estimatedCost !== null &&
+    (total === null || Math.abs(strategy.estimatedCost - total) > 1e-8)
+  )
+    throw new Error(
+      "全程费用估计与必要费用清单不一致，未知项、未闭合范围或空清单不得推出完整总额。",
+    );
+  const gate = costPlanGate(plan);
+  const marker = strategy.resources.indexOf(COST_GATE);
+  if (marker >= 0 && strategy.resources.slice(marker) !== gate)
+    throw new Error("服务端费用门槛与必要清单不一致，不得另行维护公式。");
+  const resources = strategy.resources.split(COST_GATE)[0].trim();
+  const ownFields = [
+    strategy.thesis,
+    ...strategy.steps,
+    resources,
+    strategy.firstAction,
+    strategy.failureCondition,
+    ...strategy.claims.map((claim) => claim.text),
+  ];
+  for (const field of ownFields) {
+    for (const match of unquoted(field).matchAll(
+      /(?:总费用|总支出|总价|费用合计)\s*(?:为|是|=|[:：])?\s*(\d+(?:\.\d+)?)\s*元/g,
+    )) {
+      if (total === null || Math.abs(Number(match[1]) - total) > 1e-8)
+        throw new Error("文字中的完整支出总额与必要费用清单不一致，正式门槛必须使用同一清单。");
+    }
+  }
+  const canonicalResources = `${resources}\n${gate}`;
+  if (canonicalResources.length > 500)
+    throw new Error("资源说明与完整费用清单超过500字，请精简非费用说明和项目名称，保留必要项目。");
+  return { ...strategy, resources: canonicalResources, estimatedCost: total };
+}
 
 type TimeUnit = "分钟" | "小时";
 type ResourceUnit = TimeUnit | "元";

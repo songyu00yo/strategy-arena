@@ -2,7 +2,7 @@ import type { StageInput } from "../contracts";
 
 type Schema = Record<string, unknown>;
 export type OutputKind = "propose" | "attack" | "revise" | "judge";
-const nullableFields = new Set(["estimatedCost", "estimatedHours", "preferred"]);
+const nullableFields = new Set(["estimatedCost", "estimatedHours", "preferred", "amount"]);
 const omitted = new Set(["$schema", "default", "minLength", "maxLength", "minItems", "maxItems"]);
 
 /** DeepSeek strict-tool subset. Public validation still uses the unchanged Zod schema. */

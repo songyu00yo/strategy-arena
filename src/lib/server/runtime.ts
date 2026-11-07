@@ -35,7 +35,7 @@ import {
 import {
   executeAttackTools,
   checkConstraints,
-  assertStrategyArithmetic,
+  normalizeStrategyResources,
   proposedClaims,
   validateAttack,
   validateRevision,
@@ -680,7 +680,12 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
     try {
       if (step.stage === "propose" && (result!.value as Strategy).id !== input.role)
         throw new Error("模型返回的方案编号与指定角色不一致。");
-      if (step.stage === "propose") assertStrategyArithmetic(result!.value as Strategy);
+      if (step.stage === "propose")
+        result!.value = normalizeStrategyResources(
+          result!.value as Strategy,
+          input.challenge,
+          getVersion(versionId).intake?.usedSources,
+        );
       if (step.stage === "attack" && (result!.value as Attack).from !== input.role)
         throw new Error("质疑发起者与本轮角色不一致。");
       value =
@@ -696,7 +701,11 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
                 getVersion(versionId).intake?.usedSources,
               )
             : step.stage === "judge"
-              ? validateVerdict(result!.value as Verdict, input)
+              ? validateVerdict(
+                  result!.value as Verdict,
+                  input,
+                  getVersion(versionId).intake?.usedSources,
+                )
               : result?.value;
     } catch (error) {
       const feedback = error instanceof Error ? error.message.slice(0, 500) : "协议引用不合法";

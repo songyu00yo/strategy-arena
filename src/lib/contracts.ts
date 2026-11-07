@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MODEL_IDS } from "./model-catalog";
 
-export const SCHEMA_VERSION = "1.1.0";
+export const SCHEMA_VERSION = "1.2.0";
 export const STAGES = ["propose", "attack", "verify", "revise", "judge"] as const;
 export type Stage = (typeof STAGES)[number];
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -56,6 +56,21 @@ export const ClaimSchema = z.object({
   status: z.enum(["user", "estimate", "unknown", "supported"]).default("unknown"),
   sourceIds: z.array(z.string()).default([]),
 });
+export const CostPlanSchema = z.object({
+  complete: z.boolean(),
+  items: z
+    .array(
+      z.object({
+        id: z.string().regex(/^[a-zA-Z0-9_-]{1,16}$/),
+        label: z.string().min(1).max(24),
+        amount: z.number().nonnegative().max(100000000).nullable(),
+        basis: z.enum(["user", "assumption", "unknown"]),
+        quote: z.string().max(200),
+      }),
+    )
+    .max(8),
+});
+export type CostPlan = z.infer<typeof CostPlanSchema>;
 export const StrategySchema = z.object({
   id: z.enum(["A", "B", "C"]),
   title: z.string().min(1).max(50),
@@ -63,6 +78,7 @@ export const StrategySchema = z.object({
   steps: z.array(short).min(1).max(6),
   claims: z.array(ClaimSchema).min(1).max(3),
   resources: short,
+  costPlan: CostPlanSchema.optional(),
   firstAction: short,
   failureCondition: short,
   estimatedCost: z.number().nonnegative().nullable().default(null),
@@ -144,6 +160,8 @@ export const VerdictSchema = z.object({
         strategyId: z.enum(["A", "B", "C"]),
         status: z.enum(["eligible", "violates", "unknown"]),
         reason: short,
+        basis: z.enum(["user", "assumption", "unknown"]).optional(),
+        quote: z.string().max(300).optional(),
       }),
     )
     .max(3),
@@ -157,6 +175,19 @@ export const VerdictSchema = z.object({
       }),
     )
     .default([]),
+});
+export const GeneratedStrategySchema = StrategySchema.required({ costPlan: true });
+export const GeneratedRevisionSchema = RevisionSchema.extend({ strategy: GeneratedStrategySchema });
+export const GeneratedVerdictSchema = VerdictSchema.extend({
+  comparisons: z
+    .array(
+      VerdictSchema.shape.comparisons.element
+        .extend({
+          reason: z.string().min(1).max(320),
+        })
+        .required({ basis: true, quote: true }),
+    )
+    .max(3),
 });
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type RunStatus =

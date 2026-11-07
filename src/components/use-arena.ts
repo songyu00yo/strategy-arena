@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ArenaSnapshot, Challenge, ModelMode } from "@/lib/contracts";
+import type { ArenaSnapshot, Challenge, ModelMode, FollowUpInput } from "@/lib/contracts";
 import type { IntakeDraft } from "@/lib/intake-contracts";
 import { clearExplicitArenaRequest, examplePickerRequested } from "@/lib/example-navigation";
 
@@ -274,6 +274,7 @@ export function useArena() {
   }, [arenaId, activeId, auto, driverRevision, request, accept, refresh]);
   const mutate = useCallback(
     async (path: string, body: unknown, keepDriving = true) => {
+      if (mutationBusy.current) return false;
       mutationBusy.current = true;
       const epoch = ++generation.current;
       setBusy(true);
@@ -333,20 +334,36 @@ export function useArena() {
     },
     create: (challenge: Challenge, modelMode: ModelMode = "auto") =>
       mutate("/api/arenas", { ...challenge, modelMode }),
-    rematch: (challenge: Challenge, changeReason: string, modelMode?: ModelMode) =>
+    rematch: (
+      challenge: Challenge,
+      changeReason: string,
+      modelMode?: ModelMode,
+      baseVersionId?: string,
+      followUp?: FollowUpInput,
+    ) =>
       latest.current
         ? mutate(`/api/arenas/${latest.current.id}/versions`, {
             challenge,
             changeReason,
             modelMode,
+            baseVersionId,
+            followUp,
           })
         : Promise.resolve(false),
-    intervene: (targetStrategyId: string, targetClaimId: string, text: string) =>
+    intervene: (
+      targetStrategyId: string,
+      targetClaimId: string,
+      text: string,
+      baseVersionId?: string,
+      quote?: string,
+    ) =>
       latest.current
         ? mutate(`/api/arenas/${latest.current.id}/interventions`, {
             targetStrategyId,
             targetClaimId,
             text,
+            baseVersionId,
+            quote,
           })
         : Promise.resolve(false),
     stop: async () => {

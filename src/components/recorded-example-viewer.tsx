@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, FileText, History, Pause, Play } from "lucide-react";
 import type { Attack, ArenaVersion, Strategy } from "@/lib/contracts";
+import type { StepContext } from "@/lib/step-context";
 import type { RecordedExamplePayload } from "@/lib/recorded-examples";
 import { MODEL_CATALOG } from "@/lib/model-catalog";
 import { ArenaConsole } from "./console/ArenaConsole";
@@ -11,6 +12,7 @@ import { EvidenceDrawer } from "./evidence-drawer";
 import { Modal } from "./modal";
 import { ClickFx, reducedMotion } from "./console/effects";
 import { readMotionOrigin } from "./motion-origin";
+import { RecordedConditionEditor } from "./recorded-condition-editor";
 import { RecordedChallenge } from "./recorded-challenge";
 import "./console/console.css";
 import "./recorded-example-viewer.css";
@@ -167,6 +169,15 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
     claimId: string;
     trigger: HTMLElement | null;
   } | null>(null);
+  const [stepTarget, setStepTarget] = useState<{
+    versionId: string;
+    context: StepContext;
+    trigger: HTMLElement | null;
+  } | null>(null);
+  const [conditionTarget, setConditionTarget] = useState<{
+    versionId: string;
+    trigger: HTMLElement | null;
+  } | null>(null);
   const replayRoot = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     if (started) replayRoot.current?.focus({ preventScroll: true });
@@ -241,6 +252,10 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           busy={false}
           selectedAttack={located}
           onEvidence={openEvidence}
+          onFollowUp={(context, trigger) =>
+            setStepTarget({ versionId: version.id, context, trigger })
+          }
+          onAdjustConditions={(trigger) => setConditionTarget({ versionId: version.id, trigger })}
           onClaim={(strategy, claimId) =>
             setClaimTarget({
               versionId: version.id,
@@ -260,6 +275,15 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
               <span className="recorded-replay-badge">
                 <History size={12} /> 只读回看
               </span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={(event) =>
+                  setConditionTarget({ versionId: version.id, trigger: event.currentTarget })
+                }
+              >
+                调整条件
+              </button>
               <button
                 type="button"
                 className="text-button"
@@ -285,6 +309,8 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
                       setLocated(undefined);
                       setEvidence(null);
                       setClaimTarget(null);
+                      setStepTarget(null);
+                      setConditionTarget(null);
                     }}
                   >
                     {arena.versions.map((item) => (
@@ -303,11 +329,33 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           }
           notices={
             <p className="recorded-replay-notice">
-              回放新增用量为 0。点击判断旁的“挑战”，可以提出自己的质疑。
+              回放新增用量为
+              0。打开步骤后可以补充或质疑，也可以调整条件；确认重新推演才会产生模型费用。
             </p>
           }
         />
       </main>
+      {conditionTarget?.versionId === version.id && (
+        <RecordedConditionEditor
+          key={`conditions:${version.id}`}
+          metadata={metadata}
+          version={version}
+          trigger={conditionTarget.trigger}
+          onClose={() => setConditionTarget(null)}
+        />
+      )}
+      {stepTarget?.versionId === version.id && (
+        <RecordedChallenge
+          key={`step:${version.id}:${stepTarget.context.stepId}`}
+          metadata={metadata}
+          version={version}
+          target={stepTarget}
+          onClose={() => setStepTarget(null)}
+          onAdjustConditions={() =>
+            setConditionTarget({ versionId: version.id, trigger: stepTarget.trigger })
+          }
+        />
+      )}
       {claimTarget?.versionId === version.id && (
         <RecordedChallenge
           metadata={metadata}

@@ -17,6 +17,7 @@ import {
   type Strategy,
 } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
+import type { StepContext } from "@/lib/step-context";
 import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
 import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
@@ -68,6 +69,8 @@ export function ArenaConsole({
   busy,
   onEvidence,
   onClaim,
+  onFollowUp,
+  onAdjustConditions,
 }: {
   version: ArenaVersion;
   steps: ArenaStep[];
@@ -83,6 +86,8 @@ export function ArenaConsole({
   busy: boolean;
   onEvidence: (attack: Attack) => void;
   onClaim: (strategy: Strategy, claimId: string) => void;
+  onFollowUp?: (context: StepContext, trigger: HTMLElement | null) => void;
+  onAdjustConditions?: (trigger: HTMLElement | null) => void;
 }) {
   const beats = beatsOf(version);
   const last = beats.length - 1;
@@ -635,6 +640,22 @@ export function ArenaConsole({
           reviewing={reviewing}
           onOpen={setOpenStep}
           onClose={() => setOpenStep(null)}
+          onFollowUp={
+            onFollowUp && (!historical || allowRecordedChallenges) && !busy
+              ? (context, trigger) => {
+                  setOpenStep(null);
+                  onFollowUp(context, trigger);
+                }
+              : undefined
+          }
+          onAdjustConditions={
+            onAdjustConditions && (!historical || allowRecordedChallenges) && !busy
+              ? (trigger) => {
+                  setOpenStep(null);
+                  onAdjustConditions(trigger);
+                }
+              : undefined
+          }
           onStage={(i) => {
             setOpenStep(null);
             goTo(i);

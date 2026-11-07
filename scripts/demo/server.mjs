@@ -6,6 +6,7 @@ import { tsImport } from "tsx/esm/api";
 const { ChallengeSchema, CreateArenaRequestSchema, InterventionSchema, VersionRequestSchema } =
   await tsImport("../../src/lib/contracts.ts", import.meta.url);
 import { scenarioFor } from "./scenarios.mjs";
+const { stepContext } = await tsImport("../../src/lib/step-context.ts", import.meta.url);
 
 export const DEMO_MODEL = {
   id: "demo-no-model",
@@ -212,19 +213,34 @@ export function createDemoServer({ target, stepMs = 3000 }) {
       const parsed = VersionRequestSchema.safeParse(await readBody(req));
       if (!parsed.success)
         return json(res, 400, { error: "请检查演示重赛的输入。", code: "INVALID_REQUEST" });
-      const { challenge, changeReason } = parsed.data;
-      addRun(arena, { challenge, changeReason });
+      const { challenge, changeReason, baseVersionId, followUp } = parsed.data;
+      if (baseVersionId && baseVersionId !== current.full.id)
+        return json(res, 409, { error: "当前演示版本已更新。", code: "STALE_VERSION" });
+      if (followUp && stepContext(view(current), followUp.stepId)?.quote !== followUp.quote)
+        return json(res, 409, { error: "这一步的演示内容已更新。", code: "STALE_SOURCE" });
+      addRun(arena, {
+        challenge,
+        changeReason,
+        ...(followUp ? { followUp: { ...followUp, sourceVersionId: current.full.id } } : {}),
+      });
     } else if (action === "interventions") {
       const parsed = InterventionSchema.safeParse(await readBody(req));
       if (!parsed.success)
         return json(res, 400, { error: "请检查演示质疑的输入。", code: "INVALID_REQUEST" });
-      const { text, targetStrategyId, targetClaimId } = parsed.data;
+      const { text, targetStrategyId, targetClaimId, baseVersionId, quote } = parsed.data;
+      if (baseVersionId && baseVersionId !== current.full.id)
+        return json(res, 409, { error: "当前演示版本已更新。", code: "STALE_VERSION" });
       const shown = view(current);
       const strategy =
         shown.revisions.find((r) => r.strategyId === targetStrategyId)?.strategy ??
         shown.strategies.find((s) => s.id === targetStrategyId);
       if (!strategy?.claims.some((c) => c.id === targetClaimId))
         return json(res, 409, { error: "这条观点不属于当前演示版本。", code: "STALE_CLAIM" });
+      if (
+        quote !== undefined &&
+        quote !== strategy.claims.find((c) => c.id === targetClaimId)?.text
+      )
+        return json(res, 409, { error: "这条演示判断已更新。", code: "STALE_SOURCE" });
       addRun(arena, { changeReason: `你的质疑：${text}` });
     }
     return json(res, 200, snapshot(arena, stepMs));

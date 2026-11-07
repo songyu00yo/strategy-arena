@@ -23,10 +23,14 @@ import {
   type Attack,
   type Strategy,
   type ArenaVersion,
-  type Challenge,
 } from "@/lib/contracts";
 import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
+import { ConditionEditor } from "@/components/condition-editor";
+import { StepFollowUpDialog } from "@/components/step-follow-up-dialog";
+import { VersionComparison } from "@/components/version-comparison";
+import { challengeChanges } from "@/lib/challenge-changes";
+import type { StepContext } from "@/lib/step-context";
 import { GuidedIntake } from "@/components/guided-intake";
 import { RecordedExamples } from "@/components/recorded-examples";
 import { GoalFocusStage } from "@/components/goal-focus-stage";
@@ -36,6 +40,7 @@ import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
 import { ClickFx, Leaving } from "@/components/console/effects";
 import "@/components/focused-home.css";
+import "@/components/friend-feedback.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import type { OverlayMotionHandle } from "@/components/overlay-motion";
@@ -58,30 +63,6 @@ const statusLabels = {
 function money(value: number, currency: "CNY" | "USD" = "CNY") {
   const symbol = currency === "USD" ? "$" : "¥";
   return value < 0.01 && value > 0 ? `< ${symbol}0.01` : `${symbol}${value.toFixed(2)}`;
-}
-/** What differs from the parent version's input. Long text only reports that it changed. */
-function conditionChanges(parent: Challenge, current: Challenge) {
-  const yuan = (v: number | null) => (v === null ? "未填写" : `¥${v.toLocaleString()}`);
-  const hours = (v: number | null) => (v === null ? "未填写" : `${v} 小时`);
-  const fields: [string, string, string][] = [
-    ["目标", parent.goal, current.goal],
-    ["硬性限制", parent.constraints, current.constraints],
-    ["偏好", parent.preferences, current.preferences],
-    ["备选方案", parent.options.join("、"), current.options.join("、")],
-    ["材料", parent.materials, current.materials],
-    ["领域", parent.domain, current.domain],
-    ["预算上限", yuan(parent.budget), yuan(current.budget)],
-    ["可用时间", hours(parent.timeHours), hours(current.timeHours)],
-  ];
-  return fields
-    .filter(([, before, after]) => before !== after)
-    .map(([label, before, after]) => ({
-      label,
-      detail:
-        before.length > 24 || after.length > 24
-          ? "内容已修改"
-          : `${before || "未填写"} → ${after || "未填写"}`,
-    }));
 }
 /** Failed, uncertain and paused differ in what the user can safely do next, so they differ here. */
 function RunNotice({
@@ -139,9 +120,23 @@ export default function Page() {
   const [modelOpen, setModelOpen] = useState(false);
   const [attackId, setAttackId] = useState<string | null>(null);
   const [locatedId, setLocatedId] = useState<string | null>(null);
-  const [claimTarget, setClaimTarget] = useState<{ strategy: Strategy; claimId: string } | null>(
-    null,
-  );
+  const [claimTarget, setClaimTarget] = useState<{
+    strategy: Strategy;
+    claimId: string;
+    version: ArenaVersion;
+    trigger: HTMLElement | null;
+  } | null>(null);
+  const [editSource, setEditSource] = useState<{
+    version: ArenaVersion;
+    focus?: "budget" | "timeHours" | "constraints" | "preferences";
+    trigger: HTMLElement | null;
+  } | null>(null);
+  const [followUp, setFollowUp] = useState<{
+    version: ArenaVersion;
+    context: StepContext;
+    trigger: HTMLElement | null;
+    returnTo: string | null;
+  } | null>(null);
   const [challengeText, setChallengeText] = useState("");
   const [stopConfirm, setStopConfirm] = useState(false);
   const [overlayVersionId, setOverlayVersionId] = useState<string | null>(null);
@@ -182,6 +177,35 @@ export default function Page() {
     setStopConfirm(false);
     setAttackId(null);
   };
+  const beginEditableOverlay = (source: ArenaVersion, returnTo = versionId) => {
+    beginVersionOverlay();
+    setOverlayVersionId(source.id);
+    versionPin.current = { previous: returnTo, epoch: navigationEpoch.current };
+    setVersionId(source.id);
+    arena.clearError();
+  };
+  const openConditions = (
+    source: ArenaVersion,
+    trigger: HTMLElement | null,
+    focus?: "budget" | "timeHours" | "constraints" | "preferences",
+    returnTo = versionId,
+  ) => {
+    beginEditableOverlay(source, returnTo);
+    setFollowUp(null);
+    setEditSource({ version: source, trigger, focus });
+    setEditing(true);
+  };
+  const versionModelUnavailable = (source: ArenaVersion) => {
+    if (demo) return false;
+    const models = arena.health?.model.models ?? arena.health?.model.providers;
+    const selectedModel = source.modelSelection;
+    return selectedModel
+      ? !(
+          models?.find((model) => model.id === selectedModel.modelId) ??
+          models?.find((model) => model.provider === selectedModel.provider)
+        )?.configured
+      : !arena.health?.model.configured;
+  };
   const selectAttack = (a: Attack) => {
     beginVersionOverlay();
     setLocatedId(null);
@@ -208,7 +232,8 @@ export default function Page() {
   useEffect(() => () => cancelAnimationFrame(locateFrame.current), [displayedVersionId]);
   const overlayOpen =
     modelOpen ||
-    (sameOverlayVersion && (editing || claimTarget !== null || stopConfirm || attack !== null));
+    (sameOverlayVersion &&
+      (editing || followUp !== null || claimTarget !== null || stopConfirm || attack !== null));
   useEffect(() => {
     const transitioned = previousDisplayedVersion.current !== displayedVersionId;
     previousDisplayedVersion.current = displayedVersionId;
@@ -243,7 +268,7 @@ export default function Page() {
     selected?.intake?.usage.reduce((sum, usage) => sum + usage.estimatedCny, 0) ?? 0;
   const parentVersion = arena.snapshot?.versions.find((v) => v.id === selected?.parentVersionId);
   const parentChanges =
-    parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
+    parentVersion && selected ? challengeChanges(parentVersion.challenge, selected.challenge) : [];
   return (
     <div className={`site-shell console-shell ${arena.snapshot ? "" : "home focus-home"}`}>
       <ClickFx />
@@ -416,36 +441,82 @@ export default function Page() {
                 selectedAttack={attack?.id ?? locatedId ?? undefined}
                 onEvidence={selectAttack}
                 onClaim={(strategy, claimId) => {
-                  beginVersionOverlay();
-                  setClaimTarget({ strategy, claimId });
+                  beginEditableOverlay(selected);
+                  setFollowUp(null);
+                  setClaimTarget({
+                    strategy,
+                    claimId,
+                    version: selected,
+                    trigger:
+                      document.activeElement instanceof HTMLElement ? document.activeElement : null,
+                  });
                   setChallengeText("");
                 }}
+                onFollowUp={
+                  historical
+                    ? undefined
+                    : (context, trigger) => {
+                        beginEditableOverlay(selected);
+                        setFollowUp({ version: selected, context, trigger, returnTo: versionId });
+                      }
+                }
+                onAdjustConditions={
+                  historical ? undefined : (trigger) => openConditions(selected, trigger)
+                }
                 conditions={
                   <section className="arena-intro">
                     <div>
                       <div className="arena-conditions">
                         {selected.challenge.constraints && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "constraints")
+                            }
+                          >
                             <strong>硬性限制</strong>
                             {selected.challenge.constraints}
-                          </span>
+                          </button>
                         )}
                         {selected.challenge.preferences && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "preferences")
+                            }
+                          >
                             <strong>偏好</strong>
                             {selected.challenge.preferences}
-                          </span>
+                          </button>
                         )}
                         {selected.challenge.budget !== null && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "budget")
+                            }
+                          >
                             <strong>预算上限</strong>¥{selected.challenge.budget.toLocaleString()}
-                          </span>
+                          </button>
                         )}
                         {selected.challenge.timeHours !== null && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "timeHours")
+                            }
+                          >
                             <strong>可用时间</strong>
                             {selected.challenge.timeHours} 小时
-                          </span>
+                          </button>
                         )}
                       </div>
                       {selected.intake && <IntakeContext intake={selected.intake} />}
@@ -454,6 +525,9 @@ export default function Page() {
                           <CornerIcon />
                           本轮改动：{selected.changeReason}
                         </p>
+                      )}
+                      {(parentVersion || selected.followUp) && (
+                        <VersionComparison version={selected} parent={parentVersion} />
                       )}
                       {parentVersion && parentChanges.length > 0 && (
                         <div className="condition-delta">
@@ -553,14 +627,11 @@ export default function Page() {
                       <button
                         type="button"
                         className="text-button"
-                        onClick={() => {
-                          beginVersionOverlay();
-                          setEditing(true);
-                        }}
-                        disabled={arena.busy}
+                        onClick={(event) => openConditions(selected, event.currentTarget)}
+                        disabled={arena.busy || historical}
                       >
                         <Settings2 size={14} />
-                        修改条件再开局
+                        调整条件
                       </button>
                       {!demo &&
                         selected.verdict &&
@@ -777,36 +848,42 @@ export default function Page() {
           </div>
         </Modal>
       )}
-      {editing && sameOverlayVersion && selected && (
+      {editing && sameOverlayVersion && editSource && (
         <Modal
-          title="修改条件，重新开局"
+          title="调整条件"
+          trigger={editSource.trigger}
           wide
           motionRef={editMotion}
           onClose={() => {
             releaseVersionPin();
             setEditing(false);
+            setEditSource(null);
           }}
         >
-          <p className="modal-intro">
-            补充限制、材料或偏好后生成新版本，原版本会保留。请说明改动原因。
-          </p>
-          <ChallengeForm
+          {arena.error && (
+            <p className="form-error" role="alert">
+              {arena.error}
+            </p>
+          )}
+          <ConditionEditor
             demo={demo}
-            initial={selected.challenge}
-            initialModelMode={arena.active?.modelSelection?.requestedMode ?? "deepseek"}
+            initial={editSource.version.challenge}
+            initialModelMode={editSource.version.modelSelection?.requestedMode ?? "deepseek"}
+            initialFocus={editSource.focus}
             modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
-            disabled={configured === false || !arena.health || accessRequired}
+            disabled={!arena.health || accessRequired}
             pending={arena.busy}
-            editing
-            submitLabel="按新条件重新推演"
             onCancel={() => editMotion.current?.close()}
             onSubmit={async (challenge, reason, modelMode) => {
               // Keep the old version visible while its form completes the exit.
               const motion = editMotion.current;
-              const pin = { previous: versionId, epoch: navigationEpoch.current };
+              const pin = versionPin.current ?? {
+                previous: versionId,
+                epoch: navigationEpoch.current,
+              };
               versionPin.current = pin;
-              setVersionId(selected.id);
-              if (await arena.rematch(challenge, reason, modelMode)) {
+              setVersionId(editSource.version.id);
+              if (await arena.rematch(challenge, reason, modelMode, editSource.version.id)) {
                 if (navigationEpoch.current !== pin.epoch) return;
                 const navigate = () => {
                   if (navigationEpoch.current !== pin.epoch) return;
@@ -814,16 +891,56 @@ export default function Page() {
                   localVersionNavigation.current = true;
                   setVersionId(null);
                   setEditing(false);
+                  setEditSource(null);
                 };
                 if (!motion?.close(navigate)) navigate();
-              } else releaseVersionPin(pin);
+              }
             }}
           />
         </Modal>
       )}
+      {followUp && sameOverlayVersion && (
+        <StepFollowUpDialog
+          demo={demo}
+          version={followUp.version}
+          context={followUp.context}
+          trigger={followUp.trigger}
+          pending={arena.busy}
+          disabled={accessRequired || versionModelUnavailable(followUp.version)}
+          error={
+            arena.error ||
+            (versionModelUnavailable(followUp.version)
+              ? "本版模型尚未配置，可以在调整条件中选择可用模型。"
+              : "")
+          }
+          onClose={() => {
+            releaseVersionPin();
+            setFollowUp(null);
+          }}
+          onAdjustConditions={() =>
+            openConditions(followUp.version, followUp.trigger, undefined, followUp.returnTo)
+          }
+          onSubmit={async (text) => {
+            const ok = await arena.rematch(
+              followUp.version.challenge,
+              `针对「${followUp.context.title}」补充意见`,
+              followUp.version.modelSelection?.requestedMode,
+              followUp.version.id,
+              {
+                stepId: followUp.context.stepId,
+                quote: followUp.context.quote,
+                text,
+              },
+            );
+            if (ok) localVersionNavigation.current = true;
+            return ok;
+          }}
+        />
+      )}
       {claimTarget && sameOverlayVersion && (
         <Modal
           title="质疑这条判断"
+          trigger={claimTarget.trigger}
           motionRef={claimMotion}
           onClose={() => {
             releaseVersionPin();
@@ -839,11 +956,21 @@ export default function Page() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 const motion = claimMotion.current;
-                const pin = { previous: versionId, epoch: navigationEpoch.current };
+                const pin = versionPin.current ?? {
+                  previous: versionId,
+                  epoch: navigationEpoch.current,
+                };
                 versionPin.current = pin;
                 setVersionId(selected?.id ?? null);
                 if (
-                  await arena.intervene(claimTarget.strategy.id, claimTarget.claimId, challengeText)
+                  await arena.intervene(
+                    claimTarget.strategy.id,
+                    claimTarget.claimId,
+                    challengeText,
+                    claimTarget.version.id,
+                    claimTarget.strategy.claims.find((claim) => claim.id === claimTarget.claimId)
+                      ?.text,
+                  )
                 ) {
                   if (navigationEpoch.current !== pin.epoch) return;
                   const navigate = () => {
@@ -854,7 +981,7 @@ export default function Page() {
                     setVersionId(null);
                   };
                   if (!motion?.close(navigate)) navigate();
-                } else releaseVersionPin(pin);
+                }
               }}
             >
               <label className="field">
@@ -866,14 +993,32 @@ export default function Page() {
                   maxLength={1000}
                   required
                   rows={4}
-                  placeholder="指出有问题的前提、缺失的条件，或提供反证。"
+                  placeholder="这里漏了什么条件，或哪一点你不认同？"
                 />
               </label>
-              <p className="muted">提交后会创建新版本并重新推演，产生新的模型调用费用。</p>
+              <p className="muted">
+                {demo
+                  ? "演示只播放预设内容，不调用模型、不计费。"
+                  : "提交后会创建新版本并重新推演，产生新的模型调用费用。"}
+              </p>
+              {versionModelUnavailable(claimTarget.version) && (
+                <p className="form-error" role="alert">
+                  本版模型尚未配置，请在调整条件中选择可用模型。
+                </p>
+              )}
+              {arena.error && (
+                <p className="form-error" role="alert">
+                  {arena.error}
+                </p>
+              )}
               <button
                 className="primary-button"
                 type="submit"
-                disabled={arena.busy || challengeText.trim().length < 3}
+                disabled={
+                  arena.busy ||
+                  challengeText.trim().length < 3 ||
+                  versionModelUnavailable(claimTarget.version)
+                }
               >
                 {arena.busy ? "正在提交…" : "提交质疑"}
                 <Crosshair size={16} />

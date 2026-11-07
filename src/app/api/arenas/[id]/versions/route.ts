@@ -14,6 +14,7 @@ export async function POST(request: Request, context: ArenaRouteContext) {
         input.changeReason,
         undefined,
         input.modelMode,
+        { baseVersionId: input.baseVersionId, followUp: input.followUp },
       ),
     );
   } catch (error) {

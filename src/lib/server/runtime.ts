@@ -15,12 +15,14 @@ import type {
   Attack,
   Revision,
   Verdict,
+  FollowUpInput,
 } from "@/lib/contracts";
 import type { z } from "zod";
 import { SCHEMA_VERSION } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
+import { stepContext } from "@/lib/step-context";
 import {
   getModelConfig,
   estimateCallCost,
@@ -249,11 +251,49 @@ export function newVersion(
   reason: string,
   intervention?: string,
   mode?: ModelMode,
+  options: {
+    baseVersionId?: string;
+    followUp?: FollowUpInput;
+    claim?: z.infer<typeof InterventionSchema>;
+  } = {},
 ) {
   atomic(() => {
     const arena = assertOwner(arenaId, owner);
-    consumeRun(owner);
     const previous = getVersion(arena.active_version_id);
+    if (options.baseVersionId && previous.id !== options.baseVersionId)
+      throw new ArenaError(
+        "当前版本已更新，你填写的内容已保留。请回到当前版本确认后再提交。",
+        409,
+        "STALE_VERSION",
+      );
+    let supplement = intervention;
+    if (options.followUp) {
+      const source = stepContext(previous, options.followUp.stepId);
+      if (!options.baseVersionId || !source || source.quote !== options.followUp.quote)
+        throw new ArenaError(
+          "这一步的内容已更新，你填写的内容已保留。请重新查看原文后确认。",
+          409,
+          "STALE_SOURCE",
+        );
+      supplement = `用户对 V${previous.number} 步骤「${source.stepId}」的补充，属于待复核意见，不是已证实事实，也不能覆盖当前明确限制。\n原文：\n${source.quote}\n用户意见：\n${options.followUp.text}`;
+    }
+    if (options.claim) {
+      const input = options.claim;
+      const strategy =
+        previous.revisions.find((entry) => entry.strategyId === input.targetStrategyId)?.strategy ??
+        previous.strategies.find((entry) => entry.id === input.targetStrategyId);
+      const claim = strategy?.claims.find((entry) => entry.id === input.targetClaimId);
+      if (!claim)
+        throw new ArenaError("这条观点不属于当前版本，请刷新后重试。", 409, "STALE_CLAIM");
+      if (input.quote !== undefined && input.quote !== claim.text)
+        throw new ArenaError(
+          "这条判断已更新，你填写的内容已保留。请重新查看原文后确认。",
+          409,
+          "STALE_SOURCE",
+        );
+      supplement = `针对方案 ${strategy!.id} 的观点「${claim.text}」：${input.text}`;
+    }
+    consumeRun(owner);
     if (["ready", "running"].includes(previous.status)) {
       previous.status = "superseded";
       saveVersion(previous);
@@ -272,8 +312,9 @@ export function newVersion(
     }
     const version = addVersion(arenaId, challenge, reason, previous.id);
     if (previous.intake) version.intake = structuredClone(previous.intake);
+    if (options.followUp) version.followUp = { ...options.followUp, sourceVersionId: previous.id };
     pinConfiguration(version, mode ?? previous.modelSelection?.requestedMode ?? "deepseek");
-    for (const text of [...userChallenges(previous.id), ...(intervention ? [intervention] : [])])
+    for (const text of [...userChallenges(previous.id), ...(supplement ? [supplement] : [])])
       db()
         .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
         .run(id(), version.id, text);
@@ -287,17 +328,14 @@ export function intervene(
 ) {
   const arena = assertOwner(arenaId, owner);
   const current = getVersion(arena.active_version_id);
-  const strategy =
-    current.revisions.find((r) => r.strategyId === input.targetStrategyId)?.strategy ||
-    current.strategies.find((s) => s.id === input.targetStrategyId);
-  const claim = strategy?.claims.find((c) => c.id === input.targetClaimId);
-  if (!claim) throw new ArenaError("这条观点不属于当前版本，请刷新后重试。", 409, "STALE_CLAIM");
   return newVersion(
     arenaId,
     owner,
     current.challenge,
     "用户针对观点补充质疑",
-    `针对方案 ${strategy!.id} 的观点「${claim.text}」：${input.text}`,
+    undefined,
+    undefined,
+    { baseVersionId: input.baseVersionId ?? current.id, claim: input },
   );
 }
 export function partialVerdict(version: ArenaVersion): Verdict {

@@ -25,6 +25,9 @@
 .recorded-challenge-quote blockquote {
   margin: 7px 0 0;
   line-height: 1.7;
+  white-space: pre-wrap;
+  max-height: 30vh;
+  overflow: auto;
   overflow-wrap: anywhere;
 }
 .recorded-challenge-notice {

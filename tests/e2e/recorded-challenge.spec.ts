@@ -130,7 +130,13 @@ test("explicit UI fixture: a challenge in a live discussion calls interventions 
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const snapshot = completedSnapshot("fixture-live-challenge");
-  let submitted: { targetStrategyId: string; targetClaimId: string; text: string } | null = null;
+  let submitted: {
+    targetStrategyId: string;
+    targetClaimId: string;
+    text: string;
+    baseVersionId: string;
+    quote: string;
+  } | null = null;
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/health")
@@ -182,7 +188,13 @@ test("explicit UI fixture: a challenge in a live discussion calls interventions 
   await expect(
     page.getByRole("heading", { name: "测试：挑战已进入第二版", exact: true }),
   ).toBeVisible();
-  expect(submitted).toEqual({ targetStrategyId: "A", targetClaimId: target.id, text: critique });
+  expect(submitted).toEqual({
+    targetStrategyId: "A",
+    targetClaimId: target.id,
+    text: critique,
+    baseVersionId: snapshot.versions[0].id,
+    quote: target.text,
+  });
   expect(snapshot.versions).toHaveLength(2);
   expect(snapshot.versions[1].parentVersionId).toBe(snapshot.versions[0].id);
 });

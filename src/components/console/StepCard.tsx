@@ -8,6 +8,7 @@ import { acquireMotionHold } from "./motion-runtime";
 import { readMotionOrigin } from "../motion-origin";
 import "./step-card-motion.css";
 import { nameOf, type Beat } from "./beats";
+import { stepContext, type StepContext } from "@/lib/step-context";
 
 type Point = { x: number; y: number };
 type Quad = [Point, Point, Point, Point];
@@ -278,6 +279,8 @@ export function StepCard({
   onStage,
   onEvidence,
   onClose,
+  onFollowUp,
+  onAdjustConditions,
 }: {
   version: ArenaVersion;
   beats: Beat[];
@@ -289,6 +292,8 @@ export function StepCard({
   onStage: (index: number) => void;
   onEvidence: (attack: Attack) => void;
   onClose: () => void;
+  onFollowUp?: (context: StepContext, trigger: HTMLElement | null) => void;
+  onAdjustConditions?: (trigger: HTMLElement | null) => void;
 }) {
   const beat = beats[index];
   const known = reviewing ? beats : beats.slice(0, last + 1);
@@ -783,6 +788,7 @@ export function StepCard({
     // On the next commit we sample these animations before cancelling, including rapid reversals.
   }, [index]);
 
+  const context = onFollowUp ? stepContext(version, beat.id) : null;
   const verified = beat.attack && known.some((b) => b.id === `v:${beat.attack!.id}`);
   return (
     <dialog
@@ -835,7 +841,7 @@ export function StepCard({
           </dl>
         </div>
       </div>
-      <div className="actions">
+      <div className="actions" style={{ flexWrap: "wrap" }}>
         <button
           type="button"
           className="secondary-button"
@@ -857,6 +863,24 @@ export function StepCard({
           下一步
         </button>
         <span />
+        {context && onFollowUp && (
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => leave(() => onFollowUp(context, sourceOf(index)))}
+          >
+            补充或质疑
+          </button>
+        )}
+        {onAdjustConditions && (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => leave(() => onAdjustConditions(sourceOf(index)))}
+          >
+            调整条件
+          </button>
+        )}
         <button type="button" className="text-button" onClick={() => leave(() => onStage(index))}>
           在舞台上看这一步
         </button>

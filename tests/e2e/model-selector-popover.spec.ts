@@ -139,8 +139,9 @@ test("explicit UI fixture: picker stays in the modal focus boundary and Escape r
   });
   await page.goto("/");
   await expect(page.locator(".c-root")).toBeVisible();
-  await page.getByRole("button", { name: "修改条件再开局", exact: true }).click();
-  const modal = page.getByRole("dialog", { name: "修改条件，重新开局" });
+  await page.getByRole("button", { name: "调整条件", exact: true }).click();
+  const modal = page.getByRole("dialog", { name: "调整条件" });
+  await modal.getByRole("button", { name: /^完整编辑/ }).click();
   const trigger = modal.getByRole("button", { name: /^选择模型，当前/ });
   await trigger.click();
   const listbox = modal.getByRole("listbox", { name: "本轮使用的模型" });

@@ -212,6 +212,7 @@ export interface ArenaVersion {
   createdAt: string;
   changeReason: string;
   parentVersionId: string | null;
+  followUp?: FollowUpInput & { sourceVersionId: string };
   error: string | null;
   runConfiguration?: Record<string, unknown>;
   configurationHash?: string;
@@ -281,9 +282,24 @@ export const InterventionSchema = z.object({
   targetStrategyId: z.enum(["A", "B", "C"]),
   targetClaimId: short,
   text: z.string().min(3).max(1000),
+  baseVersionId: z.string().min(1).max(200).optional(),
+  quote: short.optional(),
 });
-export const VersionRequestSchema = z.object({
-  challenge: ChallengeSchema,
-  changeReason: z.string().min(1).max(1000),
-  modelMode: ModelModeSchema.optional(),
+export const FollowUpSchema = z.object({
+  stepId: z.string().min(1).max(600),
+  quote: z.string().min(1).max(30000),
+  text: z.string().trim().min(3).max(1000),
 });
+export type FollowUpInput = z.infer<typeof FollowUpSchema>;
+export const VersionRequestSchema = z
+  .object({
+    challenge: ChallengeSchema,
+    changeReason: z.string().min(1).max(1000),
+    modelMode: ModelModeSchema.optional(),
+    baseVersionId: z.string().min(1).max(200).optional(),
+    followUp: FollowUpSchema.optional(),
+  })
+  .refine((value) => !value.followUp || !!value.baseVersionId, {
+    message: "请指定补充意见对应的原版本。",
+    path: ["baseVersionId"],
+  });

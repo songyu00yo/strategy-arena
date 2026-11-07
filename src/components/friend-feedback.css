@@ -1,0 +1,98 @@
+.arena-conditions .condition-trigger {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 240ms,
+    color 240ms;
+}
+.arena-conditions .condition-trigger:hover:not(:disabled),
+.arena-conditions .condition-trigger:focus-visible {
+  background: #dce6fa;
+  color: #1848a4;
+}
+.arena-conditions .condition-trigger:disabled {
+  cursor: default;
+}
+.version-comparison {
+  min-width: 0;
+}
+.version-comparison > .text-button {
+  font-size: 11px;
+  padding: 3px 6px;
+}
+.version-comparison-content,
+.version-feedback-source {
+  padding: 14px;
+  border: 1px solid #d4d9e1;
+  background: #fff;
+  color: #313844;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.version-comparison-content {
+  max-height: min(60vh, 500px);
+  overflow: auto;
+}
+.version-comparison-content h3 {
+  margin: 12px 0 8px;
+  font-size: 14px;
+}
+.version-comparison-content h3:first-child {
+  margin-top: 0;
+}
+.version-comparison-content h4 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+}
+.version-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.version-pair p {
+  margin: 0 0 8px;
+  padding: 8px;
+  background: #f4f6f9;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.version-pair small {
+  display: block;
+  color: #737c89;
+  margin-bottom: 3px;
+}
+.version-feedback-source blockquote {
+  margin: 8px 0 12px;
+  padding: 8px 12px;
+  border-left: 2px solid #6884bd;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.version-feedback-source p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 650px) {
+  .version-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arena-conditions .condition-trigger {
+    transition: none;
+  }
+}

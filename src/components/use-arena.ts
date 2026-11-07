@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArenaSnapshot, Challenge, ModelMode, FollowUpInput } from "@/lib/contracts";
 import type { IntakeDraft } from "@/lib/intake-contracts";
 import { clearExplicitArenaRequest, examplePickerRequested } from "@/lib/example-navigation";
+import {
+  clearIntakeDraftPointer,
+  readIntakeDraftPointer,
+  saveIntakeDraftPointer,
+} from "./intake-draft-pointer";
+import { clearArenaPointer, readArenaPointer, saveArenaPointer } from "./arena-pointer";
 
 export interface Health {
   status: string;
@@ -32,7 +38,6 @@ async function api<T>(url: string, body?: unknown, signal?: AbortSignal): Promis
   if (!response.ok) throw new ApiError(data.error ?? "请求未完成，请稍后重试", data.code);
   return data;
 }
-const storageKey = "strategy-arena:last-id";
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 function revisionOf(value: ArenaSnapshot) {
   return {
@@ -71,18 +76,17 @@ export function useArena() {
       controllers.current.delete(controller);
     }
   }, []);
-  const accept = useCallback((value: ArenaSnapshot, expectedGeneration: number) => {
-    if (!mounted.current || expectedGeneration !== generation.current) return false;
-    if (latest.current && snapshotIsOlder(value, latest.current)) return false;
-    latest.current = value;
-    setSnapshot(value);
-    try {
-      localStorage.setItem(storageKey, value.id);
-    } catch {
-      // Persistence is optional; an explicit URL must still restore the accepted snapshot.
-    }
-    return true;
-  }, []);
+  const accept = useCallback(
+    (value: ArenaSnapshot, expectedGeneration: number, created = false) => {
+      if (!mounted.current || expectedGeneration !== generation.current) return false;
+      if (latest.current && snapshotIsOlder(value, latest.current)) return false;
+      latest.current = value;
+      setSnapshot(value);
+      saveArenaPointer(value.id, created);
+      return true;
+    },
+    [],
+  );
   const refresh = useCallback(
     async (id: string) => {
       const epoch = generation.current;
@@ -110,22 +114,23 @@ export function useArena() {
         return;
       }
       if (examplePickerRequested()) return;
-      id = localStorage.getItem(storageKey);
-      const draftId = localStorage.getItem("strategy-arena:intake-id");
+      id = readArenaPointer();
+      const draftId = readIntakeDraftPointer();
       if (draftId) {
         let draft: IntakeDraft | null = null;
         try {
           draft = await request<IntakeDraft>(`/api/intakes/${encodeURIComponent(draftId)}`);
         } catch (failure) {
           if (failure instanceof ApiError && failure.code === "NOT_FOUND")
-            localStorage.removeItem("strategy-arena:intake-id");
+            clearIntakeDraftPointer(draftId);
           else throw failure;
         }
         if (draft) {
+          saveIntakeDraftPointer(draft.id);
           // The server may have committed submit even when the browser lost its response.
           if (draft.status === "submitted" && draft.arenaId) {
             const committed = await request<ArenaSnapshot>(`/api/arenas/${draft.arenaId}`);
-            if (accept(committed, epoch)) localStorage.removeItem("strategy-arena:intake-id");
+            if (accept(committed, epoch)) clearIntakeDraftPointer(draft.id);
           }
           // A pending draft takes precedence over an older discussion in this browser.
           return;
@@ -138,7 +143,7 @@ export function useArena() {
     } catch (e) {
       if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
         if (restoringPreviousArena && !(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
-          localStorage.removeItem(storageKey);
+          clearArenaPointer(id);
         setError(
           restoringExplicitArena
             ? e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
@@ -281,7 +286,7 @@ export function useArena() {
       setError("");
       try {
         const value = await request<ArenaSnapshot>(path, body);
-        accept(value, epoch);
+        accept(value, epoch, path === "/api/arenas");
         setAuto(keepDriving);
         setDriverRevision((v) => v + 1);
         return true;
@@ -328,7 +333,7 @@ export function useArena() {
     adopt: (value: ArenaSnapshot) => {
       const epoch = ++generation.current;
       setError("");
-      accept(value, epoch);
+      accept(value, epoch, readArenaPointer() !== value.id);
       setAuto(true);
       setDriverRevision((revision) => revision + 1);
     },
@@ -390,13 +395,14 @@ export function useArena() {
       setDriverRevision((v) => v + 1);
     },
     reset: () => {
+      const ownId = latest.current?.id ?? null;
       clearExplicitArenaRequest();
       generation.current++;
       latest.current = null;
       setAuto(false);
       setSnapshot(null);
       setError("");
-      localStorage.removeItem(storageKey);
+      clearArenaPointer(ownId);
     },
   };
 }

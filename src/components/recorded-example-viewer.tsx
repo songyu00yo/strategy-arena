@@ -14,6 +14,7 @@ import { ClickFx, reducedMotion } from "./console/effects";
 import { readMotionOrigin } from "./motion-origin";
 import { RecordedConditionEditor } from "./recorded-condition-editor";
 import { RecordedChallenge } from "./recorded-challenge";
+import { supplementDraftKey, type SupplementDraft } from "./supplement-draft";
 import "./console/console.css";
 import "./recorded-example-viewer.css";
 
@@ -179,10 +180,25 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
     trigger: HTMLElement | null;
   } | null>(null);
   const replayRoot = useRef<HTMLElement>(null);
+  const [supplementDrafts, setSupplementDrafts] = useState<Record<string, SupplementDraft>>({});
   useLayoutEffect(() => {
     if (started) replayRoot.current?.focus({ preventScroll: true });
   }, [started]);
   const version = arena.versions.find((item) => item.id === versionId) ?? arena.versions[0];
+  const stepDraftKey = stepTarget
+    ? supplementDraftKey(
+        stepTarget.versionId,
+        `step:${stepTarget.context.stepId}`,
+        stepTarget.context.quote,
+      )
+    : "";
+  const claimDraftKey = claimTarget
+    ? supplementDraftKey(
+        claimTarget.versionId,
+        `claim:${claimTarget.strategy.id}:${claimTarget.claimId}`,
+        claimTarget.strategy.claims.find((claim) => claim.id === claimTarget.claimId)?.text ?? "",
+      )
+    : "";
   if (!version)
     return (
       <main className="recorded-missing">
@@ -346,10 +362,21 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
       )}
       {stepTarget?.versionId === version.id && (
         <RecordedChallenge
-          key={`step:${version.id}:${stepTarget.context.stepId}`}
+          key={stepDraftKey}
           metadata={metadata}
           version={version}
           target={stepTarget}
+          initialDraft={supplementDrafts[stepDraftKey]}
+          onDraftChange={(draft) =>
+            setSupplementDrafts((saved) => ({ ...saved, [stepDraftKey]: draft }))
+          }
+          onSubmitted={() =>
+            setSupplementDrafts((saved) => {
+              const next = { ...saved };
+              delete next[stepDraftKey];
+              return next;
+            })
+          }
           onClose={() => setStepTarget(null)}
           onAdjustConditions={() =>
             setConditionTarget({ versionId: version.id, trigger: stepTarget.trigger })
@@ -358,9 +385,21 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
       )}
       {claimTarget?.versionId === version.id && (
         <RecordedChallenge
+          key={claimDraftKey}
           metadata={metadata}
           version={version}
           target={claimTarget}
+          initialDraft={supplementDrafts[claimDraftKey]}
+          onDraftChange={(draft) =>
+            setSupplementDrafts((saved) => ({ ...saved, [claimDraftKey]: draft }))
+          }
+          onSubmitted={() =>
+            setSupplementDrafts((saved) => {
+              const next = { ...saved };
+              delete next[claimDraftKey];
+              return next;
+            })
+          }
           onClose={() => setClaimTarget(null)}
         />
       )}

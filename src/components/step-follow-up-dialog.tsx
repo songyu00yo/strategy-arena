@@ -6,6 +6,7 @@ import type { StepContext } from "@/lib/step-context";
 import { DisclosureMotion } from "./disclosure-motion";
 import { Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
+import type { SupplementDraft } from "./supplement-draft";
 import "./step-follow-up-dialog.css";
 
 export interface StepFollowUpDialogProps {
@@ -19,6 +20,8 @@ export interface StepFollowUpDialogProps {
   onClose: () => void;
   onSubmit: (text: string) => Promise<boolean>;
   onAdjustConditions?: () => void;
+  initialDraft?: SupplementDraft;
+  onDraftChange?: (draft: SupplementDraft) => void;
 }
 
 export function StepFollowUpDialog({
@@ -32,10 +35,12 @@ export function StepFollowUpDialog({
   onClose,
   onSubmit,
   onAdjustConditions,
+  initialDraft,
+  onDraftChange,
 }: StepFollowUpDialogProps) {
   const quoteId = useId();
   const [showQuote, setShowQuote] = useState(false);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialDraft?.text ?? "");
   const [failure, setFailure] = useState("");
   const motion = useRef<OverlayMotionHandle>(null);
   const submitting = useRef(false);
@@ -94,7 +99,10 @@ export function StepFollowUpDialog({
           <span>补充或质疑</span>
           <textarea
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value);
+              onDraftChange?.({ text: event.target.value });
+            }}
             minLength={3}
             maxLength={1000}
             required

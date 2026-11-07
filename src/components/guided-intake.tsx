@@ -30,9 +30,14 @@ import { routeModel } from "@/lib/model-routing";
 import { DisclosureMotion } from "./disclosure-motion";
 import { ModelSelector } from "./model-selector";
 import { useIntakeSummary } from "./use-intake-summary";
+import { ANSWER_JOURNAL_KEY, answerJournalScope, readAnswerJournal } from "./intake-answer-journal";
+import {
+  clearIntakeDraftPointer,
+  readIntakeDraftPointer,
+  saveIntakeDraftPointer,
+} from "./intake-draft-pointer";
 import "./guided-intake.css";
 
-const STORAGE_KEY = "strategy-arena:intake-id";
 const MIB = 1024 * 1024;
 const EMPTY: Challenge = {
   goal: "",
@@ -205,6 +210,9 @@ export function GuidedIntake({
   const [modelMode, setModelMode] = useState<ModelMode>(DEFAULT_MODEL_ID);
   const [draft, setDraft] = useState<IntakeDraft | null>(null);
   const [answers, setAnswers] = useState<IntakeAnswer[]>([]);
+  const [answerSaveState, setAnswerSaveState] = useState<"server" | "local" | "memory" | "syncing">(
+    "server",
+  );
   const [busy, setBusy] = useState(false);
   const [analysisPending, setAnalysisPending] = useState(false);
   const [restoring, setRestoring] = useState(true);
@@ -228,6 +236,9 @@ export function GuidedIntake({
   const onCreatedRef = useRef(onCreated);
   const goalRef = useRef(goal);
   const modeRef = useRef(modelMode);
+  const answerValues = useRef<IntakeAnswer[]>([]);
+  const answerScope = useRef("");
+  const answerUnsaved = useRef<"local" | "memory" | null>(null);
 
   const request = useCallback(
     async <T,>(url: string, method = "GET", body?: unknown): Promise<T> => {
@@ -286,22 +297,27 @@ export function GuidedIntake({
         (current.current?.id === next.id && current.current.revision > next.revision)
       )
         return;
+      let recovered: IntakeAnswer[] | null = null;
+      try {
+        recovered = readAnswerJournal(sessionStorage.getItem(ANSWER_JOURNAL_KEY), next);
+      } catch {
+        /* Keep in-memory answers when this tab cannot write a recovery journal. */
+      }
+      const scope = answerJournalScope(next);
+      const memoryState = scope === answerScope.current ? answerUnsaved.current : null;
+      const preferred = memoryState ? answerValues.current : (recovered ?? next.answers);
+      const values = next.questions.map(
+        (q) => preferred.find((a) => a.questionId === q.id) ?? answerOf(q),
+      );
+      answerScope.current = scope;
+      answerValues.current = values;
+      answerUnsaved.current = memoryState ?? (recovered ? "local" : null);
+      setAnswers(values);
+      setAnswerSaveState(answerUnsaved.current ?? "server");
       current.current = next;
       setDraft(next);
-      setAnswers((previous) =>
-        next.questions.map(
-          (q) =>
-            previous.find((a) => a.questionId === q.id) ??
-            next.answers.find((a) => a.questionId === q.id) ??
-            answerOf(q),
-        ),
-      );
       applySummaryServer(next);
-      try {
-        localStorage.setItem(STORAGE_KEY, next.id);
-      } catch {
-        /* A draft remains usable without browser storage. */
-      }
+      saveIntakeDraftPointer(next.id);
     },
     [applySummaryServer],
   );
@@ -352,7 +368,7 @@ export function GuidedIntake({
       // Opening free examples must not restore a submitted or running model task.
       // Keep its pointer intact so ordinary navigation can still restore it later.
       const explicitArena = new URL(window.location.href).searchParams.has("arena");
-      if (!examplePickerRequested() && !explicitArena) saved = localStorage.getItem(STORAGE_KEY);
+      if (!examplePickerRequested() && !explicitArena) saved = readIntakeDraftPointer();
     } catch {
       /* Storage is optional. */
     }
@@ -360,15 +376,14 @@ export function GuidedIntake({
       request<IntakeDraft>(`/api/intakes/${saved}`)
         .then(async (next) => {
           if (!alive.current || epoch !== generation.current) return;
+          saveIntakeDraftPointer(next.id);
           if (next.status === "submitted") {
             if (!next.arenaId) throw new Error("草稿已提交，但暂时找不到对应的擂台，请稍后重试。");
             const snapshot = await request<ArenaSnapshot>(`/api/arenas/${next.arenaId}`);
             if (!alive.current || epoch !== generation.current) return;
             onCreatedRef.current(snapshot);
             resetSummary();
-            try {
-              localStorage.removeItem(STORAGE_KEY);
-            } catch {}
+            clearIntakeDraftPointer(next.id);
             return;
           }
           apply(next);
@@ -439,6 +454,7 @@ export function GuidedIntake({
         modelMode: modeRef.current,
       });
       if (!alive.current) throw new DOMException("Aborted", "AbortError");
+      saveIntakeDraftPointer(saved.id, true);
       apply(saved);
     } else if (saved.goal !== goalRef.current || saved.modelMode !== modeRef.current) {
       saved = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
@@ -547,26 +563,54 @@ export function GuidedIntake({
     : [];
   const tokens = usage.reduce((sum, use) => sum + use.inputTokens + use.outputTokens, 0);
 
+  const saveQuestionAnswers = async (
+    saved: IntakeDraft,
+    finish: boolean,
+    epoch: number,
+    preserveUnanswered = false,
+  ) => {
+    if (saved.status !== "questions") return saved;
+    const provided = answerValues.current.filter(
+      (answer) =>
+        answer.state !== "answered" ||
+        (Array.isArray(answer.value) ? answer.value.length > 0 : !!answer.value.trim()),
+    );
+    // Changing models does not submit this round or declare an untouched answer unknown.
+    if (preserveUnanswered && (!answerUnsaved.current || !provided.length)) return saved;
+    const outgoing = (preserveUnanswered ? provided : answerValues.current).map((answer) =>
+      answer.state === "answered" &&
+      (Array.isArray(answer.value) ? !answer.value.length : !answer.value.trim())
+        ? { ...answer, state: finish ? ("skipped" as const) : ("unknown" as const) }
+        : answer,
+    );
+    setAnswerSaveState("syncing");
+    let next: IntakeDraft;
+    try {
+      // Saving answers and changing the model are separate revision-checked operations.
+      next = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
+        revision: saved.revision,
+        answers: outgoing,
+        ...(preserveUnanswered ? { answerMode: "draft" } : {}),
+      });
+    } catch (failure) {
+      setAnswerSaveState(answerUnsaved.current ?? "memory");
+      throw failure;
+    }
+    if (epoch !== generation.current) throw new DOMException("Aborted", "AbortError");
+    answerUnsaved.current = null;
+    try {
+      sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
+    } catch {}
+    apply(next);
+    return next;
+  };
+
   const analyze = (finish = false) =>
     void operate(async (epoch) => {
       if (unavailable) throw new Error("所选模型尚未配置，请先选择可用模型。");
       if (goalRef.current.trim().length < 2) throw new Error("请用至少 2 个字描述你的目标。");
       clearExamplePickerRequest();
-      let saved = await ensureDraft();
-      if (saved.status === "questions") {
-        const outgoing = answers.map((answer) =>
-          answer.state === "answered" &&
-          (Array.isArray(answer.value) ? !answer.value.length : !answer.value.trim())
-            ? { ...answer, state: finish ? ("skipped" as const) : ("unknown" as const) }
-            : answer,
-        );
-        saved = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
-          revision: saved.revision,
-          answers: outgoing,
-        });
-        if (epoch !== generation.current) return;
-        apply(saved);
-      }
+      const saved = await saveQuestionAnswers(await ensureDraft(), finish, epoch);
       setAnalysisPending(true);
       try {
         const next = await request<IntakeDraft>(`/api/intakes/${saved.id}/analyze`, "POST", {
@@ -604,6 +648,7 @@ export function GuidedIntake({
       }
     });
   const reset = () => {
+    const previousId = current.current?.id;
     generation.current += 1;
     controllers.current.forEach((controller) => controller.abort());
     locked.current = false;
@@ -614,6 +659,10 @@ export function GuidedIntake({
     setGoal("");
     goalRef.current = "";
     setAnswers([]);
+    answerValues.current = [];
+    answerScope.current = "";
+    answerUnsaved.current = null;
+    setAnswerSaveState("server");
     setError("");
 
     setBusy(false);
@@ -622,8 +671,9 @@ export function GuidedIntake({
     setSource(null);
     setMaterialsOpen(false);
     setRecoveryDetailsOpen(false);
+    if (previousId) clearIntakeDraftPointer(previousId);
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
     } catch {}
   };
 
@@ -727,13 +777,44 @@ export function GuidedIntake({
               disabled={blocked}
               selectionDisabled={uncertain}
               onChange={(mode) => {
-                if (current.current?.status === "uncertain") return;
-                setModelMode(mode);
-                modeRef.current = mode;
-                if (current.current)
-                  void operate(async () => {
-                    await ensureDraft();
-                  });
+                if (current.current?.status === "uncertain" || mode === modeRef.current) return;
+                if (!current.current) {
+                  setModelMode(mode);
+                  modeRef.current = mode;
+                  return;
+                }
+                void operate(async (epoch) => {
+                  let saved = current.current!;
+                  try {
+                    saved = await saveQuestionAnswers(saved, false, epoch, true);
+                  } catch (failure) {
+                    if (failure instanceof DOMException && failure.name === "AbortError")
+                      throw failure;
+                    throw new Error(
+                      `切换模型前未能保存本轮回答，原模型和回答已保留。${failure instanceof Error ? failure.message : "请稍后重试。"}`,
+                    );
+                  }
+                  let next: IntakeDraft;
+                  try {
+                    next = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
+                      revision: saved.revision,
+                      modelMode: mode,
+                    });
+                  } catch (failure) {
+                    if (failure instanceof DOMException && failure.name === "AbortError")
+                      throw failure;
+                    throw new Error(
+                      `未能确认模型切换结果，页面保留原选择；已同步的回答仍保留。请刷新后核对。${failure instanceof Error ? failure.message : ""}`,
+                    );
+                  }
+                  if (epoch !== generation.current) return;
+                  try {
+                    sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
+                  } catch {}
+                  apply(next);
+                  setModelMode(next.modelMode);
+                  modeRef.current = next.modelMode;
+                });
               }}
             />
           </div>
@@ -1022,14 +1103,39 @@ export function GuidedIntake({
                 answers.find((answer) => answer.questionId === question.id) ?? answerOf(question)
               }
               disabled={blocked}
-              onChange={(answer) =>
-                setAnswers((previous) => [
-                  ...previous.filter((item) => item.questionId !== answer.questionId),
+              onChange={(answer) => {
+                const next = [
+                  ...answerValues.current.filter((item) => item.questionId !== answer.questionId),
                   answer,
-                ])
-              }
+                ];
+                answerValues.current = next;
+                answerUnsaved.current = "memory";
+                setAnswers(next);
+                try {
+                  sessionStorage.setItem(
+                    ANSWER_JOURNAL_KEY,
+                    JSON.stringify({
+                      scope: answerScope.current,
+                      answers: next,
+                    }),
+                  );
+                  answerUnsaved.current = "local";
+                  setAnswerSaveState("local");
+                } catch {
+                  setAnswerSaveState("memory");
+                }
+              }}
             />
           ))}
+          <p className="gi-save-state" role="status" aria-live="polite">
+            {answerSaveState === "syncing"
+              ? "正在将本轮回答同步到服务器…"
+              : answerSaveState === "local"
+                ? "回答已保存在当前标签页，刷新可恢复；继续时同步到服务器。"
+                : answerSaveState === "memory"
+                  ? "回答暂未保存，请保持此页打开，点击继续后同步到服务器。"
+                  : "已同步的回答保存在服务器；新回答会先保存在当前标签页。"}
+          </p>
           <div className="gi-step-actions">
             <button
               type="button"
@@ -1224,8 +1330,9 @@ export function GuidedIntake({
                     parsed.error.issues[0]?.message ?? "请检查摘要中的目标和资源限制。",
                   );
                 if (!current.current) return;
+                const submittedDraftId = current.current.id;
                 const snapshot = await request<ArenaSnapshot>(
-                  `/api/intakes/${current.current.id}/submit`,
+                  `/api/intakes/${submittedDraftId}/submit`,
                   "POST",
                   {
                     revision: current.current.revision,
@@ -1236,9 +1343,7 @@ export function GuidedIntake({
                 if (!alive.current || epoch !== generation.current) return;
                 onCreated(snapshot);
                 resetSummary();
-                try {
-                  localStorage.removeItem(STORAGE_KEY);
-                } catch {}
+                clearIntakeDraftPointer(submittedDraftId);
               })
             }
           >
@@ -1329,7 +1434,11 @@ export function GuidedIntake({
           <span>
             {uncertain
               ? "原草稿仍保存在服务器，准备新问题不会删除原记录。"
-              : "草稿已保存，在当前浏览器刷新可继续。"}
+              : questionsVisible
+                ? "问题已保存。本轮回答的保存状态见上方提示。"
+                : summaryVisible
+                  ? "摘要保存状态见上方提示。"
+                  : "草稿已保存，在当前浏览器刷新可继续。"}
           </span>
           {!uncertain && (
             <button

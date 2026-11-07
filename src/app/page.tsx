@@ -28,6 +28,7 @@ import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
 import { ConditionEditor } from "@/components/condition-editor";
 import { StepFollowUpDialog } from "@/components/step-follow-up-dialog";
+import { supplementDraftKey, type SupplementDraft } from "@/components/supplement-draft";
 import { DisclosureMotion } from "@/components/disclosure-motion";
 import { VersionComparison } from "@/components/version-comparison";
 import { challengeChanges } from "@/lib/challenge-changes";
@@ -139,6 +140,7 @@ export default function Page() {
     returnTo: string | null;
   } | null>(null);
   const [challengeText, setChallengeText] = useState("");
+  const [supplementDrafts, setSupplementDrafts] = useState<Record<string, SupplementDraft>>({});
   const [claimOriginalOpen, setClaimOriginalOpen] = useState(false);
   const claimQuoteId = useId();
   const [stopConfirm, setStopConfirm] = useState(false);
@@ -232,6 +234,13 @@ export default function Page() {
   const previousDisplayedVersion = useRef<string | undefined>(undefined);
   const localVersionNavigation = useRef(false);
   const displayedVersionId = selected?.id;
+  const followUpDraftKey = followUp
+    ? supplementDraftKey(
+        followUp.version.id,
+        `step:${followUp.context.stepId}`,
+        followUp.context.quote,
+      )
+    : "";
   useEffect(() => () => cancelAnimationFrame(locateFrame.current), [displayedVersionId]);
   const overlayOpen =
     modelOpen ||
@@ -905,11 +914,16 @@ export default function Page() {
       )}
       {followUp && sameOverlayVersion && (
         <StepFollowUpDialog
+          key={followUpDraftKey}
           demo={demo}
           version={followUp.version}
           context={followUp.context}
           trigger={followUp.trigger}
           pending={arena.busy}
+          initialDraft={supplementDrafts[followUpDraftKey]}
+          onDraftChange={(draft) =>
+            setSupplementDrafts((saved) => ({ ...saved, [followUpDraftKey]: draft }))
+          }
           disabled={accessRequired || versionModelUnavailable(followUp.version)}
           error={
             arena.error ||
@@ -936,7 +950,14 @@ export default function Page() {
                 text,
               },
             );
-            if (ok) localVersionNavigation.current = true;
+            if (ok) {
+              setSupplementDrafts((saved) => {
+                const next = { ...saved };
+                delete next[followUpDraftKey];
+                return next;
+              });
+              localVersionNavigation.current = true;
+            }
             return ok;
           }}
         />

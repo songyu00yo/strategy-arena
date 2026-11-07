@@ -86,6 +86,53 @@ async function openSource(page: Page, number: number) {
   return supplement;
 }
 
+for (const recorded of [false, true]) {
+  test(`explicit UI fixture: ${recorded ? "recorded" : "live"} supplement survives a conditions handoff and stays scoped to its source`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const snapshot = completedSnapshot();
+    let posts = 0;
+    await interceptAllApis(page, snapshot, async (route) => {
+      posts++;
+      await route.fulfill({
+        status: 500,
+        json: { error: "This recovery fixture must not submit." },
+      });
+    });
+    await page.goto(recorded ? "/examples/career" : `/?arena=${snapshot.id}`);
+    if (recorded) await page.getByRole("button", { name: "开始分析", exact: true }).click();
+    const text = "测试：保留我已写下、尚未确认的补充，先去调整条件。";
+    let supplement = await openSource(page, 1);
+    await supplement.getByRole("textbox").fill(text);
+    if (recorded) {
+      await supplement.getByRole("button", { name: /^选择模型，当前/ }).click();
+      await page.getByRole("option", { name: "GPT 6.1 Sol", exact: true }).click();
+    }
+    await supplement.getByRole("button", { name: "调整条件", exact: true }).click();
+    const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+    await expect(conditions).toBeVisible();
+    await conditions.getByLabel("预算上限", { exact: false }).fill("150");
+    await conditions.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(conditions).toBeHidden();
+    supplement = await openSource(page, 1);
+    await expect(supplement.getByRole("textbox")).toHaveValue(text);
+    if (recorded)
+      await expect(
+        supplement.getByRole("button", { name: "选择模型，当前GPT 6.1 Sol", exact: true }),
+      ).toBeVisible();
+    await supplement.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(supplement).toBeHidden();
+    supplement = await openSource(page, 2);
+    await expect(supplement.getByRole("textbox")).toHaveValue("");
+    await supplement.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(supplement).toBeHidden();
+    supplement = await openSource(page, 1);
+    await expect(supplement.getByRole("textbox")).toHaveValue(text);
+    expect(posts).toBe(0);
+  });
+}
+
 for (const [label, field, value, key] of [
   ["budget", "预算上限", "150", "budget"],
   ["time", "可投入时间", "3", "timeHours"],

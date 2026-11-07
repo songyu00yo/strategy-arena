@@ -17,6 +17,7 @@ import { DisclosureMotion } from "./disclosure-motion";
 import { Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
 import { ModelSelector } from "./model-selector";
+import type { SupplementDraft } from "./supplement-draft";
 import "./recorded-challenge.css";
 
 export interface RecordedChallengeProps {
@@ -27,6 +28,9 @@ export interface RecordedChallengeProps {
     | { context: StepContext; trigger: HTMLElement | null; strategy?: never; claimId?: never };
   onAdjustConditions?: () => void;
   onClose: () => void;
+  initialDraft?: SupplementDraft;
+  onDraftChange?: (draft: SupplementDraft) => void;
+  onSubmitted?: () => void;
 }
 
 export function RecordedChallenge({
@@ -35,13 +39,17 @@ export function RecordedChallenge({
   target,
   onClose,
   onAdjustConditions,
+  initialDraft,
+  onDraftChange,
+  onSubmitted,
 }: RecordedChallengeProps) {
   const quoteId = useId();
   const goalId = useId();
   const [showQuote, setShowQuote] = useState(false);
   const [showGoal, setShowGoal] = useState(false);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialDraft?.text ?? "");
   const [mode, setMode] = useState<ModelMode>(() => {
+    if (initialDraft?.modelMode) return initialDraft.modelMode;
     const recorded = ModelModeSchema.safeParse(
       version.modelSelection?.requestedMode ?? metadata.modelId,
     );
@@ -177,6 +185,7 @@ export function RecordedChallenge({
             if (!response.ok) throw new Error(snapshot.error || "未能创建真实推演，请稍后重试。");
             if (typeof snapshot.id !== "string" || !snapshot.id)
               throw new Error("服务未返回可打开的推演记录。");
+            onSubmitted?.();
             try {
               localStorage.setItem("strategy-arena:last-id", snapshot.id);
             } catch {
@@ -246,7 +255,10 @@ export function RecordedChallenge({
           <span>{target.context ? "补充或质疑" : "你认为哪里有问题？"}</span>
           <textarea
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value);
+              onDraftChange?.({ text: event.target.value, modelMode: mode });
+            }}
             minLength={3}
             maxLength={1000}
             required
@@ -259,7 +271,10 @@ export function RecordedChallenge({
         <div className="recorded-challenge-tools">
           <ModelSelector
             mode={mode}
-            onChange={setMode}
+            onChange={(next) => {
+              setMode(next);
+              onDraftChange?.({ text, modelMode: next });
+            }}
             challenge={{ ...version.challenge, materials }}
             providers={options}
             disabled={pending}

@@ -72,6 +72,9 @@ function appendCompletedVersion(snapshot: ArenaSnapshot, body: VersionBody) {
 }
 async function openSource(page: Page, number: number) {
   await page.keyboard.press("End");
+  // Narrow screens expose the current deck card; select it through the visible progress control.
+  if ((page.viewportSize()?.width ?? 1440) < 650)
+    await page.getByRole("button", { name: `第 ${number} 步`, exact: true }).click();
   await page.getByRole("button", { name: `查看第 ${number} 步`, exact: true }).focus();
   await page.keyboard.press("Enter");
   const card = page.getByRole("dialog", { name: new RegExp(`^第 ${number} 步 ·`) });

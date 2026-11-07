@@ -44,7 +44,7 @@ function questionDraft(id: string, title: string): IntakeDraft {
   });
 }
 function completedSnapshot(id = "synthetic-tab-submitted-arena") {
-  const snapshot = configureFixtureModels(fixtureSnapshot());
+  const snapshot = configureFixtureModels(structuredClone(fixtureSnapshot()));
   snapshot.id = id;
   for (let stage = 0; stage < 5; stage++) advanceFixture(snapshot);
   snapshot.versions[0].status = "paused";

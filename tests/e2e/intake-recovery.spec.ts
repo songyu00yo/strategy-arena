@@ -6,6 +6,7 @@ import {
   SUMMARY_TAB_JOURNAL_KEY,
 } from "../../src/components/use-intake-summary";
 import { ANSWER_JOURNAL_KEY } from "../../src/components/intake-answer-journal";
+import { ARENA_STORAGE_KEY, ARENA_TAB_STORAGE_KEY } from "../../src/components/arena-pointer";
 import { configureFixtureModels, fixtureIntake, intakeStorageKey } from "./intake.fixture";
 import { advanceFixture, fixtureChallenge, fixtureSnapshot } from "./ui.fixture";
 
@@ -413,9 +414,18 @@ test("explicit UI fixture: committed submit with a lost response recovers the sa
   expect(await page.evaluate((key) => localStorage.getItem(key), intakeStorageKey)).toBe(draft.id);
   await page.reload();
   await expect(page.locator(".c-root")).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem("strategy-arena:last-id"))).toBe(
-    snapshot.id,
-  );
+  expect(
+    await page.evaluate(
+      ({ tab, shared }) => ({
+        tab: sessionStorage.getItem(tab),
+        shared: localStorage.getItem(shared),
+      }),
+      { tab: ARENA_TAB_STORAGE_KEY, shared: ARENA_STORAGE_KEY },
+    ),
+  ).toEqual({
+    tab: snapshot.id,
+    shared: "fixture-old-arena",
+  });
   expect(await page.evaluate((key) => localStorage.getItem(key), intakeStorageKey)).toBeNull();
   expect(submissions).toBe(1);
   expect(analyses).toBe(0);

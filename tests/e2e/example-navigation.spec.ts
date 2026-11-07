@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { configureFixtureModels, fixtureIntake, intakeStorageKey } from "./intake.fixture";
 import { advanceFixture, fixtureSnapshot } from "./ui.fixture";
+import { ARENA_TAB_STORAGE_KEY } from "../../src/components/arena-pointer";
 
 // Explicit UI fixtures: every API is intercepted. No real model, provider or billing call occurs.
 const previousArenaKey = "strategy-arena:last-id";
@@ -127,7 +128,10 @@ test("explicit UI fixture: explicit arena takes priority and forbidden or missin
       ].includes(call),
     ),
   ).toBe(true);
-  expect(await pointerValues(page)).toEqual({ draft: oldDraft.id, arena: target.id });
+  expect(await pointerValues(page)).toEqual({ draft: oldDraft.id, arena: oldDraft.arenaId });
+  expect(await page.evaluate((key) => sessionStorage.getItem(key), ARENA_TAB_STORAGE_KEY)).toBe(
+    target.id,
+  );
 
   for (const id of ["fixture-forbidden", "fixture-missing"]) {
     calls = [];
@@ -142,6 +146,9 @@ test("explicit UI fixture: explicit arena takes priority and forbidden or missin
       true,
     );
     expect(await pointerValues(page)).toEqual({ draft: oldDraft.id, arena: oldDraft.arenaId });
+    expect(await page.evaluate((key) => sessionStorage.getItem(key), ARENA_TAB_STORAGE_KEY)).toBe(
+      target.id,
+    );
   }
 });
 

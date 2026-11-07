@@ -198,11 +198,13 @@ export function GuidedIntake({
   modelProviders,
   pending,
   disabled = false,
+  restoreReady = true,
   onCreated,
 }: {
   modelProviders?: ModelOption[];
   pending: boolean;
   disabled?: boolean;
+  restoreReady?: boolean;
   onCreated: (snapshot: ArenaSnapshot) => void;
 }) {
   const id = useId();
@@ -361,6 +363,7 @@ export function GuidedIntake({
   );
 
   useEffect(() => {
+    if (!restoreReady) return;
     alive.current = true;
     const epoch = ++generation.current;
     let saved: string | null = null;
@@ -409,7 +412,7 @@ export function GuidedIntake({
       alive.current = false;
       activeControllers.forEach((controller) => controller.abort());
     };
-  }, [apply, request, recoverSummary, resetSummary]);
+  }, [apply, request, recoverSummary, resetSummary, restoreReady]);
 
   // Polling only reads an explicitly started analysis; it never starts another model call.
   useEffect(() => {

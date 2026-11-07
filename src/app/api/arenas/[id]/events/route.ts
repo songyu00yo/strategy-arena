@@ -8,10 +8,11 @@ export async function GET(request: Request, context: ArenaRouteContext) {
     const arenaId = (await context.params).id;
     assertOwner(arenaId, requireOwner(request));
     const rawSeq =
-      new URL(request.url).searchParams.get("afterSeq") ||
-      request.headers.get("last-event-id") ||
-      "0";
-    let afterSeq = /^\d{1,15}$/.test(rawSeq) ? Number(rawSeq) : 0;
+      [
+        request.headers.get("last-event-id"),
+        new URL(request.url).searchParams.get("afterSeq"),
+      ].find((value) => value !== null && /^\d{1,15}$/.test(value)) ?? "0";
+    let afterSeq = Number(rawSeq);
     const encoder = new TextEncoder();
     let timer: ReturnType<typeof setInterval> | undefined;
     let closed = false;
@@ -32,6 +33,7 @@ export async function GET(request: Request, context: ArenaRouteContext) {
         const poll = () => {
           if (closed) return;
           try {
+            assertOwner(arenaId, requireOwner(request));
             const events = getEvents(arenaId, afterSeq);
             if (events.length) {
               afterSeq = events.at(-1)!.seq;
@@ -52,7 +54,7 @@ export async function GET(request: Request, context: ArenaRouteContext) {
         };
         controller.enqueue(encoder.encode(": connected\n\n"));
         poll();
-        timer = setInterval(poll, 1000);
+        timer = setInterval(poll, 150);
         request.signal.addEventListener("abort", cleanup, { once: true });
         if (request.signal.aborted) cleanup();
       },

@@ -7,7 +7,7 @@ import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
 import { readMotionOrigin } from "../motion-origin";
 import "./step-card-motion.css";
-import { nameOf, type Beat } from "./beats";
+import { latestShownRevision, nameOf, type Beat } from "./beats";
 import { stepContext, type StepContext } from "@/lib/step-context";
 
 type Point = { x: number; y: number };
@@ -185,9 +185,9 @@ function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
   if (beat.attack) {
     const a = beat.attack;
     const checked = known.some((b) => b.id === `v:${a.id}`);
-    const reply = known
-      .find((b) => b.id === `r:${a.targetStrategyId}`)
-      ?.revision?.responses.find((r) => r.attackId === a.id);
+    const reply = latestShownRevision(known, a.targetStrategyId)?.revision?.responses.find(
+      (r) => r.attackId === a.id,
+    );
     const evidence = version.evidence
       .filter((e) => e.attackId === a.id)
       .map((e) =>

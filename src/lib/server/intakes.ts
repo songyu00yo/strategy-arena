@@ -223,7 +223,7 @@ function answerText(draft: PrivateDraft) {
     )
     .join("\n");
 }
-function allSources(draftId: string): MaterialSource[] {
+export function allSources(draftId: string): MaterialSource[] {
   return storedAttachments(draftId).flatMap((attachment) => {
     if (!attachment.parsed || attachment.state === "failed" || attachment.state === "needs_pages")
       return [];
@@ -1170,9 +1170,15 @@ export function submitIntake(
     throw new ArenaError("请先完成问题整理并确认任务摘要。", 409, "SUMMARY_REQUIRED");
   frozenConfiguration(draft);
   const challenge = ChallengeSchema.parse({ ...input.challenge, materials: materials(draft) });
-  return createArena(challenge, owner, draft.modelMode, {
-    intakeId: draftId,
-    revision: input.revision,
-    assumptions: input.assumptions,
-  });
+  return createArena(
+    challenge,
+    owner,
+    draft.modelMode,
+    {
+      intakeId: draftId,
+      revision: input.revision,
+      assumptions: input.assumptions,
+    },
+    input.executionMode ?? "fixed",
+  );
 }

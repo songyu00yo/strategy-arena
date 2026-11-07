@@ -42,6 +42,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     const ctx = surface?.getContext("2d", { alpha: true });
     if (!host || !content || !surface || !ctx) return;
     const preference = matchMedia("(prefers-reduced-motion: reduce)");
+    const compact = matchMedia("(max-width: 650px)");
     const scope = createMotionScope();
     let field: Field | null = null;
     let visible = true;
@@ -187,7 +188,15 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     };
 
     const enter = () => {
-      if (introStarted || preference.matches || !visible || !windowActive || motionPaused()) return;
+      if (
+        introStarted ||
+        compact.matches ||
+        preference.matches ||
+        !visible ||
+        !windowActive ||
+        motionPaused()
+      )
+        return;
       introStarted = true;
       intro = scope.animate(
         content,
@@ -264,6 +273,13 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     };
     const scheduleMeasure = () => {
       if (!measureFrame) measureFrame = requestAnimationFrame(measure);
+    };
+    const viewportChanged = () => {
+      if (compact.matches) {
+        intro?.cancel();
+        intro = null;
+      }
+      scheduleMeasure();
     };
     const resize = new ResizeObserver(scheduleMeasure);
     resize.observe(host);
@@ -371,6 +387,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     window.addEventListener("focus", windowFocus);
     window.addEventListener("resize", scheduleMeasure);
     preference.addEventListener("change", preferenceChanged);
+    compact.addEventListener("change", viewportChanged);
     host.dataset.motion = preference.matches ? "reduced" : "full";
     measure();
     return () => {
@@ -383,6 +400,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       loop.dispose();
       scope.dispose();
       preference.removeEventListener("change", preferenceChanged);
+      compact.removeEventListener("change", viewportChanged);
       window.removeEventListener("blur", windowBlur);
       window.removeEventListener("focus", windowFocus);
       window.removeEventListener("resize", scheduleMeasure);

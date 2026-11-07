@@ -1,0 +1,62 @@
+.agent-progress {
+  margin: 16px 0;
+  border: 1px solid var(--c-line, #d7dce5);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--c-bg, #fff);
+  color: var(--c-t1, #202a3a);
+}
+.agent-progress-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.agent-progress-heading span,
+.agent-actions small {
+  font-size: 12px;
+  color: var(--c-t2, #556172);
+}
+.agent-actions {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 0;
+  list-style: none;
+}
+.agent-actions li {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--c-line, #d7dce5);
+  border-radius: 8px;
+}
+.agent-actions li[data-state="running"] {
+  border-color: #315fcc;
+  background: #edf3ff;
+}
+.agent-actions li[data-state="completed"] {
+  border-color: #578568;
+}
+.agent-draft {
+  border-top: 1px solid var(--c-line, #d7dce5);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.agent-draft p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+  margin: 8px 0;
+}
+@media (max-width: 650px) {
+  .agent-progress {
+    padding: 12px;
+  }
+  .agent-draft > div {
+    max-height: 40dvh;
+    overflow-y: auto;
+  }
+}

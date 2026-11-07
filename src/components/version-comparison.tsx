@@ -105,10 +105,10 @@ export function VersionComparison({
                 <h3>路线内容</h3>
                 {(["A", "B", "C"] as const).map((route) => {
                   const before =
-                    parent.revisions.find((entry) => entry.strategyId === route)?.strategy ??
+                    parent.revisions.findLast((entry) => entry.strategyId === route)?.strategy ??
                     parent.strategies.find((entry) => entry.id === route);
                   const after =
-                    version.revisions.find((entry) => entry.strategyId === route)?.strategy ??
+                    version.revisions.findLast((entry) => entry.strategyId === route)?.strategy ??
                     version.strategies.find((entry) => entry.id === route);
                   const changes = before && after ? strategyChanges(before, after) : [];
                   return (

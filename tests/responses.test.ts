@@ -112,7 +112,7 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
       reasoning: { effort: "low" },
       store: false,
       parallel_tool_calls: false,
-      stream: false,
+      stream: true,
       tools: [
         {
           type: "function",

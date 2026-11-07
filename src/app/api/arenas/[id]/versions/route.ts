@@ -14,7 +14,11 @@ export async function POST(request: Request, context: ArenaRouteContext) {
         input.changeReason,
         undefined,
         input.modelMode,
-        { baseVersionId: input.baseVersionId, followUp: input.followUp },
+        {
+          baseVersionId: input.baseVersionId,
+          followUp: input.followUp,
+          executionMode: input.executionMode,
+        },
       ),
     );
   } catch (error) {

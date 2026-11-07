@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ChallengeSchema,
+  ExecutionModeSchema,
   ModelModeSchema,
   type Challenge,
   type ModelMode,
@@ -100,6 +101,7 @@ export const AnalyzeIntakeSchema = z.object({
   finish: z.boolean().default(false),
 });
 export const SubmitIntakeSchema = z.object({
+  executionMode: ExecutionModeSchema.optional(),
   revision: z.number().int().nonnegative(),
   challenge: ChallengeSchema,
   assumptions: z.array(z.string().max(500)).max(6).default([]),

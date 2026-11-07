@@ -10,6 +10,7 @@ import {
   saveIntakeDraftPointer,
 } from "./intake-draft-pointer";
 import { clearArenaPointer, readArenaPointer, saveArenaPointer } from "./arena-pointer";
+import { bootstrapIdentity } from "./identity-bootstrap";
 
 export interface Health {
   status: string;
@@ -18,6 +19,7 @@ export interface Health {
   model: ArenaSnapshot["model"];
   requiresAccessCode?: boolean;
   accessGranted?: boolean;
+  identityBootstrap?: boolean;
 }
 class ApiError extends Error {
   code?: string;
@@ -42,7 +44,7 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 function revisionOf(value: ArenaSnapshot) {
   return {
     version: value.versions.find((v) => v.id === value.activeVersionId)?.number ?? 0,
-    seq: value.events.at(-1)?.seq ?? 0,
+    seq: value.eventCursor ?? value.events.at(-1)?.seq ?? 0,
   };
 }
 /** Reject both pre-mutation responses and snapshots read before a newer server event. */
@@ -142,7 +144,11 @@ export function useArena() {
       accept(value, epoch);
     } catch (e) {
       if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
-        if (restoringPreviousArena && !(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
+        if (
+          restoringPreviousArena &&
+          e instanceof ApiError &&
+          ["NOT_FOUND", "FORBIDDEN"].includes(e.code ?? "")
+        )
           clearArenaPointer(id);
         setError(
           restoringExplicitArena
@@ -163,9 +169,15 @@ export function useArena() {
     request<Health>("/api/health")
       .then(async (value) => {
         if (!mounted.current) return;
-        setHealth(value);
-        if (!value.requiresAccessCode || value.accessGranted) await restore();
-        else setRestoring(false);
+        if (!value.requiresAccessCode || value.accessGranted) {
+          if (value.identityBootstrap === true) await bootstrapIdentity();
+          if (!mounted.current) return;
+          setHealth(value);
+          await restore();
+        } else {
+          setHealth(value);
+          setRestoring(false);
+        }
       })
       .catch((e) => {
         if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
@@ -185,12 +197,49 @@ export function useArena() {
   useEffect(() => {
     if (!arenaId) return;
     const source = new EventSource(
-      `/api/arenas/${arenaId}/events?afterSeq=${latest.current?.events.at(-1)?.seq ?? 0}`,
+      `/api/arenas/${arenaId}/events?afterSeq=${latest.current?.eventCursor ?? latest.current?.events.at(-1)?.seq ?? 0}`,
     );
     let refreshing = false;
     let queued = false;
     let closed = false;
-    const onEvent = async () => {
+    const onEvent = async (message: MessageEvent) => {
+      let hasStructuralEvent = false;
+      try {
+        const packet = JSON.parse(message.data) as {
+          events: import("@/lib/contracts").ArenaEvent[];
+        };
+        const current = latest.current;
+        if (!current || current.id !== arenaId || closed) return;
+        const newEvents = packet.events.filter(
+          (entry) => entry.seq > (current.eventCursor ?? current.events.at(-1)?.seq ?? 0),
+        );
+        if (!newEvents.length) return;
+        const drafts = new Map((current.drafts ?? []).map((draft) => [draft.stepId, draft]));
+        for (const entry of newEvents) {
+          if (entry.type === "draft_updated" || entry.type === "draft_finished") {
+            const draft = entry.data as import("@/lib/contracts").ModelDraft;
+            const previous = drafts.get(draft.stepId);
+            if (
+              draft.versionId === entry.versionId &&
+              (!previous || draft.revision > previous.revision)
+            )
+              drafts.set(draft.stepId, draft);
+          } else hasStructuralEvent = true;
+        }
+        const value = {
+          ...current,
+          drafts: [...drafts.values()],
+          eventCursor: newEvents.at(-1)!.seq,
+        };
+        latest.current = value;
+        setSnapshot(value);
+      } catch {
+        hasStructuralEvent = true;
+      }
+      if (!hasStructuralEvent) {
+        if (refreshing) queued = true;
+        return;
+      }
       if (refreshing) {
         queued = true;
         return;
@@ -316,20 +365,54 @@ export function useArena() {
     unlock: async (code: string) => {
       setBusy(true);
       setError("");
+      setRestoring(true);
       try {
         await request("/api/access", { code });
         const next = await request<Health>("/api/health");
+        if (next.identityBootstrap === true) await bootstrapIdentity();
         setHealth(next);
         await restore();
         return true;
       } catch (e) {
         setError(e instanceof Error ? e.message : "访问码验证失败");
+        setRestoring(false);
         return false;
       } finally {
         setBusy(false);
       }
     },
     clearError: () => setError(""),
+    changeIdentity: () => {
+      generation.current++;
+      controllers.current.forEach((controller) => controller.abort());
+      controllers.current.clear();
+      clearArenaPointer(readArenaPointer());
+      clearIntakeDraftPointer(readIntakeDraftPointer());
+      clearExplicitArenaRequest();
+      latest.current = null;
+      setSnapshot(null);
+      setAuto(false);
+      setError("");
+      setRestoring(false);
+    },
+    openArena: async (id: string) => {
+      const epoch = ++generation.current;
+      setAuto(false);
+      clearExplicitArenaRequest();
+      const value = await request<ArenaSnapshot>(`/api/arenas/${encodeURIComponent(id)}`);
+      if (accept(value, epoch, true)) clearIntakeDraftPointer(readIntakeDraftPointer());
+    },
+    openIntake: (id: string) => {
+      generation.current++;
+      clearExplicitArenaRequest();
+      clearArenaPointer(readArenaPointer());
+      saveIntakeDraftPointer(id, true);
+      latest.current = null;
+      setSnapshot(null);
+      setAuto(false);
+      setError("");
+      setRestoring(false);
+    },
     adopt: (value: ArenaSnapshot) => {
       const epoch = ++generation.current;
       setError("");

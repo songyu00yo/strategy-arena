@@ -98,15 +98,16 @@ export function normalizeCostPlan(
     if (item.basis === "unknown" && item.amount !== null)
       throw new Error("未知费用不得填写确定金额或零，情景估计须明确标为假设。");
     if (item.basis === "user") {
+      const correction = `费用项目 costPlan.items[${index}]（id=${item.id}）。没有同项用户金额时，改为 basis=unknown、amount=null、quote=""，并将 estimatedCost=null。有明确情景假设时可用 basis=assumption、quote=""，在步骤说明金额的假设与核实条件。零额也须同项0元原文，已有环境或开源不证明零费用。`;
       if (!item.quote.trim() || (provided !== undefined && !provided.includes(item.quote)))
         throw new Error(
-          "费用事实必须逐字引用当前用户原文；quote复制同一项目及金额的原文短句，label可取金额前原文短片段，不添加报价范围。",
+          `费用事实必须逐字引用当前用户原文；quote复制同一项目及金额的原文短句，label可取金额前原文短片段，不添加报价范围。${correction}`,
         );
       const prices = [...item.quote.matchAll(/\d+(?:\.\d+)?\s*元/g)];
       if (item.amount !== null) {
         if (prices.length !== 1 || Number.parseFloat(prices[0][0]) !== item.amount)
           throw new Error(
-            "费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额，label可取该句金额前原文短片段。",
+            `费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额，label可取该句金额前原文短片段。${correction}`,
           );
       }
       if (item.amount !== null && /假设|如果|若|可能|预计|大约|约\d|是否/.test(item.quote))

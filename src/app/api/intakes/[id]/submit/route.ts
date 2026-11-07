@@ -9,7 +9,13 @@ export async function POST(request: Request, context: IntakeRouteContext) {
   try {
     const input = await readBody(request, SubmitIntakeSchema);
     const { id } = await context.params;
-    return json(submitIntake(id, requireOwner(request), input), 201);
+    return json(
+      submitIntake(id, requireOwner(request), {
+        ...input,
+        executionMode: input.executionMode ?? "agent",
+      }),
+      201,
+    );
   } catch (error) {
     return errorResponse(error);
   }

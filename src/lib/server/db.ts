@@ -1,12 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { toolUsage } from "./tool-usage";
 import { randomBytes, randomUUID } from "node:crypto";
 import type {
   ArenaEvent,
   ArenaSnapshot,
   ArenaStep,
   ArenaVersion,
+  ModelDraft,
   Challenge,
   Stage,
 } from "@/lib/contracts";
@@ -24,6 +26,8 @@ export function db(): DatabaseSync {
     database.exec(
       readFileSync(resolve(process.cwd(), "migrations/003_decision_reviews.sql"), "utf8"),
     );
+    database.exec(readFileSync(resolve(process.cwd(), "migrations/004_identity.sql"), "utf8"));
+    database.exec(readFileSync(resolve(process.cwd(), "migrations/005_agent.sql"), "utf8"));
   }
   return database;
 }
@@ -132,6 +136,21 @@ export function getEvents(arenaId: string, afterSeq = 0): ArenaEvent[] {
     createdAt: r.created_at,
   }));
 }
+function recentEvents(arenaId: string): ArenaEvent[] {
+  const boundary = db()
+    .prepare(
+      "SELECT seq FROM events WHERE arena_id=? AND type!='draft_updated' ORDER BY seq DESC LIMIT 1 OFFSET 499",
+    )
+    .get(arenaId) as { seq: number } | undefined;
+  const result: ArenaEvent[] = [];
+  let cursor = boundary ? boundary.seq - 1 : 0;
+  for (;;) {
+    const page = getEvents(arenaId, cursor);
+    result.push(...page.filter((entry) => entry.type !== "draft_updated"));
+    if (page.length < 500) return result;
+    cursor = page.at(-1)!.seq;
+  }
+}
 export function snapshot(
   arenaId: string,
   owner: string,
@@ -142,19 +161,39 @@ export function snapshot(
     .prepare("SELECT body FROM versions WHERE arena_id=? ORDER BY number")
     .all(arenaId) as { body: string }[];
   const rows = db()
-    .prepare("SELECT * FROM steps WHERE arena_id=? ORDER BY version_id,ordinal")
+    .prepare(
+      "SELECT s.*,a.kind AS action_kind,a.role AS logical_role,a.round AS action_round FROM steps s LEFT JOIN agent_actions a ON a.step_id=s.id WHERE s.arena_id=? ORDER BY s.version_id,s.ordinal",
+    )
     .all(arenaId) as unknown as StepRow[];
   return {
     id: arenaId,
     activeVersionId: arena.active_version_id,
     createdAt: arena.created_at,
-    versions: versions.map((r) => JSON.parse(r.body)),
+    versions: versions.map((r) => {
+      const version = JSON.parse(r.body) as ArenaVersion;
+      return { ...version, toolUsage: toolUsage([version.id]) };
+    }),
     steps: rows.map(stepPublic),
-    events: getEvents(arenaId),
+    events: recentEvents(arenaId),
+    eventCursor: (
+      db()
+        .prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM events WHERE arena_id=?")
+        .get(arenaId) as { seq: number }
+    ).seq,
+    drafts: (
+      db()
+        .prepare(
+          "SELECT d.body FROM model_drafts d JOIN versions v ON v.id=d.version_id WHERE v.arena_id=?",
+        )
+        .all(arenaId) as { body: string }[]
+    ).map((row) => JSON.parse(row.body) as ModelDraft),
     model,
   };
 }
 export interface StepRow {
+  action_kind?: import("@/lib/agent-contracts").AgentAction["kind"];
+  logical_role?: string;
+  action_round?: number;
   id: string;
   arena_id: string;
   version_id: string;
@@ -174,7 +213,11 @@ function stepPublic(row: StepRow): ArenaStep {
     id: row.id,
     versionId: row.version_id,
     stage: row.stage,
-    role: row.role,
+    role: row.logical_role
+      ? `${row.logical_role}${row.role.includes(":repair") ? ":repair" : ""}`
+      : row.role,
+    kind: row.action_kind ?? undefined,
+    round: row.action_round ?? undefined,
     status: row.status,
     error: row.error,
     startedAt: row.started_at,

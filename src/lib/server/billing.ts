@@ -1,3 +1,9 @@
+import {
+  readToolCommittedUsdMicros,
+  assertToolBatchModelBudget,
+  ensureToolBudgetBatchOnConnection,
+  configuredToolBatchId,
+} from "./tool-budget";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -211,6 +217,8 @@ export function openBillingLedger(options: BillingOptions) {
           "BILLING_SETTINGS_MISMATCH",
         );
       migrateSettlementMetadata(connection);
+      const batchId = configuredToolBatchId();
+      if (batchId) ensureToolBudgetBatchOnConnection(connection, batchId);
     });
   } catch (error) {
     connection.close();
@@ -262,15 +270,26 @@ export function openBillingLedger(options: BillingOptions) {
             "BILLING_SETTINGS_MISMATCH",
           );
         const stage = totals.activeStage;
+        const toolAmount = readToolCommittedUsdMicros(connection);
+        const stageBoundary = stage
+          ? (connection
+              .prepare("SELECT changed_at FROM billing_limit_audit ORDER BY revision DESC LIMIT 1")
+              .get() as { changed_at: string } | undefined)
+          : undefined;
+        const stageToolAmount = stageBoundary
+          ? readToolCommittedUsdMicros(connection, stageBoundary.changed_at)
+          : 0;
+        assertToolBatchModelBudget(connection, reservedUsdMicros);
         if (
           (stage &&
             (stage.usage.requests + 1 > stage.requestLimit ||
               stage.usage.tokens + input.maxTokens > stage.tokenLimit ||
-              stage.usage.committedUsdMicros + reservedUsdMicros > stage.usdLimitMicros)) ||
+              stage.usage.committedUsdMicros + stageToolAmount + reservedUsdMicros >
+                stage.usdLimitMicros)) ||
           totals.requests + 1 > requestLimit ||
           totals.tokens + input.maxTokens > tokenLimit ||
-          totals.committedUsdMicros + reservedUsdMicros > usdMicros ||
-          totals.committedUsdMicros + reservedUsdMicros > BILLING_HARD_TOTAL_USD_MICROS
+          totals.committedUsdMicros + toolAmount + reservedUsdMicros > usdMicros ||
+          totals.committedUsdMicros + toolAmount + reservedUsdMicros > BILLING_HARD_TOTAL_USD_MICROS
         )
           throw new BillingError(
             "Shared paid-request budget is exhausted.",

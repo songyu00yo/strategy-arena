@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   ArenaSnapshot,
+  ExecutionMode,
   ModelMode,
   ModelOption,
   ModelCatalogOption,
@@ -18,6 +19,27 @@ import type {
   FollowUpInput,
 } from "@/lib/contracts";
 import type { z } from "zod";
+import type { AgentPlan } from "@/lib/agent-contracts";
+import { AGENT_LIMITS, AGENT_PROTOCOL } from "@/lib/agent-contracts";
+import {
+  actionFor,
+  seedAgent,
+  agentRequest,
+  compilePlan,
+  agentInput,
+  bindActionInput,
+  modelRequestsUsed,
+  runAgentTool,
+  hashOf,
+  copyActionForRetry,
+  dependenciesComplete,
+  syncActions,
+  corpusFor,
+  webConfigured,
+  agentConfigurationHash,
+} from "./agent";
+import { draftWriter } from "./model-drafts";
+import { allSources } from "./intakes";
 import { SCHEMA_VERSION } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
@@ -26,6 +48,8 @@ import { stepContext } from "@/lib/step-context";
 import {
   getModelConfig,
   estimateCallCost,
+  estimateStructuredCall,
+  generateStructured,
   generateStrategy,
   generateAttack,
   generateRevision,
@@ -95,6 +119,11 @@ export function modelInfo(): ArenaSnapshot["model"] {
     schemaVersion: SCHEMA_VERSION,
     providers,
     models,
+    tools: {
+      webConfigured: webConfigured(),
+      protocol: AGENT_PROTOCOL,
+      provider: process.env.ARENA_SEARCH_PROVIDER === "tavily" ? "tavily" : "deepseek",
+    },
   };
 }
 function runConfiguration(config: SelectedConfig) {
@@ -143,17 +172,18 @@ function pinConfiguration(version: ArenaVersion, mode: ModelMode, frozen?: Selec
   );
 }
 export function getArena(arenaId: string, owner: string) {
-  atomic(() => {
+  return atomic(() => {
     assertOwner(arenaId, owner);
     expireLeases();
+    return snapshot(arenaId, owner, modelInfo());
   });
-  return snapshot(arenaId, owner, modelInfo());
 }
 export function createArena(
   challenge: Challenge,
   owner: string,
   mode: ModelMode = "auto",
   options?: { intakeId: string; revision: number; assumptions?: string[] },
+  executionMode: ExecutionMode = "fixed",
 ) {
   const arenaId = atomic(() => {
     let draft: { body: string; submitted_arena_id: string | null } | undefined;
@@ -224,6 +254,9 @@ export function createArena(
         usage: Array.isArray(draftBody.usage) ? (draftBody.usage as ModelUsage[]) : [],
       };
     }
+    if (executionMode === "agent")
+      seedAgent(arenaId, version, options ? allSources(options.intakeId) : []);
+    else version.executionMode = "fixed";
     pinConfiguration(version, mode, frozen);
     if (options && draftBody) {
       draftBody.status = "submitted";
@@ -257,6 +290,7 @@ export function newVersion(
     baseVersionId?: string;
     followUp?: FollowUpInput;
     claim?: z.infer<typeof InterventionSchema>;
+    executionMode?: ExecutionMode;
   } = {},
 ) {
   atomic(() => {
@@ -282,8 +316,8 @@ export function newVersion(
     if (options.claim) {
       const input = options.claim;
       const strategy =
-        previous.revisions.find((entry) => entry.strategyId === input.targetStrategyId)?.strategy ??
-        previous.strategies.find((entry) => entry.id === input.targetStrategyId);
+        previous.revisions.findLast((entry) => entry.strategyId === input.targetStrategyId)
+          ?.strategy ?? previous.strategies.find((entry) => entry.id === input.targetStrategyId);
       const claim = strategy?.claims.find((entry) => entry.id === input.targetClaimId);
       if (!claim)
         throw new ArenaError("这条观点不属于当前版本，请刷新后重试。", 409, "STALE_CLAIM");
@@ -298,12 +332,13 @@ export function newVersion(
     consumeRun(owner);
     if (["ready", "running"].includes(previous.status)) {
       previous.status = "superseded";
-      saveVersion(previous);
       db()
         .prepare(
           "UPDATE steps SET status='skipped',finished_at=? WHERE version_id=? AND status='pending'",
         )
         .run(now(), previous.id);
+      syncActions(previous);
+      saveVersion(previous);
       event(
         arenaId,
         previous.id,
@@ -315,6 +350,10 @@ export function newVersion(
     const version = addVersion(arenaId, challenge, reason, previous.id);
     if (previous.intake) version.intake = structuredClone(previous.intake);
     if (options.followUp) version.followUp = { ...options.followUp, sourceVersionId: previous.id };
+    if ((options.executionMode ?? previous.executionMode) === "agent") {
+      const inherited = corpusFor(previous.id);
+      seedAgent(arenaId, version, inherited?.sources ?? previous.intake?.usedSources ?? []);
+    } else version.executionMode = "fixed";
     pinConfiguration(version, mode ?? previous.modelSelection?.requestedMode ?? "deepseek");
     for (const text of [...userChallenges(previous.id), ...(supplement ? [supplement] : [])])
       db()
@@ -327,6 +366,7 @@ export function intervene(
   arenaId: string,
   owner: string,
   input: z.infer<typeof InterventionSchema>,
+  executionMode?: ExecutionMode,
 ) {
   const arena = assertOwner(arenaId, owner);
   const current = getVersion(arena.active_version_id);
@@ -337,7 +377,7 @@ export function intervene(
     "用户针对观点补充质疑",
     undefined,
     undefined,
-    { baseVersionId: input.baseVersionId ?? current.id, claim: input },
+    { baseVersionId: input.baseVersionId ?? current.id, claim: input, executionMode },
   );
 }
 export function partialVerdict(version: ArenaVersion): Verdict {
@@ -352,7 +392,7 @@ export function partialVerdict(version: ArenaVersion): Verdict {
       ? [
           ...version.strategies.map(
             (s) =>
-              `方案 ${s.id} 可先验证：${(version.revisions.find((r) => r.strategyId === s.id)?.strategy || s).firstAction}`,
+              `方案 ${s.id} 可先验证：${(version.revisions.findLast((r) => r.strategyId === s.id)?.strategy || s).firstAction}`,
           ),
           "补充尚缺材料后开启新版本继续比较。",
         ].slice(0, 5)
@@ -394,12 +434,13 @@ export function stopArena(arenaId: string, owner: string, versionId: string) {
     version.status = "paused";
     version.verdict = partialVerdict(version);
     syncAttackStatuses(version);
-    saveVersion(version);
     db()
       .prepare(
         "UPDATE steps SET status='skipped',finished_at=? WHERE version_id=? AND status='pending'",
       )
       .run(now(), versionId);
+    syncActions(version);
+    saveVersion(version);
     event(
       arenaId,
       versionId,
@@ -430,6 +471,27 @@ export function expireLeases() {
       version.status = "uncertain";
       version.error = message;
     }
+    syncActions(version);
+    const pendingDraft = db()
+      .prepare("SELECT body FROM model_drafts WHERE step_id=?")
+      .get(step.id) as { body: string } | undefined;
+    if (pendingDraft) {
+      const interrupted = JSON.parse(pendingDraft.body) as import("@/lib/contracts").ModelDraft;
+      interrupted.status = "interrupted";
+      interrupted.revision++;
+      db()
+        .prepare("UPDATE model_drafts SET body=? WHERE step_id=?")
+        .run(JSON.stringify(interrupted), step.id);
+      event(
+        step.arena_id,
+        step.version_id,
+        "draft_finished",
+        "生成中断，结果待核对",
+        step.stage,
+        step.role,
+        interrupted,
+      );
+    }
     saveVersion(version);
     event(step.arena_id, step.version_id, "step_uncertain", message, step.stage, step.role);
   }
@@ -440,7 +502,7 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
   if (independent && version.parentVersionId) {
     const parent = getVersion(version.parentVersionId);
     previousStrategy =
-      parent.revisions.find((r) => r.strategyId === step.role.split(":")[0])?.strategy ||
+      parent.revisions.findLast((r) => r.strategyId === step.role.split(":")[0])?.strategy ||
       parent.strategies.find((s) => s.id === step.role.split(":")[0]);
   }
   if (step.role.includes(":retry")) {
@@ -460,7 +522,7 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
       .get(version.id, step.stage, step.role.split(":")[0]) as { data: string } | undefined;
     if (row) repair = JSON.parse(row.data);
   }
-  return {
+  const input: StageInput = {
     challenge: version.challenge,
     role: step.role.split(":")[0],
     strategies: independent ? [] : version.strategies,
@@ -475,6 +537,8 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
       : {}),
     ...(repair ? { repairFeedback: repair.feedback, rejectedOutput: repair.rejectedOutput } : {}),
   };
+  const action = actionFor(step.id);
+  return action ? agentInput(version, action, input) : input;
 }
 // This conservative conversion is a budget guard only; recorded amounts retain their native currency.
 const CNY_PER_USD_BUDGET = 6;
@@ -482,7 +546,9 @@ function spentUsd(version: ArenaVersion) {
   return (
     (version.costCny + version.reservedCny) / CNY_PER_USD_BUDGET +
     (version.costUsd ?? 0) +
-    (version.reservedUsd ?? 0)
+    (version.reservedUsd ?? 0) +
+    (version.toolCostUsd ?? 0) +
+    (version.toolReservedUsd ?? 0)
   );
 }
 function localBudget(usdName: string, cnyName: string, fallback: number) {
@@ -542,7 +608,8 @@ function claim(
       !version.modelSelection ||
       !version.runConfiguration?.provider ||
       !version.configurationHash ||
-      version.configurationHash !== runConfiguration(config).hash
+      version.configurationHash !== runConfiguration(config).hash ||
+      (version.agent && version.agent.configurationHash !== agentConfigurationHash())
     ) {
       version.status = "failed";
       version.error =
@@ -552,6 +619,7 @@ function claim(
           "UPDATE steps SET status='skipped',finished_at=? WHERE version_id=? AND status='pending'",
         )
         .run(now(), versionId);
+      syncActions(version);
       saveVersion(version);
       event(arenaId, versionId, "configuration_changed", version.error, version.stage);
       return null;
@@ -583,16 +651,41 @@ function claim(
       } else break;
     }
     if (!step) return null;
-    if (step.stage === "judge" && !version.evidence.some((e) => e.estimateScope === "final")) {
+    const action = actionFor(step.id);
+    if (action && !dependenciesComplete(action)) return null;
+    if (action && action.kind !== "tools") {
+      const count = modelRequestsUsed(versionId);
+      if (
+        count >= AGENT_LIMITS.modelRequests ||
+        (action.kind !== "judge" && count >= AGENT_LIMITS.modelRequests - 1)
+      ) {
+        version.status = "paused";
+        version.agent!.stopReason = "达到本版模型请求上限，保留现有证据与未决事项。";
+        version.verdict = partialVerdict(version);
+        db()
+          .prepare(
+            "UPDATE steps SET status='skipped',finished_at=? WHERE version_id=? AND status='pending'",
+          )
+          .run(now(), versionId);
+        syncActions(version);
+        saveVersion(version);
+        event(arenaId, versionId, "agent_limit", version.agent!.stopReason, version.stage);
+        return null;
+      }
+    }
+    if (
+      step.stage === "judge" &&
+      (action || !version.evidence.some((e) => e.estimateScope === "final"))
+    ) {
       const finalStrategies = version.strategies.map(
         (strategy) =>
-          version.revisions.find((revision) => revision.strategyId === strategy.id)?.strategy ??
+          version.revisions.findLast((revision) => revision.strategyId === strategy.id)?.strategy ??
           strategy,
       );
       version.evidence.push(...checkConstraints(version.challenge, finalStrategies, "final"));
     }
     const input = inputFor(version, step);
-    if (step.stage !== "verify") {
+    if (step.stage !== "verify" || action?.kind === "plan") {
       if (!config.configured)
         throw new ArenaError(
           `${config.id} 尚未配置模型密钥。请配置所选服务商的密钥后重新启动；不会切换到其他模型。`,
@@ -601,13 +694,48 @@ function claim(
         );
       const concurrent = db()
         .prepare(
-          "SELECT COUNT(*) AS count FROM steps WHERE status IN ('running','uncertain') AND stage!='verify'",
+          "SELECT COUNT(*) AS count FROM steps WHERE status IN ('running','uncertain') AND (stage!='verify' OR EXISTS(SELECT 1 FROM agent_actions a WHERE a.step_id=steps.id AND a.kind='plan'))",
         )
         .get() as { count: number };
       if (concurrent.count >= positiveEnv("ARENA_MAX_CONCURRENT_CALLS", 3))
         throw new ArenaError("当前讨论较多，请稍后再继续。", 429, "CONCURRENCY_LIMIT");
-      step.reservation = estimateCallCost(input, config);
-      reserveCall(version, step.reservation);
+      step.reservation =
+        action?.kind === "plan"
+          ? estimateStructuredCall(agentRequest(version, action, config)).amount
+          : estimateCallCost(input, config);
+      try {
+        reserveCall(version, step.reservation);
+      } catch (error) {
+        if (
+          !action ||
+          !(error instanceof ArenaError) ||
+          !["RUN_BUDGET", "GLOBAL_BUDGET"].includes(error.code)
+        )
+          throw error;
+        version.status = "paused";
+        version.agent!.stopReason = error.message;
+        version.verdict = partialVerdict(version);
+        db()
+          .prepare(
+            "UPDATE steps SET status='skipped',finished_at=? WHERE version_id=? AND status='pending'",
+          )
+          .run(now(), versionId);
+        syncActions(version);
+        saveVersion(version);
+        event(arenaId, versionId, "agent_limit", error.message, version.stage);
+        return null;
+      }
+    }
+    if (action) {
+      const inputHash = bindActionInput(
+        action,
+        action.kind === "plan" ? agentRequest(version, action, config).input : input,
+      );
+      const tracked = version.agent!.actions.find((entry) => entry.id === step!.id);
+      if (tracked) {
+        tracked.inputHash = inputHash;
+        tracked.status = "running";
+      }
     }
     const lease = Date.now() + config.timeoutMs + 30_000;
     db()
@@ -620,17 +748,25 @@ function claim(
     version.stage = step.stage;
     version.error = null;
     saveVersion(version);
-    event(arenaId, versionId, "step_started", `${step.role} 开始执行。`, step.stage, step.role, {
-      configuration: runConfiguration(config).configuration,
-      ...(config.currency === "USD"
-        ? { reservedUsd: step.reservation }
-        : { reservedCny: step.reservation }),
-      currency: config.currency,
-      modelSelection: version.modelSelection,
-      model: config.id,
-      promptVersion: config.promptVersion,
-      schemaVersion: config.schemaVersion,
-    });
+    event(
+      arenaId,
+      versionId,
+      "step_started",
+      `${action?.role ?? step.role} 开始执行。`,
+      step.stage,
+      action?.role ?? step.role,
+      {
+        configuration: runConfiguration(config).configuration,
+        ...(config.currency === "USD"
+          ? { reservedUsd: step.reservation }
+          : { reservedCny: step.reservation }),
+        currency: config.currency,
+        modelSelection: version.modelSelection,
+        model: config.id,
+        promptVersion: config.promptVersion,
+        schemaVersion: config.schemaVersion,
+      },
+    );
     return { step, input, config };
   });
 }
@@ -638,12 +774,25 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
   const claimed = claim(arenaId, owner, versionId);
   if (!claimed) return getArena(arenaId, owner);
   const { step, input, config } = claimed;
-  let result: ModelResult<Strategy | Attack | Revision | Verdict> | undefined;
+  const frozenSources = corpusFor(versionId)?.sources ?? getVersion(versionId).intake?.usedSources;
+  const action = actionFor(step.id);
+  const draft = draftWriter(arenaId, versionId, step.id, step.stage, action?.role ?? input.role);
+  let result: ModelResult<Strategy | Attack | Revision | Verdict | AgentPlan> | undefined;
   try {
-    if (step.stage === "propose") result = await generateStrategy(input, config, step.id);
-    else if (step.stage === "attack") result = await generateAttack(input, config, step.id);
-    else if (step.stage === "revise") result = await generateRevision(input, config, step.id);
-    else if (step.stage === "judge") result = await generateVerdict(input, config, step.id);
+    if (action?.kind === "plan")
+      result = await generateStructured({
+        ...agentRequest(getVersion(versionId), action, config),
+        input: JSON.parse(action.input_body!),
+        onPreview: draft.preview,
+      });
+    else if (step.stage === "propose")
+      result = await generateStrategy(input, config, step.id, draft.preview);
+    else if (step.stage === "attack")
+      result = await generateAttack(input, config, step.id, draft.preview);
+    else if (step.stage === "revise")
+      result = await generateRevision(input, config, step.id, draft.preview);
+    else if (step.stage === "judge")
+      result = await generateVerdict(input, config, step.id, draft.preview);
     if (result?.formatNormalization)
       atomic(() => {
         event(
@@ -662,20 +811,149 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           },
         );
       });
-    const evidence =
-      step.stage === "verify"
-        ? [
-            ...input.attacks.flatMap((attack) =>
-              executeAttackTools(
-                attack,
-                input.challenge.materials,
-                getVersion(versionId).intake?.usedSources,
-              ),
-            ),
-            ...checkConstraints(input.challenge, input.strategies),
-          ]
-        : null;
-    let value: Strategy | Attack | Revision | Verdict | undefined;
+    let evidence: import("@/lib/contracts").Evidence[] | null = null;
+    if (action?.kind === "tools") {
+      const current = getVersion(versionId);
+      const payload = JSON.parse(action.payload);
+      const requests: Array<{ request: import("@/lib/contracts").ToolRequest; attackId: string }> =
+        payload.request
+          ? [{ request: payload.request, attackId: "research" }]
+          : input.attacks
+              .filter((attack) => attack.round === action.round)
+              .flatMap((attack) =>
+                attack.requests.map((request) => ({ request, attackId: attack.id })),
+              );
+      const groupedRequests = new Map<
+        string,
+        { request: import("@/lib/contracts").ToolRequest; attackIds: Set<string> }
+      >();
+      for (const entry of requests) {
+        const key = hashOf(entry.request);
+        const existing = groupedRequests.get(key);
+        if (existing) existing.attackIds.add(entry.attackId);
+        else
+          groupedRequests.set(key, {
+            request: entry.request,
+            attackIds: new Set([entry.attackId]),
+          });
+      }
+      evidence = [];
+      for (const [index, entry] of [...groupedRequests.values()].entries()) {
+        const attackIds = [...entry.attackIds];
+        const latestState = getVersion(versionId);
+        if (
+          !["running", "ready"].includes(latestState.status) ||
+          assertOwner(arenaId, owner).active_version_id !== versionId
+        )
+          break;
+        const external = entry.request.tool === "search_web" || entry.request.tool === "read_web";
+        const toolReservation = external
+          ? process.env.ARENA_SEARCH_PROVIDER === "tavily"
+            ? Number(process.env.TAVILY_USD_PER_CREDIT ?? "0.008")
+            : 0.000834
+          : 0;
+        if (
+          external &&
+          current.agent!.toolsUsed < AGENT_LIMITS.tools &&
+          current.agent!.externalToolsUsed < AGENT_LIMITS.externalTools
+        ) {
+          try {
+            atomic(() => {
+              const latest = getVersion(versionId);
+              reserveCall(
+                structuredClone(latest),
+                latest.modelSelection?.currency === "USD"
+                  ? toolReservation
+                  : toolReservation * CNY_PER_USD_BUDGET,
+              );
+              latest.toolReservedUsd = (latest.toolReservedUsd ?? 0) + toolReservation;
+              saveVersion(latest);
+            });
+          } catch (error) {
+            if (
+              !(error instanceof ArenaError) ||
+              !["RUN_BUDGET", "GLOBAL_BUDGET"].includes(error.code)
+            )
+              throw error;
+            const skipped: import("@/lib/contracts").Evidence = {
+              id: `E-${id()}`,
+              attackId: attackIds[0],
+              actionId: step.id,
+              tool: entry.request.tool,
+              status: "unavailable",
+              title: "工具费用额度不足",
+              content: error.message,
+              source: "费用保护",
+              sourceIds: [],
+              expression: null,
+              result: null,
+              assumptions: "",
+              createdAt: now(),
+            };
+            const skippedEvidence = attackIds.map((attackId) => ({
+              ...structuredClone(skipped),
+              id: `E-${id()}`,
+              attackId,
+            }));
+            atomic(() => {
+              const latest = getVersion(versionId);
+              latest.evidence.push(...skippedEvidence);
+              saveVersion(latest);
+              event(arenaId, versionId, "tool_skipped", error.message, "verify", "tools", {
+                request: entry.request,
+              });
+            });
+            current.evidence.push(...skippedEvidence);
+            continue;
+          }
+        }
+        let paidToolUsd = 0;
+        const didReserve =
+          external &&
+          current.agent!.toolsUsed < AGENT_LIMITS.tools &&
+          current.agent!.externalToolsUsed < AGENT_LIMITS.externalTools;
+        const resultEvidence = await runAgentTool(
+          current,
+          entry.request,
+          attackIds[0],
+          `${step.id}-tool-${index}`,
+          (amount) => {
+            paidToolUsd = amount;
+          },
+        );
+        const obtained = attackIds.flatMap((attackId) =>
+          resultEvidence.map((item) => ({
+            ...structuredClone(item),
+            id: `E-${id()}`,
+            attackId,
+            actionId: step.id,
+          })),
+        );
+        // Each result is committed before another external request can start.
+        atomic(() => {
+          const latest = getVersion(versionId);
+          if (didReserve)
+            latest.toolReservedUsd = Math.max(0, (latest.toolReservedUsd ?? 0) - toolReservation);
+          latest.toolCostUsd = (latest.toolCostUsd ?? 0) + paidToolUsd;
+          latest.evidence.push(...obtained);
+          saveVersion(latest);
+          event(arenaId, versionId, "tool_completed", "本项资料核验已记录", "verify", "tools", {
+            attemptId: `${step.id}-tool-${index}`,
+            evidenceIds: obtained.map((item) => item.id),
+          });
+        });
+        current.evidence.push(...obtained);
+      }
+      evidence = checkConstraints(input.challenge, input.strategies);
+    } else if (step.stage === "verify" && !action) {
+      evidence = [
+        ...input.attacks.flatMap((attack) =>
+          executeAttackTools(attack, input.challenge.materials, frozenSources),
+        ),
+        ...checkConstraints(input.challenge, input.strategies),
+      ];
+    }
+    let value: Strategy | Attack | Revision | Verdict | AgentPlan | undefined;
     const modelOutput = result ? structuredClone(result.value) : undefined;
     try {
       if (step.stage === "propose" && (result!.value as Strategy).id !== input.role)
@@ -684,28 +962,34 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
         result!.value = normalizeStrategyResources(
           result!.value as Strategy,
           input.challenge,
-          getVersion(versionId).intake?.usedSources,
+          frozenSources,
         );
       if (step.stage === "attack" && (result!.value as Attack).from !== input.role)
         throw new Error("质疑发起者与本轮角色不一致。");
       value =
         step.stage === "attack"
           ? validateAttack(
-              { ...(result!.value as Attack), id: `attack-${input.role}`, from: input.role },
+              {
+                ...(result!.value as Attack),
+                id: action ? `attack-${step.id}` : `attack-${input.role}`,
+                from: input.role,
+                ...(action
+                  ? {
+                      round: action.round,
+                      targetRevisionHash: hashOf(
+                        input.strategies.find(
+                          (strategy) => strategy.id === (result!.value as Attack).targetStrategyId,
+                        ),
+                      ),
+                    }
+                  : {}),
+              },
               input.strategies,
             )
           : step.stage === "revise"
-            ? validateRevision(
-                result!.value as Revision,
-                input,
-                getVersion(versionId).intake?.usedSources,
-              )
+            ? validateRevision(result!.value as Revision, input, frozenSources)
             : step.stage === "judge"
-              ? validateVerdict(
-                  result!.value as Verdict,
-                  input,
-                  getVersion(versionId).intake?.usedSources,
-                )
+              ? validateVerdict(result!.value as Verdict, input, frozenSources)
               : result?.value;
     } catch (error) {
       const feedback = error instanceof Error ? error.message.slice(0, 500) : "协议引用不合法";
@@ -721,9 +1005,25 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       if (!["running", "uncertain"].includes(currentStep.status)) return;
       const version = getVersion(versionId);
       settle(version, step, result?.usage);
-      if (step.stage === "propose") {
+      if (action?.kind === "plan") {
+        if (
+          ["running", "uncertain"].includes(version.status) &&
+          assertOwner(arenaId, owner).active_version_id === versionId
+        )
+          compilePlan(arenaId, version, action, value as AgentPlan);
+        else
+          event(
+            arenaId,
+            versionId,
+            "plan_archived",
+            "已归档这次规划，当前讨论已停止或更换版本。",
+            null,
+            "planner",
+            value,
+          );
+      } else if (step.stage === "propose") {
         const strategy = value as Strategy;
-        strategy.claims = proposedClaims(strategy, input.challenge, version.intake?.usedSources);
+        strategy.claims = proposedClaims(strategy, input.challenge, frozenSources);
         const duplicate = version.strategies.some((other) => strategiesDuplicate(other, strategy));
         const duplicateRetryExists = db()
           .prepare("SELECT id FROM steps WHERE version_id=? AND stage='propose' AND role=?")
@@ -732,11 +1032,13 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           ["running", "uncertain"].includes(version.status) &&
           assertOwner(arenaId, owner).active_version_id === versionId;
         if (duplicate && !duplicateRetryExists && maySchedule) {
+          const retryId = id();
           db()
             .prepare(
               "INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal) VALUES(?,?,?,?,?,?)",
             )
-            .run(id(), arenaId, versionId, "propose", `${input.role}:retry`, step.ordinal + 0.1);
+            .run(retryId, arenaId, versionId, "propose", `${input.role}:retry`, step.ordinal + 0.1);
+          if (action) copyActionForRetry(version, action, retryId);
           event(
             arenaId,
             versionId,
@@ -763,6 +1065,8 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           (a) =>
             a.targetStrategyId === attack.targetStrategyId &&
             a.targetClaimId === attack.targetClaimId &&
+            (!action ||
+              (a.round === attack.round && a.targetRevisionHash === attack.targetRevisionHash)) &&
             a.reason.replace(/\s/g, "").toLowerCase() ===
               attack.reason.replace(/\s/g, "").toLowerCase(),
         );
@@ -779,7 +1083,11 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           );
         } else version.attacks.push(attack);
       } else if (step.stage === "verify") version.evidence.push(...evidence!);
-      else if (step.stage === "revise") version.revisions.push(value as Revision);
+      else if (step.stage === "revise")
+        version.revisions.push({
+          ...(value as Revision),
+          ...(action ? { revisionId: step.id, round: action.round } : {}),
+        });
       else {
         version.verdict = value as Verdict;
       }
@@ -794,27 +1102,44 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       }
       if (version.status === "paused") version.verdict = partialVerdict(version);
       syncAttackStatuses(version);
+      syncActions(version);
+      draft.finish("committed");
       saveVersion(version);
-      event(arenaId, versionId, "step_completed", `${step.role} 已完成。`, step.stage, step.role, {
-        usage: result?.usage ?? null,
-        ...(modelOutput
-          ? {
-              modelOutput,
-              modelOutputScope: "parsed-structured-output-before-server-rules",
-            }
-          : {}),
-        result: value ?? evidence,
-      });
+      event(
+        arenaId,
+        versionId,
+        "step_completed",
+        `${action?.role ?? step.role} 已完成。`,
+        step.stage,
+        action?.role ?? step.role,
+        {
+          usage: result?.usage ?? null,
+          ...(modelOutput
+            ? {
+                modelOutput,
+                modelOutputScope: "parsed-structured-output-before-server-rules",
+              }
+            : {}),
+          result: value ?? evidence,
+        },
+      );
     });
   } catch (error) {
     const modelError = error instanceof ModelCallError ? error : undefined;
-    const uncertain = modelError?.uncertain ?? false;
+    const uncertain =
+      (modelError?.uncertain ?? false) ||
+      (error instanceof Error && error.message === "MCP_OUTCOME_UNCERTAIN");
     const usage = modelError?.usage ?? result?.usage;
     const validationMessage =
       modelError?.repair?.feedback ||
       (!modelError && result && error instanceof Error ? error.message.slice(0, 500) : null);
     const message =
       modelError?.message ||
+      (error instanceof Error && error.message === "MCP_OUTCOME_UNCERTAIN"
+        ? "联网请求结果待确认，工具费用预留保留，后续步骤已停止。"
+        : error instanceof Error && error.message === "CORPUS_SNAPSHOT_MISSING"
+          ? "此版本的材料快照缺失，请保留记录并创建新版本。"
+          : null) ||
       (validationMessage
         ? `协议校验未通过：${validationMessage} 已记录实际用量，未生成替代内容。`
         : "此步骤处理失败，已有记录已保留；未生成替代内容。请检查模型响应或服务日志。");
@@ -863,20 +1188,33 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
             : {}),
         },
       );
-      const repairRole = `${input.role}:repair`;
+      const repairRole = action ? `${step.role}:repair` : `${input.role}:repair`;
       if (
         modelError?.repair &&
+        (!action ||
+          ((action.kind === "plan"
+            ? !JSON.parse(action.payload).repairOf
+            : !step.role.includes(":repair")) &&
+            modelRequestsUsed(versionId) < AGENT_LIMITS.modelRequests - 1)) &&
         !uncertain &&
         !["paused", "superseded"].includes(version.status) &&
-        !db()
-          .prepare("SELECT id FROM steps WHERE version_id=? AND stage=? AND role=?")
-          .get(versionId, step.stage, repairRole)
+        !(action?.kind === "plan"
+          ? db()
+              .prepare(
+                "SELECT step_id FROM agent_actions WHERE version_id=? AND kind='plan' AND json_extract(payload,'$.repairOf')=?",
+              )
+              .get(versionId, action.step_id)
+          : db()
+              .prepare("SELECT id FROM steps WHERE version_id=? AND stage=? AND role=?")
+              .get(versionId, step.stage, repairRole))
       ) {
+        const repairId = id();
         db()
           .prepare(
             "INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal) VALUES(?,?,?,?,?,?)",
           )
-          .run(id(), arenaId, versionId, step.stage, repairRole, step.ordinal + 0.01);
+          .run(repairId, arenaId, versionId, step.stage, repairRole, step.ordinal + 0.01);
+        if (action) copyActionForRetry(version, action, repairId, modelError.repair);
         version.status = "ready";
         version.error = null;
         event(
@@ -889,6 +1227,10 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           modelError.repair,
         );
       }
+      if (action && ["failed", "uncertain"].includes(version.status))
+        version.verdict = partialVerdict(version);
+      syncActions(version);
+      draft.finish(uncertain ? "interrupted" : "rejected");
       saveVersion(version);
     });
   }

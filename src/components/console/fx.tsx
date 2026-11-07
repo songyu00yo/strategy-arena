@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
-import { nameOf, outputOf, type Beat } from "./beats";
+import { latestShownRevision, nameOf, outputOf, type Beat } from "./beats";
 import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
 import { STAGE_LABELS, type Stage } from "@/lib/contracts";
 import { verdictLabel } from "@/lib/verdict-label";
@@ -555,9 +555,9 @@ export function ChainDeck({
   const checked = !!attack && (reviewing || seenIds.has(`v:${attack.id}`));
   const response =
     attack &&
-    known
-      .find((b) => b.id === `r:${attack.targetStrategyId}`)
-      ?.revision?.responses.find((r) => r.attackId === attack.id);
+    latestShownRevision(known, attack.targetStrategyId)?.revision?.responses.find(
+      (r) => r.attackId === attack.id,
+    );
   const evidence = attack ? version.evidence.filter((e) => e.attackId === attack.id) : [];
   const rows: [string, string][] = attack
     ? [

@@ -205,6 +205,25 @@ describe("retrieval keeps synthetic material origin attached to every hit", () =
 });
 
 describe("synthetic model output cannot certify its own material", () => {
+  it.each([
+    { tool: "search_web" as const, expected: "unresolved" },
+    { tool: "read_web" as const, expected: "supported" },
+  ])("keeps $tool provenance separate when resolving a challenged claim", ({ tool, expected }) => {
+    const reference = "W-synthetic-web-source";
+    const evidence = executeAttackTools(attack(), `${marker}：${inventedAuthorization}`).map(
+      (entry) => ({
+        ...entry,
+        tool,
+        provenance: "web" as const,
+        sourceIds: [reference],
+        assumptions: "外部网页仍需核对真实性、时效与适用条件。",
+      }),
+    );
+    const input = context("用户未提供外部授权事实", evidence);
+    const checked = validateRevision(revision(input, [reference, evidence[0].id]), input);
+    expect(checked.responses[0].decision).toBe(expected === "unresolved" ? "unresolved" : "reject");
+    expect(validateVerdict(verdict(input), input).attackFindings[0].status).toBe(expected);
+  });
   it.each(["model_interpretation", "model_transcription"] as const)(
     "keeps inline %s text unverified without swallowing surrounding user text",
     (origin) => {

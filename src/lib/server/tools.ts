@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { MaterialSource } from "../intake-contracts";
+import { normalizedRevisionSummary } from "./revision-summary";
+import { assertDeclaredResourceArithmetic, assertStrategyResourceTotals } from "./resource-totals";
 import {
   materialSpans,
   materialSpanAt,
@@ -415,12 +417,19 @@ export function validateRevision(
       return { ...claim, status: "unknown" as const, sourceIds: [] };
     return { ...claim, sourceIds: claim.sourceIds.filter((id) => sourceIds.has(id)) };
   });
-  return { ...revision, changed, responses, strategy: { ...revision.strategy, claims } };
+  return {
+    ...revision,
+    summary: normalizedRevisionSummary(revision.summary, revision.responses, responses, changed),
+    changed,
+    responses,
+    strategy: { ...revision.strategy, claims },
+  };
 }
-/** Bounded text checks, not fact verification: only numeric equations and direct yuan
- * excess statements with three explicit amounts. Quotes, unsupported syntax, dates,
+/** Bounded text checks, not fact verification: explicit numeric equations, same-unit
+ * total declarations and yuan excess statements. Quotes, unsupported syntax, dates,
  * ranges and implicit Chinese calculations are deliberately not interpreted. */
 export function assertExplicitArithmetic(text: string): void {
+  assertDeclaredResourceArithmetic(text, calculate);
   const ownText = text.replace(
     /“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"\n]*"|'[^'\n]*'/g,
     (quoted) => " ".repeat(quoted.length),
@@ -471,9 +480,11 @@ export function assertExplicitArithmetic(text: string): void {
     if (Math.abs(actual - Number(match[3])) > 1e-8) mismatch(match[0], actual);
   }
 }
-/** Only standalone resource equations are assertions here. A learning plan may discuss an
- * incorrect equation without asserting it. Prose, questions and quoted sources stay untouched. */
+/** Check standalone resource equations and declared totals of completely labelled serial
+ * allocations. A learning plan may discuss an incorrect equation without asserting it;
+ * questions, quoted sources and ambiguous or partial allocations stay untouched. */
 export function assertStrategyArithmetic(strategy: Strategy): void {
+  assertStrategyResourceTotals(strategy);
   const resourceEquation =
     /^(?:(?:预算|费用|成本|支出|投入|工时|用时|时间)(?:总计|合计|小计|累计)?|总计|合计|小计|累计)\s*(?:为|是|[:：])?\s*[()\d\s.+\-*/%×÷]+\s*=\s*[+\-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:元|小时)\.?$/;
   for (const field of [

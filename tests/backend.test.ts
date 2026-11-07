@@ -471,6 +471,8 @@ describe("budgets and limits", () => {
       decision: "unresolved",
       evidenceIds: [],
     });
+    expect(checked.summary).toContain("接受1项质疑，拒绝0项，未解决1项");
+    expect(checked.summary).not.toBe(revision.summary);
     expect(checked.strategy.claims[0]).toMatchObject({ status: "unknown", sourceIds: [] });
     expect(() =>
       validateRevision(

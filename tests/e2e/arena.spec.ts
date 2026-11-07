@@ -242,7 +242,7 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
     const edit = page.getByRole("dialog", { name: "调整条件" });
     const newGoal = "测试任务：条件改变以后只制作一支更短的知识视频。";
     await edit.getByRole("button", { name: /^完整编辑/ }).click();
-    await edit.getByLabel("目标", { exact: true }).fill(newGoal);
+    await edit.getByRole("textbox", { name: "目标", exact: true }).fill(newGoal);
     await edit.getByRole("button", { name: /^补充说明/ }).click();
     await edit.getByLabel("补充说明", { exact: false }).fill("测试旧请求延迟到达。");
     await edit.getByRole("button", { name: "按新条件重新推演" }).click();

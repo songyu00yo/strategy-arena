@@ -83,6 +83,74 @@ test("explicit UI fixture: opening the free example picker preserves old pointer
   expect(await pointerValues(page)).toEqual({ draft: oldDraft.id, arena: oldDraft.arenaId });
 });
 
+test("explicit UI fixture: initial restore preserves a focused source card through its heading frame and Enter opens it", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    const probe = window as typeof window & { __arenaRestoreFocusFrames?: boolean };
+    const observer = new MutationObserver(() => {
+      const source = document.querySelector<HTMLElement>('[data-step-source="0"][role="button"]');
+      if (!source) return;
+      observer.disconnect();
+      source.focus({ preventScroll: true });
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          probe.__arenaRestoreFocusFrames = true;
+        }),
+      );
+    });
+    observer.observe(document, { childList: true, subtree: true });
+  });
+  const target = completedTarget();
+  const calls: string[] = [];
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    calls.push(`${method} ${path}`);
+    if (path === "/api/health" && method === "GET")
+      return route.fulfill({
+        json: {
+          status: "ok",
+          model: target.model,
+          accessGranted: true,
+          requiresAccessCode: false,
+        },
+      });
+    if (path === `/api/arenas/${target.id}` && method === "GET")
+      return route.fulfill({ json: target });
+    if (path === `/api/arenas/${target.id}/events` && method === "GET")
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: ": explicit focus fixture\n\n",
+      });
+    return route.fulfill({ status: 500, json: { error: "Unexpected focus fixture request" } });
+  });
+  await page.goto(`/?arena=${target.id}`);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { __arenaRestoreFocusFrames?: boolean })
+            .__arenaRestoreFocusFrames,
+      ),
+    )
+    .toBe(true);
+  const source = page.getByRole("button", { name: "查看第 1 步", exact: true });
+  await expect(source).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: /^第 1 步 ·/ })).toBeVisible();
+  expect(
+    calls.every((call) =>
+      [
+        "GET /api/health",
+        `GET /api/arenas/${target.id}`,
+        `GET /api/arenas/${target.id}/events`,
+      ].includes(call),
+    ),
+  ).toBe(true);
+});
+
 test("explicit UI fixture: explicit arena takes priority and forbidden or missing IDs never fall back", async ({
   page,
 }) => {

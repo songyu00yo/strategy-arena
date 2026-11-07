@@ -263,9 +263,23 @@ export default function Page() {
       overlayOpen
     )
       return;
+    const localNavigation = localVersionNavigation.current;
+    const focusAtSchedule = document.activeElement;
     localVersionNavigation.current = false;
     const frame = requestAnimationFrame(() => {
       if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      const focused = document.activeElement;
+      const interactive =
+        focused instanceof HTMLElement &&
+        focused.isConnected &&
+        !focused.matches(":disabled") &&
+        !focused.closest("[inert]") &&
+        focused.matches(
+          'a[href],button,input,textarea,select,summary,[tabindex]:not([tabindex="-1"]),[contenteditable="true"]',
+        );
+      // Restoring data must not override a user's current control. Explicit local navigation
+      // defaults to the new heading, unless focus moved to another control before this frame.
+      if (interactive && (!localNavigation || focused !== focusAtSchedule)) return;
       window.scrollTo({ top: 0, behavior: "instant" });
       headingRef.current?.focus({ preventScroll: true });
     });

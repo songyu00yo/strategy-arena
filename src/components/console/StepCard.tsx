@@ -5,17 +5,19 @@ import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { STAGE_LABELS, type ArenaVersion, type Attack } from "@/lib/contracts";
 import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
+import { readMotionOrigin } from "../motion-origin";
 import "./step-card-motion.css";
 import { nameOf, type Beat } from "./beats";
+import { stepContext, type StepContext } from "@/lib/step-context";
 
 type Point = { x: number; y: number };
 type Quad = [Point, Point, Point, Point];
 type Matrix = [number, number, number, number, number, number, number, number, number];
 type Flight = { parts: Animation[]; path: (t: number) => Quad; at: number; ms: number };
 const DRAW_MS = 620;
-const LAND_MS = 500;
+const LAND_MS = 460;
 const HANDOFF = 0.7;
-const SAMPLES = 60;
+const SAMPLES = 40;
 
 /** Read the projected border corners, including every ancestor's perspective. */
 function corners(el: HTMLElement): Quad {
@@ -88,14 +90,24 @@ function multiply(a: Matrix, b: Matrix): Matrix {
 function cssMatrix(m: Matrix) {
   return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
 }
-function progress(t: number) {
-  return (1 - (1 + 8 * t) * Math.exp(-8 * t)) / (1 - 9 * Math.exp(-8));
+function progress(t: number, opening = false) {
+  if (t >= 1) return 1;
+  const ms = opening ? DRAW_MS : LAND_MS;
+  const w = opening ? 14.1 : 19.6;
+  const z = opening ? 0.8 : 1;
+  const seconds = (t * ms) / 1000;
+  if (z >= 1) return 1 - (1 + w * seconds) * Math.exp(-w * seconds);
+  const wd = w * Math.sqrt(1 - z * z);
+  return (
+    1 -
+    Math.exp(-z * w * seconds) * (Math.cos(wd * seconds) + ((z * w) / wd) * Math.sin(wd * seconds))
+  );
 }
-function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad) {
+function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad, opening = false) {
   return (t: number): Quad => {
-    const settled = progress(t);
+    const settled = progress(t, opening);
     const momentum = t * (1 - t) ** 3 * ms;
-    const lift = -52 * Math.sin(Math.PI * t) ** 2;
+    const lift = -70 * Math.sin(Math.PI * Math.min(1, settled)) ** 2;
     return from.map((point, i) => ({
       x: point.x + (to[i].x - point.x) * settled + (velocity?.[i].x ?? 0) * momentum,
       y: point.y + (to[i].y - point.y) * settled + (velocity?.[i].y ?? 0) * momentum + lift,
@@ -118,48 +130,31 @@ function velocityOf(flight: Flight | null): Quad | undefined {
   return now.map((p, i) => ({ x: (p.x - before[i].x) / dt, y: (p.y - before[i].y) / dt })) as Quad;
 }
 
-/** Freeze the source's typography so the detail-dialog selectors cannot restyle its copy. */
+/** Preserve the source card's own styling without a computed-style walk through its text. */
 function copyCard(source: HTMLElement) {
   const clone = source.cloneNode(true) as HTMLElement;
-  const originals = [source, ...source.querySelectorAll<HTMLElement>("*")];
-  const copies = [clone, ...clone.querySelectorAll<HTMLElement>("*")];
-  const properties = [
-    "display",
-    "position",
-    "flex-direction",
-    "flex",
-    "align-items",
-    "justify-content",
-    "gap",
-    "padding",
-    "margin",
-    "border",
-    "border-top",
-    "border-radius",
-    "box-sizing",
-    "background",
+  const style = getComputedStyle(source);
+  for (const property of [
     "font-family",
     "font-size",
     "font-weight",
-    "font-style",
     "line-height",
-    "letter-spacing",
-    "text-transform",
-    "text-align",
     "color",
-    "white-space",
-    "overflow",
-    "text-overflow",
-  ];
-  originals.forEach((node, i) => {
-    const style = getComputedStyle(node);
-    properties.forEach((property) =>
-      copies[i].style.setProperty(property, style.getPropertyValue(property)),
-    );
-    copies[i].removeAttribute("id");
-    copies[i].removeAttribute("role");
-    copies[i].removeAttribute("tabindex");
-    copies[i].removeAttribute("data-step-source");
+    "background",
+    "border",
+    "border-top",
+    "box-shadow",
+  ]) {
+    clone.style.setProperty(property, style.getPropertyValue(property));
+  }
+  [
+    clone,
+    ...clone.querySelectorAll<HTMLElement>("[id], [role], [tabindex], [data-step-source]"),
+  ].forEach((node) => {
+    node.removeAttribute("id");
+    node.removeAttribute("role");
+    node.removeAttribute("tabindex");
+    node.removeAttribute("data-step-source");
   });
   clone.classList.remove("pulled", "past-gap");
   clone.setAttribute("aria-hidden", "true");
@@ -284,6 +279,8 @@ export function StepCard({
   onStage,
   onEvidence,
   onClose,
+  onFollowUp,
+  onAdjustConditions,
 }: {
   version: ArenaVersion;
   beats: Beat[];
@@ -295,19 +292,88 @@ export function StepCard({
   onStage: (index: number) => void;
   onEvidence: (attack: Attack) => void;
   onClose: () => void;
+  onFollowUp?: (context: StepContext, trigger: HTMLElement | null) => void;
+  onAdjustConditions?: (trigger: HTMLElement | null) => void;
 }) {
   const beat = beats[index];
   const known = reviewing ? beats : beats.slice(0, last + 1);
   const ref = useRef<HTMLDialogElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  const pageSnapshot = useRef<HTMLElement | null>(null);
+  const previousPage = useRef(index);
+  const pageScroll = useRef(0);
+  const pageLayers = useRef<HTMLElement[]>([]);
+  const pageAnimations = useRef<Animation[]>([]);
+  const pageGeneration = useRef(0);
+  const pendingHeight = useRef<number | null>(null);
   const showing = useRef(index);
   const leaving = useRef(false);
   const first = useRef(true);
   const flight = useRef<Flight | null>(null);
   const proxy = useRef<HTMLElement | null>(null);
-  const paging = useRef<Animation | null>(null);
   const closingAction = useRef<(() => void) | null>(null);
   const gapOrigins = useRef<{ card: HTMLElement; x: number; y: number }[]>([]);
+
+  const measurePage = () => {
+    const page = body.current;
+    const window = viewport.current;
+    const dialog = ref.current;
+    if (!page || !window || !dialog) return 0;
+    // Measure only the live page. Retiring pages are absolute and never change the dialog's size.
+    const height = page.style.height;
+    page.style.height = "auto";
+    const natural = page.scrollHeight;
+    const chrome = dialog.offsetHeight - window.offsetHeight;
+    const limit = Number.parseFloat(getComputedStyle(dialog).maxHeight);
+    page.style.height = height;
+    return Math.max(
+      0,
+      Math.min(natural, (Number.isFinite(limit) ? limit : innerHeight * 0.86) - chrome),
+    );
+  };
+
+  const resizePage = (height: number, animate = true) => {
+    const window = viewport.current;
+    if (!window) return;
+    const from = window.getBoundingClientRect().height;
+    window.style.height = `${height}px`;
+    if (!animate || reducedMotion() || Math.abs(from - height) < 0.5) return;
+    const animation = window.animate([{ height: `${from}px` }, { height: `${height}px` }], {
+      duration: 480,
+      easing: "cubic-bezier(.22,1,.3,1)",
+      fill: "both",
+    });
+    pageAnimations.current.push(animation);
+    animation.onfinish = () => animation.cancel();
+  };
+
+  const stopPaging = (preserve: boolean) => {
+    const window = viewport.current;
+    const nodes = new Set<HTMLElement>();
+    pageAnimations.current.forEach((animation) => {
+      const target = (animation.effect as KeyframeEffect | null)?.target;
+      if (target instanceof HTMLElement) nodes.add(target);
+    });
+    const poses = [...nodes].map((node) => {
+      const style = getComputedStyle(node);
+      return { node, transform: style.transform, opacity: style.opacity, height: style.height };
+    });
+    pageAnimations.current.forEach((animation) => animation.cancel());
+    pageAnimations.current = [];
+    poses.forEach(({ node, transform, opacity, height }) => {
+      if (node === window) node.style.height = height;
+      else {
+        node.style.transform = preserve ? transform : "";
+        node.style.opacity = preserve ? opacity : "";
+      }
+    });
+    window?.classList.remove("is-paging");
+    if (!preserve) {
+      pageLayers.current.forEach((layer) => layer.remove());
+      pageLayers.current = [];
+    }
+  };
 
   const clearFlight = () => {
     stopFlight(flight.current);
@@ -315,6 +381,11 @@ export function StepCard({
     proxy.current?.remove();
     proxy.current = null;
     ref.current?.querySelector(".c-pull-face")?.remove();
+    if (!leaving.current && pendingHeight.current !== null) {
+      const height = pendingHeight.current;
+      pendingHeight.current = null;
+      resizePage(height);
+    }
   };
 
   const fly = (opening: boolean, done: () => void, continuing = false) => {
@@ -341,7 +412,7 @@ export function StepCard({
     const slot = source ? corners(source) : open;
     const from = opening && !continuing ? slot : current;
     const to = opening ? open : slot;
-    const path = pathBetween(from, to, ms, opening && !continuing ? undefined : velocity);
+    const path = pathBetween(from, to, ms, opening && !continuing ? undefined : velocity, opening);
     const timing = { duration: ms, easing: "linear", fill: "both" } as const;
     const parts: Animation[] = [];
     const add = (node: Element, frames: Keyframe[], options: KeyframeAnimationOptions = {}) => {
@@ -471,7 +542,10 @@ export function StepCard({
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const previous = document.activeElement as HTMLElement | null;
+    const origin = readMotionOrigin();
+    const previous = origin?.element.isConnected
+      ? origin.element
+      : (document.activeElement as HTMLElement | null);
     const release = acquireMotionHold();
     // A user can draw a card while a seek is still rearranging the deck. Freeze that exact pose.
     const deckTransitions = [...document.querySelectorAll<HTMLElement>("[data-step-source]")]
@@ -484,10 +558,15 @@ export function StepCard({
       );
     deckTransitions.forEach((animation) => animation.pause());
     el.showModal();
+    resizePage(measurePage(), false);
     markDeck(index, true, DRAW_MS);
     if (!reducedMotion()) fly(true, clearFlight);
     const onResize = () => {
-      if (!flight.current) return;
+      if (!flight.current) {
+        stopPaging(false);
+        resizePage(measurePage(), false);
+        return;
+      }
       // A changed viewport invalidates the flight. Preserve its current visible pose before fading.
       const closing = closingAction.current;
       if (!closing) {
@@ -528,10 +607,24 @@ export function StepCard({
       };
       fade.onfinish = closing;
     };
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const settlePreference = () => {
+      if (!media.matches) return;
+      stopPaging(false);
+      pendingHeight.current = null;
+      clearFlight();
+      resizePage(measurePage(), false);
+      el.style.transform = "";
+      el.style.opacity = "";
+      if (closingAction.current) closingAction.current();
+    };
+    media.addEventListener("change", settlePreference);
     addEventListener("resize", onResize);
     return () => {
       removeEventListener("resize", onResize);
-      paging.current?.cancel();
+      media.removeEventListener("change", settlePreference);
+      stopPaging(false);
+      pendingHeight.current = null;
       clearFlight();
       markDeck(null, false, 0);
       document
@@ -562,7 +655,9 @@ export function StepCard({
     if (leaving.current) return;
     leaving.current = true;
     closingAction.current = then;
-    paging.current?.cancel();
+    // Retain the exact in-flight page composition until the geometric return covers it.
+    pendingHeight.current = null;
+    stopPaging(true);
     gapOrigins.current = [
       ...document.querySelectorAll<HTMLElement>("[data-step-source].past-gap"),
     ].map((card) => {
@@ -575,27 +670,125 @@ export function StepCard({
   };
 
   useLayoutEffect(() => {
+    const page = body.current;
+    const window = viewport.current;
+    if (!page || !window) return;
+    const snapshot = () => {
+      const clone = page.cloneNode(true) as HTMLElement;
+      clone.style.transform = "";
+      clone.style.opacity = "";
+      clone.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node) => {
+        node.style.transform = "";
+        node.style.opacity = "";
+      });
+      pageSnapshot.current = clone;
+    };
     if (first.current) {
       first.current = false;
+      snapshot();
       return;
     }
-    paging.current?.cancel();
-    if (reducedMotion() || leaving.current) return;
-    // If a page changes mid-draw, continue from the current pose instead of snapping fully open.
-    if (flight.current) fly(true, clearFlight, true);
-    paging.current =
-      body.current?.animate(
+    if (leaving.current) return;
+    const generation = ++pageGeneration.current;
+    const direction = index > previousPage.current ? 1 : -1;
+    previousPage.current = index;
+    const pose = getComputedStyle(page);
+    const from = { transform: pose.transform, opacity: pose.opacity };
+    const oldHeight = window.getBoundingClientRect().height;
+    const oldScroll = pageScroll.current;
+    stopPaging(true);
+    page.style.transform = "";
+    page.style.opacity = "";
+    page.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node) => {
+      node.style.transform = "";
+      node.style.opacity = "";
+    });
+    if (reducedMotion()) {
+      stopPaging(false);
+      page.scrollTop = 0;
+      pageScroll.current = 0;
+      resizePage(measurePage(), false);
+      snapshot();
+      return;
+    }
+    const outgoing = pageSnapshot.current;
+    if (outgoing) {
+      outgoing.classList.add("c-step-leaving");
+      outgoing.setAttribute("aria-hidden", "true");
+      outgoing.inert = true;
+      outgoing.style.height = `${oldHeight}px`;
+      outgoing.style.transform = from.transform;
+      outgoing.style.opacity = from.opacity;
+      window.append(outgoing);
+      outgoing.scrollTop = oldScroll;
+      pageLayers.current.push(outgoing);
+    }
+    // Preserve the visible layers when a second click arrives; old text is never replaced in place.
+    while (pageLayers.current.length > 2) pageLayers.current.shift()?.remove();
+    window.classList.add("is-paging");
+    const add = (node: HTMLElement, frames: Keyframe[], options: KeyframeAnimationOptions) => {
+      const animation = node.animate(frames, { fill: "both", ...options });
+      pageAnimations.current.push(animation);
+      return animation;
+    };
+    pageLayers.current.forEach((layer) => {
+      const style = getComputedStyle(layer);
+      const exit = add(
+        layer,
         [
-          { transform: "translateX(12px)", opacity: 0 },
+          { transform: style.transform, opacity: style.opacity },
+          {
+            transform: `translateX(${-direction * 54}px) rotateY(${direction * 3}deg)`,
+            opacity: 0,
+          },
+        ],
+        { duration: 300, easing: "cubic-bezier(.4,0,.2,1)" },
+      );
+      exit.onfinish = () => {
+        layer.remove();
+        pageLayers.current = pageLayers.current.filter((item) => item !== layer);
+        exit.cancel();
+      };
+    });
+    page.scrollTop = 0;
+    pageScroll.current = 0;
+    const targetHeight = measurePage();
+    // The draw keeps its physical card dimensions until it lands. Paging can run inside it meanwhile.
+    if (flight.current) pendingHeight.current = targetHeight;
+    else resizePage(targetHeight);
+    snapshot();
+    const enter = add(
+      page,
+      [
+        { transform: `translateX(${direction * 48}px) rotateY(${-direction * 4}deg)`, opacity: 0 },
+        {
+          transform: `translateX(${-direction * 4}px) rotateY(${direction * 0.25}deg)`,
+          opacity: 1,
+          offset: 0.72,
+        },
+        { transform: "none", opacity: 1 },
+      ],
+      { duration: 560, easing: "cubic-bezier(.16,1,.3,1)" },
+    );
+    page.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node, row) => {
+      const reveal = add(
+        node,
+        [
+          { transform: `translate(${direction * 10}px,8px)`, opacity: 0 },
           { transform: "none", opacity: 1 },
         ],
-        { duration: 240, easing: "cubic-bezier(.2,.8,.3,1)" },
-      ) ?? null;
-    return () => paging.current?.cancel();
-    // Flight inputs are read from refs; only a selected-record change starts paging.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        { duration: 390, delay: 65 + Math.min(row, 6) * 26, easing: "cubic-bezier(.16,1,.3,1)" },
+      );
+      reveal.onfinish = () => reveal.cancel();
+    });
+    enter.onfinish = () => {
+      enter.cancel();
+      if (pageGeneration.current === generation) window.classList.remove("is-paging");
+    };
+    // On the next commit we sample these animations before cancelling, including rapid reversals.
   }, [index]);
 
+  const context = onFollowUp ? stepContext(version, beat.id) : null;
   const verified = beat.attack && known.some((b) => b.id === `v:${beat.attack!.id}`);
   return (
     <dialog
@@ -629,18 +822,26 @@ export function StepCard({
           <X size={17} />
         </button>
       </div>
-      <div className="c-step" ref={body}>
-        <h3>{beat.title}</h3>
-        <dl>
-          {rowsOf(version, beat, known).map((row) => (
-            <div key={row.label} className={row.tone}>
-              <dt>{row.label}</dt>
-              <dd>{row.text}</dd>
-            </div>
-          ))}
-        </dl>
+      <div className="c-step-window" ref={viewport}>
+        <div
+          className="c-step"
+          ref={body}
+          onScroll={() => {
+            pageScroll.current = body.current?.scrollTop ?? 0;
+          }}
+        >
+          <h3>{beat.title}</h3>
+          <dl>
+            {rowsOf(version, beat, known).map((row) => (
+              <div key={row.label} className={row.tone}>
+                <dt>{row.label}</dt>
+                <dd>{row.text}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       </div>
-      <div className="actions">
+      <div className="actions" style={{ flexWrap: "wrap" }}>
         <button
           type="button"
           className="secondary-button"
@@ -662,6 +863,24 @@ export function StepCard({
           下一步
         </button>
         <span />
+        {context && onFollowUp && (
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => leave(() => onFollowUp(context, sourceOf(index)))}
+          >
+            补充或质疑
+          </button>
+        )}
+        {onAdjustConditions && (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => leave(() => onAdjustConditions(sourceOf(index)))}
+          >
+            调整条件
+          </button>
+        )}
         <button type="button" className="text-button" onClick={() => leave(() => onStage(index))}>
           在舞台上看这一步
         </button>

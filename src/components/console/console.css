@@ -3405,6 +3405,39 @@
   }
 }
 /* ------ The chain can be picked up: any past step opens on a click. ------ */
+.c-deck-open {
+  flex: none;
+  pointer-events: auto;
+  padding: 3px 7px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    transform 320ms cubic-bezier(0.18, 1.2, 0.3, 1);
+}
+.c-deck-now .tb {
+  align-items: center;
+}
+.c-deck-open:hover {
+  background: rgb(255 255 255 / 0.16);
+  transform: translateY(-1px);
+}
+.c-deck-open:active {
+  transform: scale(0.94);
+}
+.c-deck-open:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .c-deck-open {
+    transition: none;
+  }
+}
 .c-deck-card:not(.c-deck-now) {
   cursor: pointer;
   pointer-events: auto;
@@ -3600,7 +3633,7 @@
   transform-origin: 0 0;
   pointer-events: none;
 }
-.c-pull .tb {
+.c-pull > .tb {
   flex: none;
   display: flex;
   align-items: center;
@@ -3611,28 +3644,28 @@
   color: #c9ccd1;
   white-space: nowrap;
 }
-.c-pull .tb b {
+.c-pull > .tb b {
   font-size: 14px;
   font-weight: 800;
   color: #fff;
 }
-.c-pull .tb span {
+.c-pull > .tb span {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.c-pull .tb button {
+.c-pull > .tb button {
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
   color: #fff;
 }
-.c-pull .tb button:hover {
+.c-pull > .tb button:hover {
   background: #fff;
   color: #0b0d10;
 }
-.c-pull .tb button:hover svg {
+.c-pull > .tb button:hover svg {
   rotate: 90deg;
 }
 .c-pull .c-step {
@@ -3694,7 +3727,7 @@
 .c-pull .actions > span {
   flex: 1;
 }
-.c-root.held .c-thread-flow {
+.c-root.held[data-motion-origin="story"] .c-thread-flow {
   animation-play-state: paused;
 }
 /* The gap it left, and the cards making room. */
@@ -3737,7 +3770,7 @@
     max-height: 200px;
     margin-bottom: 6px;
   }
-  .c-deck-card {
+  .c-deck-card[data-step-source] {
     left: auto;
   }
   .c-deck {
@@ -3745,7 +3778,7 @@
     height: auto;
     margin-bottom: 6px;
   }
-  .c-deck-card {
+  .c-deck-card[data-step-source] {
     position: static;
     width: auto;
     transform: none !important;
@@ -3758,7 +3791,7 @@
     transform: none !important;
     max-height: none;
   }
-  .c-deck-card:not(.c-deck-now) {
+  .c-deck-card[data-step-source]:not(.c-deck-now) {
     display: none;
   }
   .c-stage3 {
@@ -3846,5 +3879,30 @@
   .c-intro li {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+.c-claim em .c-claim-challenge {
+  float: right;
+  margin-left: 12px;
+  padding: 1px 5px;
+  border: 1px solid rgb(var(--route) / 0.28);
+  border-radius: 3px;
+  color: rgb(var(--route));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  transition:
+    background-color 260ms ease,
+    color 260ms ease;
+}
+.c-claim:hover .c-claim-challenge,
+.c-claim:focus-visible .c-claim-challenge {
+  background: rgb(var(--route));
+  color: #fff;
+}
+@media (prefers-reduced-motion: reduce) {
+  .c-claim em .c-claim-challenge {
+    transition: none;
   }
 }

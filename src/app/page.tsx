@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -23,14 +23,26 @@ import {
   type Attack,
   type Strategy,
   type ArenaVersion,
-  type Challenge,
 } from "@/lib/contracts";
 import { stageProgress } from "@/lib/stage-progress";
 import { ChallengeForm } from "@/components/challenge-form";
+import { ConditionEditor } from "@/components/condition-editor";
+import { StepFollowUpDialog } from "@/components/step-follow-up-dialog";
+import { supplementDraftKey, type SupplementDraft } from "@/components/supplement-draft";
+import { DisclosureMotion } from "@/components/disclosure-motion";
+import { VersionComparison } from "@/components/version-comparison";
+import { challengeChanges } from "@/lib/challenge-changes";
+import type { StepContext } from "@/lib/step-context";
+import { GuidedIntake } from "@/components/guided-intake";
+import { RecordedExamples } from "@/components/recorded-examples";
+import { GoalFocusStage } from "@/components/goal-focus-stage";
+import { IntakeContext } from "@/components/intake-context";
+import { DecisionReviewPanel } from "@/components/decision-review-panel";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
-import { Chars, ClickFx, Dust, Leaving } from "@/components/console/effects";
-import { HomeFlow } from "@/components/console/HomeFlow";
+import { ClickFx, Leaving } from "@/components/console/effects";
+import "@/components/focused-home.css";
+import "@/components/friend-feedback.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import type { OverlayMotionHandle } from "@/components/overlay-motion";
@@ -44,7 +56,7 @@ const ERROR_EXIT: Keyframe[] = [
 const statusLabels = {
   ready: "准备上场",
   running: "正在推演",
-  completed: "本轮已收束",
+  completed: "本轮已完成",
   paused: "已暂停",
   failed: "本轮未完成",
   uncertain: "结果待确认",
@@ -53,30 +65,6 @@ const statusLabels = {
 function money(value: number, currency: "CNY" | "USD" = "CNY") {
   const symbol = currency === "USD" ? "$" : "¥";
   return value < 0.01 && value > 0 ? `< ${symbol}0.01` : `${symbol}${value.toFixed(2)}`;
-}
-/** What differs from the parent version's input. Long text only reports that it changed. */
-function conditionChanges(parent: Challenge, current: Challenge) {
-  const yuan = (v: number | null) => (v === null ? "未填写" : `¥${v.toLocaleString()}`);
-  const hours = (v: number | null) => (v === null ? "未填写" : `${v} 小时`);
-  const fields: [string, string, string][] = [
-    ["目标", parent.goal, current.goal],
-    ["硬性限制", parent.constraints, current.constraints],
-    ["偏好", parent.preferences, current.preferences],
-    ["备选方案", parent.options.join("、"), current.options.join("、")],
-    ["材料", parent.materials, current.materials],
-    ["领域", parent.domain, current.domain],
-    ["预算上限", yuan(parent.budget), yuan(current.budget)],
-    ["可用时间", hours(parent.timeHours), hours(current.timeHours)],
-  ];
-  return fields
-    .filter(([, before, after]) => before !== after)
-    .map(([label, before, after]) => ({
-      label,
-      detail:
-        before.length > 24 || after.length > 24
-          ? "内容已修改"
-          : `${before || "未填写"} → ${after || "未填写"}`,
-    }));
 }
 /** Failed, uncertain and paused differ in what the user can safely do next, so they differ here. */
 function RunNotice({
@@ -95,11 +83,11 @@ function RunNotice({
   const copy = {
     failed: {
       title: "本轮未完成",
-      next: "已产生的结果保留在下方。可以修改条件后开新版本。",
+      next: "下方保留了已有结果。你可以修改条件，创建新版本。",
     },
     uncertain: {
-      title: "结果待确认：无法判断请求是否完成或已计费",
-      next: "相应预留不会释放，系统也不会自动重试，需要由运行者核账。已产生的结果保留在下方。",
+      title: "这次请求的结果和费用还未确认",
+      next: "这笔预留暂不释放，也不会自动重试。请让运行服务的人核对调用结果和费用。下方保留了已有结果。",
     },
     paused: {
       title: "本轮已停止",
@@ -134,10 +122,27 @@ export default function Page() {
   const [modelOpen, setModelOpen] = useState(false);
   const [attackId, setAttackId] = useState<string | null>(null);
   const [locatedId, setLocatedId] = useState<string | null>(null);
-  const [claimTarget, setClaimTarget] = useState<{ strategy: Strategy; claimId: string } | null>(
-    null,
-  );
+  const [claimTarget, setClaimTarget] = useState<{
+    strategy: Strategy;
+    claimId: string;
+    version: ArenaVersion;
+    trigger: HTMLElement | null;
+  } | null>(null);
+  const [editSource, setEditSource] = useState<{
+    version: ArenaVersion;
+    focus?: "budget" | "timeHours" | "constraints" | "preferences";
+    trigger: HTMLElement | null;
+  } | null>(null);
+  const [followUp, setFollowUp] = useState<{
+    version: ArenaVersion;
+    context: StepContext;
+    trigger: HTMLElement | null;
+    returnTo: string | null;
+  } | null>(null);
   const [challengeText, setChallengeText] = useState("");
+  const [supplementDrafts, setSupplementDrafts] = useState<Record<string, SupplementDraft>>({});
+  const [claimOriginalOpen, setClaimOriginalOpen] = useState(false);
+  const claimQuoteId = useId();
   const [stopConfirm, setStopConfirm] = useState(false);
   const [overlayVersionId, setOverlayVersionId] = useState<string | null>(null);
   const editMotion = useRef<OverlayMotionHandle>(null);
@@ -177,6 +182,35 @@ export default function Page() {
     setStopConfirm(false);
     setAttackId(null);
   };
+  const beginEditableOverlay = (source: ArenaVersion, returnTo = versionId) => {
+    beginVersionOverlay();
+    setOverlayVersionId(source.id);
+    versionPin.current = { previous: returnTo, epoch: navigationEpoch.current };
+    setVersionId(source.id);
+    arena.clearError();
+  };
+  const openConditions = (
+    source: ArenaVersion,
+    trigger: HTMLElement | null,
+    focus?: "budget" | "timeHours" | "constraints" | "preferences",
+    returnTo = versionId,
+  ) => {
+    beginEditableOverlay(source, returnTo);
+    setFollowUp(null);
+    setEditSource({ version: source, trigger, focus });
+    setEditing(true);
+  };
+  const versionModelUnavailable = (source: ArenaVersion) => {
+    if (demo) return false;
+    const models = arena.health?.model.models ?? arena.health?.model.providers;
+    const selectedModel = source.modelSelection;
+    return selectedModel
+      ? !(
+          models?.find((model) => model.id === selectedModel.modelId) ??
+          models?.find((model) => model.provider === selectedModel.provider)
+        )?.configured
+      : !arena.health?.model.configured;
+  };
   const selectAttack = (a: Attack) => {
     beginVersionOverlay();
     setLocatedId(null);
@@ -200,10 +234,18 @@ export default function Page() {
   const previousDisplayedVersion = useRef<string | undefined>(undefined);
   const localVersionNavigation = useRef(false);
   const displayedVersionId = selected?.id;
+  const followUpDraftKey = followUp
+    ? supplementDraftKey(
+        followUp.version.id,
+        `step:${followUp.context.stepId}`,
+        followUp.context.quote,
+      )
+    : "";
   useEffect(() => () => cancelAnimationFrame(locateFrame.current), [displayedVersionId]);
   const overlayOpen =
     modelOpen ||
-    (sameOverlayVersion && (editing || claimTarget !== null || stopConfirm || attack !== null));
+    (sameOverlayVersion &&
+      (editing || followUp !== null || claimTarget !== null || stopConfirm || attack !== null));
   useEffect(() => {
     const transitioned = previousDisplayedVersion.current !== displayedVersionId;
     previousDisplayedVersion.current = displayedVersionId;
@@ -221,9 +263,23 @@ export default function Page() {
       overlayOpen
     )
       return;
+    const localNavigation = localVersionNavigation.current;
+    const focusAtSchedule = document.activeElement;
     localVersionNavigation.current = false;
     const frame = requestAnimationFrame(() => {
       if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      const focused = document.activeElement;
+      const interactive =
+        focused instanceof HTMLElement &&
+        focused.isConnected &&
+        !focused.matches(":disabled") &&
+        !focused.closest("[inert]") &&
+        focused.matches(
+          'a[href],button,input,textarea,select,summary,[tabindex]:not([tabindex="-1"]),[contenteditable="true"]',
+        );
+      // Restoring data must not override a user's current control. Explicit local navigation
+      // defaults to the new heading, unless focus moved to another control before this frame.
+      if (interactive && (!localNavigation || focused !== focusAtSchedule)) return;
       window.scrollTo({ top: 0, behavior: "instant" });
       headingRef.current?.focus({ preventScroll: true });
     });
@@ -232,11 +288,15 @@ export default function Page() {
   const versionEvents = arena.snapshot?.events.filter((e) => e.versionId === selected?.id) ?? [];
   const selectedSteps = arena.snapshot?.steps.filter((s) => s.versionId === selected?.id) ?? [];
   const selectedRunning = !!selected && ["running", "ready"].includes(selected.status);
+  const preparationUsd =
+    selected?.intake?.usage.reduce((sum, usage) => sum + (usage.estimatedUsd ?? 0), 0) ?? 0;
+  const preparationCny =
+    selected?.intake?.usage.reduce((sum, usage) => sum + usage.estimatedCny, 0) ?? 0;
   const parentVersion = arena.snapshot?.versions.find((v) => v.id === selected?.parentVersionId);
   const parentChanges =
-    parentVersion && selected ? conditionChanges(parentVersion.challenge, selected.challenge) : [];
+    parentVersion && selected ? challengeChanges(parentVersion.challenge, selected.challenge) : [];
   return (
-    <div className={`site-shell console-shell ${arena.snapshot ? "" : "home"}`}>
+    <div className={`site-shell console-shell ${arena.snapshot ? "" : "home focus-home"}`}>
       <ClickFx />
       <a href="#main" className="skip-link">
         跳转到主要内容
@@ -301,88 +361,98 @@ export default function Page() {
           </Leaving>
         )}
         {!arena.snapshot ? (
-          <div className="h-grid">
-            <Dust />
-            <section className="h-lead" aria-label="开始一次方案推演">
-              <h1>
-                <Chars text="先让三个方案互相挑错，再决定。" active />
-              </h1>
-              <p>说出你的问题。三条路线各自提案、互相质疑、查证修正，最后给你一个带条件的建议。</p>
-              <div className="h-form">
-                {accessRequired && (
-                  <form
-                    className="access-panel"
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      if (await arena.unlock(accessCode)) setAccessCode("");
-                    }}
-                  >
-                    <div>
-                      <span className="eyebrow">受邀预览</span>
-                      <h2>凭访问码入场</h2>
-                      <p>这是一个受邀预览。输入运行者提供的访问码，即可开始真实推演。</p>
-                    </div>
-                    <label className="sr-only" htmlFor="access-code">
-                      访问码
-                    </label>
-                    <div className="access-input-row">
-                      <input
-                        id="access-code"
-                        type="password"
-                        autoComplete="off"
-                        placeholder="输入访问码"
-                        value={accessCode}
-                        onChange={(e) => setAccessCode(e.target.value)}
-                        required
-                      />
-                      <button type="submit" className="primary-button" disabled={arena.busy}>
-                        {arena.busy ? "验证中…" : "验证访问码"}
-                        <ArrowRight size={15} />
-                      </button>
-                    </div>
-                  </form>
-                )}
-                {arena.restoring ? (
-                  <div className="restoring-state">
-                    <LoaderCircle className="spin" size={24} />
-                    <p>正在找回上一次的擂台…</p>
-                  </div>
-                ) : (
-                  <ChallengeForm
-                    demo={demo}
-                    modelProviders={arena.health?.model.providers}
-                    pending={arena.busy}
-                    disabled={configured === false || !arena.health || accessRequired}
-                    onSubmit={async (challenge, _reason, modelMode) => {
-                      if (await arena.create(challenge, modelMode)) chooseVersion(null);
-                    }}
-                  />
-                )}
-                {(configured === false || arena.healthError) && (
-                  <div className="configuration-notice">
-                    <CircleHelp size={16} />
-                    <div>
-                      <strong>{arena.healthError || "还差一步：连接真实模型"}</strong>
-                      <p>
-                        {arena.healthError
-                          ? "连接恢复后刷新页面即可继续。"
-                          : "配置 API 密钥后即可上场。当前不会生成模拟结果或发起计费请求。"}
-                      </p>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => setModelOpen(true)}
+          <>
+            <div className="goal-landing">
+              <section className="goal-landing-center" aria-label="开始一次方案推演">
+                <h1 className="sr-only">方案擂台，开始推演</h1>
+                <GoalFocusStage>
+                  <div className="h-form">
+                    {accessRequired && (
+                      <form
+                        className="access-panel"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (await arena.unlock(accessCode)) setAccessCode("");
+                        }}
                       >
-                        查看连接信息
-                        <ArrowUpRight size={13} />
-                      </button>
-                    </div>
+                        <div>
+                          <span className="eyebrow">受邀预览</span>
+                          <h2>凭访问码入场</h2>
+                          <p>输入运行者提供的访问码后，就可以开始推演。</p>
+                        </div>
+                        <label className="sr-only" htmlFor="access-code">
+                          访问码
+                        </label>
+                        <div className="access-input-row">
+                          <input
+                            id="access-code"
+                            type="password"
+                            autoComplete="off"
+                            placeholder="输入访问码"
+                            value={accessCode}
+                            onChange={(e) => setAccessCode(e.target.value)}
+                            required
+                          />
+                          <button type="submit" className="primary-button" disabled={arena.busy}>
+                            {arena.busy ? "验证中…" : "验证访问码"}
+                            <ArrowRight size={15} />
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                    {arena.restoring ? (
+                      <div className="restoring-state">
+                        <LoaderCircle className="spin" size={24} />
+                        <p>正在恢复上一次的推演…</p>
+                      </div>
+                    ) : demo ? (
+                      <ChallengeForm
+                        demo={demo}
+                        modelProviders={arena.health?.model.providers}
+                        pending={arena.busy}
+                        disabled={configured === false || !arena.health || accessRequired}
+                        onSubmit={async (challenge, _reason, modelMode) => {
+                          if (await arena.create(challenge, modelMode)) chooseVersion(null);
+                        }}
+                      />
+                    ) : (
+                      <GuidedIntake
+                        modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
+                        pending={arena.busy}
+                        disabled={!arena.health || accessRequired}
+                        onCreated={(snapshot) => {
+                          arena.adopt(snapshot);
+                          chooseVersion(null);
+                        }}
+                      />
+                    )}
+                    {(configured === false || arena.healthError) && (
+                      <div className="configuration-notice">
+                        <CircleHelp size={16} />
+                        <div>
+                          <strong>{arena.healthError || "配置模型后就能开始"}</strong>
+                          <p>
+                            {arena.healthError
+                              ? "连接恢复后刷新页面即可继续。"
+                              : "你可以先看已有示例。配置完成前，新的推演不会发起收费调用。"}
+                          </p>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => setModelOpen(true)}
+                          >
+                            查看连接信息
+                            <ArrowUpRight size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </section>
-            <HomeFlow />
-          </div>
+                </GoalFocusStage>
+                {!demo && <RecordedExamples />}
+              </section>
+            </div>
+          </>
         ) : (
           selected && (
             <div className="arena-view">
@@ -397,43 +467,94 @@ export default function Page() {
                 selectedAttack={attack?.id ?? locatedId ?? undefined}
                 onEvidence={selectAttack}
                 onClaim={(strategy, claimId) => {
-                  beginVersionOverlay();
-                  setClaimTarget({ strategy, claimId });
+                  beginEditableOverlay(selected);
+                  setFollowUp(null);
+                  setClaimTarget({
+                    strategy,
+                    claimId,
+                    version: selected,
+                    trigger:
+                      document.activeElement instanceof HTMLElement ? document.activeElement : null,
+                  });
                   setChallengeText("");
+                  setClaimOriginalOpen(false);
                 }}
+                onFollowUp={
+                  historical
+                    ? undefined
+                    : (context, trigger) => {
+                        beginEditableOverlay(selected);
+                        setFollowUp({ version: selected, context, trigger, returnTo: versionId });
+                      }
+                }
+                onAdjustConditions={
+                  historical ? undefined : (trigger) => openConditions(selected, trigger)
+                }
                 conditions={
                   <section className="arena-intro">
                     <div>
                       <div className="arena-conditions">
                         {selected.challenge.constraints && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "constraints")
+                            }
+                          >
                             <strong>硬性限制</strong>
                             {selected.challenge.constraints}
-                          </span>
+                          </button>
                         )}
                         {selected.challenge.preferences && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "preferences")
+                            }
+                          >
                             <strong>偏好</strong>
                             {selected.challenge.preferences}
-                          </span>
+                          </button>
                         )}
                         {selected.challenge.budget !== null && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "budget")
+                            }
+                          >
                             <strong>预算上限</strong>¥{selected.challenge.budget.toLocaleString()}
-                          </span>
+                          </button>
                         )}
                         {selected.challenge.timeHours !== null && (
-                          <span>
+                          <button
+                            type="button"
+                            className="condition-trigger"
+                            disabled={historical || arena.busy}
+                            onClick={(event) =>
+                              openConditions(selected, event.currentTarget, "timeHours")
+                            }
+                          >
                             <strong>可用时间</strong>
                             {selected.challenge.timeHours} 小时
-                          </span>
+                          </button>
                         )}
                       </div>
+                      {selected.intake && <IntakeContext intake={selected.intake} />}
                       {selected.changeReason && (
                         <p className="version-reason">
                           <CornerIcon />
                           本轮改动：{selected.changeReason}
                         </p>
+                      )}
+                      {(parentVersion || selected.followUp) && (
+                        <VersionComparison version={selected} parent={parentVersion} />
                       )}
                       {parentVersion && parentChanges.length > 0 && (
                         <div className="condition-delta">
@@ -456,6 +577,14 @@ export default function Page() {
                           ? money(selected.costUsd ?? 0, "USD")
                           : money(selected.costCny)}
                       </strong>
+                      {!demo && (preparationUsd > 0 || preparationCny > 0) && (
+                        <small>
+                          准备阶段另计 {preparationUsd > 0 ? money(preparationUsd, "USD") : ""}
+                          {preparationUsd > 0 && preparationCny > 0 ? " + " : ""}
+                          {preparationCny > 0 ? money(preparationCny) : ""}
+                          （含材料辨读与补问）
+                        </small>
+                      )}
                       {(selected.reservedCny > 0 || (selected.reservedUsd ?? 0) > 0) && (
                         <small>
                           另有{" "}
@@ -525,15 +654,30 @@ export default function Page() {
                       <button
                         type="button"
                         className="text-button"
-                        onClick={() => {
-                          beginVersionOverlay();
-                          setEditing(true);
-                        }}
-                        disabled={arena.busy}
+                        onClick={(event) => openConditions(selected, event.currentTarget)}
+                        disabled={arena.busy || historical}
                       >
                         <Settings2 size={14} />
-                        修改条件再开局
+                        调整条件
                       </button>
+                      {!demo &&
+                        selected.verdict &&
+                        selected.strategies.length === 3 &&
+                        ["completed", "paused", "failed", "superseded"].includes(
+                          selected.status,
+                        ) && (
+                          <DecisionReviewPanel
+                            key={`review-${selected.id}`}
+                            arenaId={arena.snapshot.id}
+                            version={selected}
+                            configured={
+                              (arena.health?.model.models ?? arena.health?.model.providers)?.some(
+                                (model) => model.provider === "openai" && model.configured,
+                              ) ?? false
+                            }
+                            readOnly={historical}
+                          />
+                        )}
                       <button
                         type="button"
                         className="text-button"
@@ -645,16 +789,18 @@ export default function Page() {
           )
         )}
       </main>
-      <footer className="site-footer">
-        <div>
-          <span className="footer-brand">方案擂台</span>
-          <span>让好策略，经得起挑战。</span>
-        </div>
-        <button type="button" className="text-button" onClick={() => setModelOpen(true)}>
-          模型与版本
-          <ArrowUpRight size={12} />
-        </button>
-      </footer>
+      {arena.snapshot && (
+        <footer className="site-footer">
+          <div>
+            <span className="footer-brand">方案擂台</span>
+            <span>让好策略，经得起挑战。</span>
+          </div>
+          <button type="button" className="text-button" onClick={() => setModelOpen(true)}>
+            模型与版本
+            <ArrowUpRight size={12} />
+          </button>
+        </footer>
+      )}
       {modelOpen && (
         <Modal title="模型与运行信息" onClose={() => setModelOpen(false)}>
           <div className="model-information">
@@ -663,7 +809,7 @@ export default function Page() {
               {demo
                 ? "演示内容，未调用模型"
                 : configured
-                  ? "已有模型密钥配置，连通性待实际请求确认"
+                  ? "已读取模型配置，实际连接会在首次调用时确认"
                   : "模型尚未配置"}
             </span>
             <dl>
@@ -707,9 +853,7 @@ export default function Page() {
             {!configured && (
               <div className="model-setup">
                 <h3>连接真实模型后开始</h3>
-                <p>
-                  请由运行此服务的人配置服务端的模型 API 密钥，并重启服务。密钥不在浏览器内保存。
-                </p>
+                <p>请让运行此服务的人配置模型 API 密钥，然后重启服务。密钥由服务端保存。</p>
                 <p>
                   当前模型：<code>{arena.health?.model.id || "查看服务配置"}</code>
                 </p>
@@ -720,7 +864,7 @@ export default function Page() {
               <p>
                 {demo
                   ? "演示中的路线、证据、裁决、Token 数和费用都是预设的，实际费用为 0。"
-                  : "发起推演会调用所选模型。总费用取决于问题长度、材料与推演步骤，开始前无法给出可靠的固定金额。运行中按已记录用量估算，并使用本轮模型的原始币种。"}
+                  : "AI 分析问题、读图和推演方案时，都会调用所选模型。费用取决于问题长度、材料和推演步骤。运行时会根据已记录的用量估算费用，按所选模型的原始币种显示。"}
               </p>
             </div>
             <p className="muted">
@@ -731,36 +875,42 @@ export default function Page() {
           </div>
         </Modal>
       )}
-      {editing && sameOverlayVersion && selected && (
+      {editing && sameOverlayVersion && editSource && (
         <Modal
-          title="修改条件，重新开局"
-          wide
+          title="调整条件"
+          trigger={editSource.trigger}
+          side
           motionRef={editMotion}
           onClose={() => {
             releaseVersionPin();
             setEditing(false);
+            setEditSource(null);
           }}
         >
-          <p className="modal-intro">
-            补充限制、材料或偏好后生成新版本，原版本会保留。请说明改动原因。
-          </p>
-          <ChallengeForm
+          {arena.error && (
+            <p className="form-error" role="alert">
+              {arena.error}
+            </p>
+          )}
+          <ConditionEditor
             demo={demo}
-            initial={selected.challenge}
-            initialModelMode={arena.active?.modelSelection?.requestedMode ?? "deepseek"}
-            modelProviders={arena.health?.model.providers}
-            disabled={configured === false || !arena.health || accessRequired}
+            initial={editSource.version.challenge}
+            initialModelMode={editSource.version.modelSelection?.requestedMode ?? "deepseek"}
+            initialFocus={editSource.focus}
+            modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
+            disabled={!arena.health || accessRequired}
             pending={arena.busy}
-            editing
-            submitLabel="按新条件重新推演"
             onCancel={() => editMotion.current?.close()}
             onSubmit={async (challenge, reason, modelMode) => {
               // Keep the old version visible while its form completes the exit.
               const motion = editMotion.current;
-              const pin = { previous: versionId, epoch: navigationEpoch.current };
+              const pin = versionPin.current ?? {
+                previous: versionId,
+                epoch: navigationEpoch.current,
+              };
               versionPin.current = pin;
-              setVersionId(selected.id);
-              if (await arena.rematch(challenge, reason, modelMode)) {
+              setVersionId(editSource.version.id);
+              if (await arena.rematch(challenge, reason, modelMode, editSource.version.id)) {
                 if (navigationEpoch.current !== pin.epoch) return;
                 const navigate = () => {
                   if (navigationEpoch.current !== pin.epoch) return;
@@ -768,16 +918,69 @@ export default function Page() {
                   localVersionNavigation.current = true;
                   setVersionId(null);
                   setEditing(false);
+                  setEditSource(null);
                 };
                 if (!motion?.close(navigate)) navigate();
-              } else releaseVersionPin(pin);
+              }
             }}
           />
         </Modal>
       )}
+      {followUp && sameOverlayVersion && (
+        <StepFollowUpDialog
+          key={followUpDraftKey}
+          demo={demo}
+          version={followUp.version}
+          context={followUp.context}
+          trigger={followUp.trigger}
+          pending={arena.busy}
+          initialDraft={supplementDrafts[followUpDraftKey]}
+          onDraftChange={(draft) =>
+            setSupplementDrafts((saved) => ({ ...saved, [followUpDraftKey]: draft }))
+          }
+          disabled={accessRequired || versionModelUnavailable(followUp.version)}
+          error={
+            arena.error ||
+            (versionModelUnavailable(followUp.version)
+              ? "本版模型尚未配置，可以在调整条件中选择可用模型。"
+              : "")
+          }
+          onClose={() => {
+            releaseVersionPin();
+            setFollowUp(null);
+          }}
+          onAdjustConditions={() =>
+            openConditions(followUp.version, followUp.trigger, undefined, followUp.returnTo)
+          }
+          onSubmit={async (text) => {
+            const ok = await arena.rematch(
+              followUp.version.challenge,
+              `针对「${followUp.context.title}」补充意见`,
+              followUp.version.modelSelection?.requestedMode,
+              followUp.version.id,
+              {
+                stepId: followUp.context.stepId,
+                quote: followUp.context.quote,
+                text,
+              },
+            );
+            if (ok) {
+              setSupplementDrafts((saved) => {
+                const next = { ...saved };
+                delete next[followUpDraftKey];
+                return next;
+              });
+              localVersionNavigation.current = true;
+            }
+            return ok;
+          }}
+        />
+      )}
       {claimTarget && sameOverlayVersion && (
         <Modal
-          title="向这条判断发起挑战"
+          title="质疑这条判断"
+          trigger={claimTarget.trigger}
+          side
           motionRef={claimMotion}
           onClose={() => {
             releaseVersionPin();
@@ -785,19 +988,44 @@ export default function Page() {
           }}
         >
           <div className="challenge-dialog">
-            <span className="eyebrow">路线 {claimTarget.strategy.id} / 关键判断</span>
-            <blockquote>
-              {claimTarget.strategy.claims.find((c) => c.id === claimTarget.claimId)?.text}
-            </blockquote>
+            <div className="compact-claim-source">
+              <span className="eyebrow">
+                V{claimTarget.version.number} · 路线 {claimTarget.strategy.id}
+              </span>
+              <button
+                type="button"
+                className="text-button"
+                aria-expanded={claimOriginalOpen}
+                aria-controls={claimQuoteId}
+                onClick={() => setClaimOriginalOpen(!claimOriginalOpen)}
+              >
+                {claimOriginalOpen ? "收起原文" : "查看原文"}
+              </button>
+            </div>
+            <DisclosureMotion open={claimOriginalOpen} id={claimQuoteId}>
+              <blockquote className="compact-claim-quote">
+                {claimTarget.strategy.claims.find((c) => c.id === claimTarget.claimId)?.text}
+              </blockquote>
+            </DisclosureMotion>
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
                 const motion = claimMotion.current;
-                const pin = { previous: versionId, epoch: navigationEpoch.current };
+                const pin = versionPin.current ?? {
+                  previous: versionId,
+                  epoch: navigationEpoch.current,
+                };
                 versionPin.current = pin;
                 setVersionId(selected?.id ?? null);
                 if (
-                  await arena.intervene(claimTarget.strategy.id, claimTarget.claimId, challengeText)
+                  await arena.intervene(
+                    claimTarget.strategy.id,
+                    claimTarget.claimId,
+                    challengeText,
+                    claimTarget.version.id,
+                    claimTarget.strategy.claims.find((claim) => claim.id === claimTarget.claimId)
+                      ?.text,
+                  )
                 ) {
                   if (navigationEpoch.current !== pin.epoch) return;
                   const navigate = () => {
@@ -808,28 +1036,44 @@ export default function Page() {
                     setVersionId(null);
                   };
                   if (!motion?.close(navigate)) navigate();
-                } else releaseVersionPin(pin);
+                }
               }}
             >
               <label className="field">
-                <span>你认为哪里需要再想一遍？</span>
+                <span>你认为哪里有问题？</span>
                 <textarea
                   value={challengeText}
                   onChange={(e) => setChallengeText(e.target.value)}
                   minLength={3}
                   maxLength={1000}
                   required
-                  rows={4}
-                  placeholder="指出有问题的前提、缺失的条件，或提供反证。"
+                  rows={3}
+                  placeholder="这里漏了什么条件，或哪一点你不认同？"
                 />
               </label>
               <p className="muted">
-                你的质疑会进入真实推演。必要时会创建新版本，并产生新的模型调用费用。
+                {demo
+                  ? "演示只播放预设内容，不调用模型、不计费。"
+                  : "提交后会创建新版本并重新推演，产生新的模型调用费用。"}
               </p>
+              {versionModelUnavailable(claimTarget.version) && (
+                <p className="form-error" role="alert">
+                  本版模型尚未配置，请在调整条件中选择可用模型。
+                </p>
+              )}
+              {arena.error && (
+                <p className="form-error" role="alert">
+                  {arena.error}
+                </p>
+              )}
               <button
                 className="primary-button"
                 type="submit"
-                disabled={arena.busy || challengeText.trim().length < 3}
+                disabled={
+                  arena.busy ||
+                  challengeText.trim().length < 3 ||
+                  versionModelUnavailable(claimTarget.version)
+                }
               >
                 {arena.busy ? "正在提交…" : "提交质疑"}
                 <Crosshair size={16} />
@@ -848,17 +1092,13 @@ export default function Page() {
         />
       )}
       {stopConfirm && sameOverlayVersion && (
-        <Modal
-          title="在这里收束本轮？"
-          motionRef={stopMotion}
-          onClose={() => setStopConfirm(false)}
-        >
+        <Modal title="停止本轮推演？" motionRef={stopMotion} onClose={() => setStopConfirm(false)}>
           <div className="stop-dialog">
             <p>系统将停止发起后续推演步骤，保留已完成的提案与证据。</p>
             <p>
               {demo
                 ? "演示内容由脚本预设，停止不会产生模型调用或费用。如果裁决尚未展示，本轮会保留为未完成状态。"
-                : "已经发出的模型请求无法撤回，仍可能完成并产生费用；如果裁决尚未形成，本轮会明确保留为未完成状态。"}
+                : "已经发出的请求仍可能完成并产生费用。如果结论尚未形成，本轮会标为未完成。"}
             </p>
             <div>
               <button
@@ -878,7 +1118,7 @@ export default function Page() {
                   motion?.close();
                 }}
               >
-                确认收束
+                确认停止
                 <Square size={12} />
               </button>
             </div>

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { StructuredOutputDiagnostic } from "../src/lib/server/model";
 import {
   ChallengeSchema,
   type ArenaVersion,
@@ -10,7 +11,9 @@ import {
   type Evidence,
   type ModelResult,
   type ModelUsage,
+  type Revision,
   type Strategy,
+  type StageInput,
   type Verdict,
 } from "../src/lib/contracts";
 const fixture = vi.hoisted(() => ({ generate: vi.fn() }));
@@ -21,6 +24,7 @@ vi.mock("../src/lib/server/model", () => {
       public uncertain = false,
       public usage?: ModelUsage,
       public repair?: { feedback: string; rejectedOutput: string },
+      public diagnostic?: StructuredOutputDiagnostic,
     ) {
       super(message);
     }
@@ -52,6 +56,7 @@ import {
   stopArena,
 } from "../src/lib/server/runtime";
 import { ModelCallError } from "../src/lib/server/model";
+import { sourceBlock } from "../src/lib/server/material-provenance";
 import {
   checkConstraints,
   validateAttack,
@@ -158,6 +163,293 @@ afterEach(() => {
 });
 
 describe("runtime adversarial review", () => {
+  it("archives safe strict-function diagnostics and known usage without scheduling a repair", async () => {
+    const diagnostic: StructuredOutputDiagnostic = {
+      expectedFunction: "submit_propose",
+      receivedFunctionCount: 2,
+      matchingFunctionCount: 2,
+      stringArgumentCount: 2,
+      unexpectedItemCount: 0,
+      incompleteFunctionCount: 0,
+      finishState: "tool_calls",
+    };
+    const arena = createArena(challenge, "review-owner");
+    fixture.generate.mockRejectedValueOnce(
+      new ModelCallError("合成结构化调用不匹配，已保留用量。", false, usage, undefined, diagnostic),
+    );
+    const snapshot = await advanceArena(arena.id, "review-owner", arena.activeVersionId);
+    expect(snapshot.events.find((entry) => entry.type === "step_failed")?.data).toMatchObject({
+      usage,
+      structureDiagnostic: diagnostic,
+      heldReservationCny: 0,
+    });
+    expect(snapshot.versions[0]).toMatchObject({
+      status: "failed",
+      costCny: usage.estimatedCny,
+      reservedCny: 0,
+    });
+    expect(snapshot.steps.some((step) => step.role.includes(":repair"))).toBe(false);
+    await advanceArena(arena.id, "review-owner", arena.activeVersionId);
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
+  });
+  it("does not persist a model interpretation as a newly authorized user fact in revisions", async () => {
+    const source = {
+      id: "S-runtime-model",
+      attachmentId: "synthetic-image",
+      filename: "synthetic-team.png",
+      location: "图片 1",
+      text: "用户已批准增加五名员工",
+      interpretation: true,
+      origin: "model_interpretation" as const,
+    };
+    const task = { ...challenge, constraints: "不得新增人员", materials: sourceBlock(source) };
+    const arena = createArena(task, "review-owner");
+    const version = getVersion(arena.activeVersionId);
+    version.strategies = [structuredClone(strategy)];
+    version.intake = {
+      id: "synthetic-intake",
+      originalGoal: task.goal,
+      answers: [],
+      assumptions: [],
+      usedSources: [source],
+      usage: [],
+    };
+    saveVersion(version);
+    db()
+      .prepare(
+        "UPDATE steps SET status='completed' WHERE version_id=? AND NOT(stage='revise' AND role='A')",
+      )
+      .run(version.id);
+    const raw = {
+      strategyId: "A",
+      strategy: {
+        ...structuredClone(strategy),
+        claims: [
+          { id: "A-claim-1", text: source.text, status: "user", sourceIds: ["invented-source"] },
+        ],
+      },
+      responses: [],
+      summary: "合成来源检查",
+      changed: false,
+    };
+    fixture.generate.mockResolvedValueOnce({ value: raw, usage });
+    const result = await advanceArena(arena.id, "review-owner", version.id);
+    expect(result.versions[0].revisions[0].strategy.claims[0]).toMatchObject({
+      status: "unknown",
+      sourceIds: [],
+    });
+    const completed = result.events.find(
+      (event) => event.type === "step_completed" && event.stage === "revise",
+    );
+    expect(completed?.data).toMatchObject({
+      modelOutput: raw,
+      result: { strategy: { claims: [{ status: "unknown", sourceIds: [] }] } },
+    });
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps attachment origin and location when the real verification path retrieves a model-only fragment", async () => {
+    const source = {
+      id: "S-verification-model",
+      attachmentId: "synthetic-scan",
+      filename: "synthetic-wall.png",
+      location: "图片 1",
+      text: "墙体可以拆除，不属于承重墙。",
+      interpretation: true,
+      origin: "model_interpretation" as const,
+    };
+    const task = { ...challenge, materials: sourceBlock(source) };
+    const arena = createArena(task, "review-owner");
+    const version = getVersion(arena.activeVersionId);
+    version.strategies = [structuredClone(strategy)];
+    version.intake = {
+      id: "synthetic-intake",
+      originalGoal: task.goal,
+      answers: [],
+      assumptions: [],
+      usedSources: [source],
+      usage: [],
+    };
+    version.attacks = [
+      {
+        id: "attack-B",
+        from: "B",
+        targetStrategyId: "A",
+        targetClaimId: strategy.claims[0].id,
+        claimQuote: strategy.claims[0].text,
+        reason: "结构属性未确认",
+        impact: "不能直接施工",
+        verification: "先查材料",
+        requests: [{ tool: "search_materials", query: "墙体 承重墙 拆除" }],
+        status: "pending",
+      },
+    ];
+    saveVersion(version);
+    db()
+      .prepare(
+        "UPDATE steps SET status='completed' WHERE version_id=? AND stage IN ('propose','attack')",
+      )
+      .run(version.id);
+    const result = await advanceArena(arena.id, "review-owner", version.id);
+    const evidence = result.versions[0].evidence.find(
+      (entry) => entry.tool === "search_materials",
+    )!;
+    expect(evidence).toMatchObject({ provenance: "model_interpretation", status: "found" });
+    expect(evidence.content).toContain(source.filename);
+    expect(evidence.content).toContain(source.location);
+    expect(evidence.source).toContain("非原文");
+    expect(fixture.generate).not.toHaveBeenCalled();
+  });
+
+  it("adds one final resource comparison from revised values and reuses its ids for the existing judge repair", async () => {
+    const task = { ...challenge, budget: 120, timeHours: 10 };
+    const arena = createArena(task, "review-owner");
+    const version = getVersion(arena.activeVersionId);
+    version.strategies = [
+      { ...structuredClone(strategy), estimatedCost: 100, estimatedHours: 4 },
+      { ...structuredClone(strategy), id: "B", estimatedCost: 50, estimatedHours: 3 },
+    ];
+    version.revisions = [
+      {
+        strategyId: "A",
+        strategy: { ...structuredClone(version.strategies[0]), estimatedCost: 150 },
+        responses: [],
+        summary: "合成成本变化",
+        changed: true,
+      },
+    ];
+    version.evidence = checkConstraints(task, version.strategies);
+    const originalEvidence = structuredClone(version.evidence);
+    saveVersion(version);
+    db()
+      .prepare("UPDATE steps SET status='completed' WHERE version_id=? AND stage!='judge'")
+      .run(version.id);
+    fixture.generate.mockRejectedValueOnce(
+      new ModelCallError("synthetic known protocol failure", false, usage, {
+        feedback: "Return valid JSON",
+        rejectedOutput: "synthetic-invalid",
+      }),
+    );
+    const first = await advanceArena(arena.id, "review-owner", version.id);
+    const finalEvidence = first.versions[0].evidence.filter(
+      (entry) => entry.estimateScope === "final",
+    );
+    expect(finalEvidence).toHaveLength(4);
+    expect(
+      finalEvidence.find(
+        (entry) => entry.attackId === "constraint-final-A" && entry.title.includes("预算"),
+      ),
+    ).toMatchObject({ expression: "150 - 120", result: 30 });
+    expect(
+      first.versions[0].evidence.filter((entry) => entry.estimateScope === "proposal"),
+    ).toEqual(originalEvidence);
+    expect((fixture.generate.mock.calls[0][0] as StageInput).evidence).toEqual(
+      first.versions[0].evidence,
+    );
+    fixture.generate.mockResolvedValueOnce({ value: proposedVerdict("A"), usage });
+    const second = await advanceArena(arena.id, "review-owner", version.id);
+    expect(second.versions[0].evidence.filter((entry) => entry.estimateScope === "final")).toEqual(
+      finalEvidence,
+    );
+    expect(second.versions[0].verdict?.preferred).toBeNull();
+    expect(
+      second.versions[0].verdict?.comparisons.find((entry) => entry.strategyId === "A")?.status,
+    ).toBe("violates");
+    expect(fixture.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["propose", "revise"] as const)(
+    "archives rejected %s arithmetic and settles test usage before the existing one-shot repair",
+    async (stage) => {
+      const arena = createArena(challenge, "review-owner");
+      const invalid = { ...structuredClone(strategy), steps: ["总计1+2=4小时"] };
+      if (stage === "revise") {
+        const version = getVersion(arena.activeVersionId);
+        version.strategies = [structuredClone(strategy)];
+        saveVersion(version);
+        db()
+          .prepare(
+            "UPDATE steps SET status='completed' WHERE version_id=? AND NOT(stage='revise' AND role='A')",
+          )
+          .run(version.id);
+      }
+      const rejected =
+        stage === "propose"
+          ? invalid
+          : {
+              strategyId: "A",
+              strategy: invalid,
+              responses: [],
+              summary: "合成算术回归",
+              changed: true,
+            };
+      fixture.generate.mockResolvedValueOnce({ value: rejected, usage });
+      const snapshot = await advanceArena(arena.id, "review-owner", arena.activeVersionId);
+      expect(snapshot.versions[0]).toMatchObject({
+        status: "ready",
+        costCny: 0.04,
+        reservedCny: 0,
+      });
+      expect(
+        snapshot.steps.find((step) => step.stage === stage && step.role === "A"),
+      ).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("正确计算结果为 3"),
+      });
+      expect(
+        snapshot.steps.filter((step) => step.stage === stage && step.role === "A:repair"),
+      ).toMatchObject([{ status: "pending" }]);
+      expect(snapshot.versions[0].strategies).toEqual(stage === "propose" ? [] : [strategy]);
+      expect(snapshot.versions[0].revisions).toEqual([]);
+      const failure = snapshot.events.find((event) => event.type === "step_failed");
+      expect(failure?.data).toMatchObject({ rejectedResult: rejected, usage });
+      expect(fixture.generate).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("archives the recorded serial-total error before a bounded revision repair", async () => {
+    const arena = createArena(challenge, "review-owner");
+    const version = getVersion(arena.activeVersionId);
+    version.strategies = [structuredClone(strategy)];
+    saveVersion(version);
+    db()
+      .prepare(
+        "UPDATE steps SET status='completed' WHERE version_id=? AND NOT(stage='revise' AND role='A')",
+      )
+      .run(version.id);
+    const rejected: Revision = {
+      strategyId: "A",
+      strategy: {
+        ...structuredClone(strategy),
+        steps: [40, 40, 180, 60, 60].map(
+          (minutes, index) => `第${index + 1}步（约${minutes}分钟）：执行合成测试步骤。`,
+        ),
+        claims: [
+          { id: "A-claim-1", text: "修订后分项合计约440分钟。", status: "estimate", sourceIds: [] },
+        ],
+      },
+      responses: [],
+      summary: "合成复现：五项时长误加为440分钟。",
+      changed: true,
+    };
+    fixture.generate.mockResolvedValueOnce({ value: rejected, usage });
+    const snapshot = await advanceArena(arena.id, "review-owner", version.id);
+    expect(snapshot.versions[0]).toMatchObject({ status: "ready", costCny: 0.04, reservedCny: 0 });
+    expect(snapshot.versions[0].revisions).toEqual([]);
+    expect(
+      snapshot.steps.find((step) => step.stage === "revise" && step.role === "A"),
+    ).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("合计 380 分钟"),
+    });
+    expect(snapshot.steps.filter((step) => step.role === "A:repair")).toMatchObject([
+      { status: "pending" },
+    ]);
+    expect(snapshot.events.find((event) => event.type === "step_failed")?.data).toMatchObject({
+      rejectedResult: rejected,
+      usage,
+    });
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
+  });
   it("preserves an identified restriction conflict when another resource estimate is unknown", () => {
     const input = pairedInput(300);
     input.challenge.constraints = "全部画面必须来自真实记录，禁止生成虚构画面";
@@ -513,15 +805,36 @@ describe("runtime adversarial review", () => {
     expect(validateVerdict(proposedVerdict("A"), pairedInput(100, 10)).preferred).toBe("A");
     expect(validateVerdict(proposedVerdict("A"), pairedInput(100, 8)).preferred).toBe("A");
   });
-  it("withdraws a synthetic winner when all tool checks are unavailable", () => {
+  it("keeps a conditional recommendation when tool checks are unavailable", () => {
     const input = pairedInput(100);
     input.evidence = input.evidence.map((evidence) => ({
       ...evidence,
       status: "unavailable",
       result: null,
     }));
+    const checked = validateVerdict(proposedVerdict("A"), input);
+    expect(checked).toMatchObject({ outcome: "recommendation", preferred: "A" });
+    expect(checked.conditions.join(" ")).toContain("尚无有效工具证据");
+    expect(checked.uncertainties.join(" ")).toContain("未完成外部事实核实");
+  });
+  it("does not let a conditional recommendation override a hard conflict without tool evidence", () => {
+    const input = pairedInput(50);
+    input.evidence = [];
+    const checked = validateVerdict(proposedVerdict("A"), input);
+    expect(checked).toMatchObject({ outcome: "insufficient", preferred: null });
+    expect(checked.comparisons[0].status).toBe("violates");
+  });
+  it("preserves infeasible, tie and partial outcomes without successful tool evidence", () => {
+    const input = pairedInput(100);
+    input.evidence = [];
+    for (const outcome of ["infeasible", "tie", "partial"] as const) {
+      expect(
+        validateVerdict({ ...proposedVerdict("A"), outcome, preferred: null }, input).outcome,
+      ).toBe(outcome);
+    }
+    input.challenge.budget = 1;
     expect(validateVerdict(proposedVerdict("A"), input)).toMatchObject({
-      outcome: "insufficient",
+      outcome: "infeasible",
       preferred: null,
     });
   });

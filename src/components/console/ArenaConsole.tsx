@@ -17,6 +17,8 @@ import {
   type Strategy,
 } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
+import type { StepContext } from "@/lib/step-context";
+import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
 import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
@@ -46,7 +48,7 @@ const SPEEDS = [
 
 const OUTCOME = {
   recommendation: "当前条件下的建议",
-  tie: "两条路线各有成立条件",
+  tie: "几条路线各有适用条件",
   insufficient: "现有依据不足以判断",
   infeasible: "当前条件下无法成立",
   partial: "阶段性判断",
@@ -62,9 +64,13 @@ export function ArenaConsole({
   conditions,
   selectedAttack,
   historical,
+  startFromBeginning = false,
+  allowRecordedChallenges = false,
   busy,
   onEvidence,
   onClaim,
+  onFollowUp,
+  onAdjustConditions,
 }: {
   version: ArenaVersion;
   steps: ArenaStep[];
@@ -75,18 +81,22 @@ export function ArenaConsole({
   conditions: React.ReactNode;
   selectedAttack?: string;
   historical: boolean;
+  startFromBeginning?: boolean;
+  allowRecordedChallenges?: boolean;
   busy: boolean;
   onEvidence: (attack: Attack) => void;
   onClaim: (strategy: Strategy, claimId: string) => void;
+  onFollowUp?: (context: StepContext, trigger: HTMLElement | null) => void;
+  onAdjustConditions?: (trigger: HTMLElement | null) => void;
 }) {
   const beats = beatsOf(version);
   const last = beats.length - 1;
-  const [cursor, setCursor] = useState<number | null>(null);
-  const [playing, setPlaying] = useState(false);
+  const [cursor, setCursor] = useState<number | null>(startFromBeginning ? -1 : null);
+  const [playing, setPlaying] = useState(startFromBeginning);
   const [speed, setSpeed] = useState(1);
-  const [intro, setIntro] = useState(false);
+  const [intro, setIntro] = useState(startFromBeginning);
   const [revealed, setRevealed] = useState(false);
-  const [motion, setMotion] = useState(false);
+  const [motion, setMotion] = useState(startFromBeginning);
   const [seeking, setSeeking] = useState(false);
   const [playbackPaused, setPlaybackPaused] = useState(false);
   const [filmDone, setFilmDone] = useState(false);
@@ -117,7 +127,10 @@ export function ArenaConsole({
     });
     return () => cancelAnimationFrame(frame);
   }, []);
-  const reveal = useCallback(() => setRevealed(true), []);
+  const reveal = useCallback(() => {
+    setRevealed(true);
+    if (startFromBeginning) setCursor((cursor) => (cursor === -1 ? 0 : cursor));
+  }, [startFromBeginning]);
   const endFilm = useCallback(() => setFilmDone(true), []);
   const endIntro = useCallback(() => {
     setIntro(false);
@@ -212,7 +225,7 @@ export function ArenaConsole({
     setPlaying(true);
   }, [playing, index, last, playbackPaused]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
@@ -270,8 +283,8 @@ export function ArenaConsole({
     ["成立", count("supported"), "bad"],
     ["已反驳", count("refuted"), "ok"],
     ["未决", attacks.length - count("supported") - count("refuted"), "warn"],
-    [demo ? "演示调用" : "模型调用", used.length, ""],
-    [demo ? "Token（预设）" : "Token", tokens, ""],
+    [demo ? "演示调用" : startFromBeginning ? "原记录调用" : "模型调用", used.length, ""],
+    [demo ? "Token（预设）" : startFromBeginning ? "原记录 Token" : "Token", tokens, ""],
   ];
 
   // Keep controls mounted. Interruptions start from the displayed pose, not the start keyframe.
@@ -288,7 +301,7 @@ export function ArenaConsole({
       });
       return;
     }
-    const scope = createMotionScope();
+    const scope = createMotionScope("interaction");
     const starts = nodes.map((node) => ({
       opacity: node.style.opacity || "0.35",
       transform: node.style.transform || "translateY(16px)",
@@ -322,6 +335,7 @@ export function ArenaConsole({
 
   return (
     <div
+      data-motion-origin={seeking ? "interaction" : "story"}
       className={`c-root ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
     >
       <RecordWall
@@ -339,11 +353,12 @@ export function ArenaConsole({
           <div className="c-time" role="group" aria-label="推演步骤">
             {STAGES.map((stage) => {
               const own = steps.filter((s) => s.stage === stage);
+              const list = beats.flatMap((b, i) => (b.stage === stage ? [{ b, i }] : []));
               const done =
                 own.length > 0 &&
-                own.every((s) => s.status === "completed" || s.status === "skipped");
+                own.every((s) => s.status === "completed" || s.status === "skipped") &&
+                (!startFromBeginning || list.every(({ i }) => i <= index));
               const bad = own.some((s) => s.status === "failed" || s.status === "uncertain");
-              const list = beats.flatMap((b, i) => (b.stage === stage ? [{ b, i }] : []));
               return (
                 <div
                   key={stage}
@@ -373,7 +388,12 @@ export function ArenaConsole({
               <div key={label} className={tone} data-state={METRIC_STATE[label]}>
                 <dt>{label}</dt>
                 <dd>
-                  <Roll value={value} delay={rollDelay} animate={directed && !seeking} />
+                  <Roll
+                    value={value}
+                    delay={rollDelay}
+                    animate={directed}
+                    origin={seeking ? "interaction" : "story"}
+                  />
                 </dd>
               </div>
             ))}
@@ -398,7 +418,7 @@ export function ArenaConsole({
                         : undefined
                     }
                   >
-                    {verdict.preferred ? `建议 ${verdict.preferred}` : "暂无单一建议"}
+                    {verdictLabel(verdict)}
                   </b>
                   <span>{OUTCOME[verdict.outcome]}</span>
                 </div>
@@ -407,7 +427,7 @@ export function ArenaConsole({
               </div>
               <div className="act">
                 <div className="first">
-                  <small>现在第一步</small>
+                  <small>现在该做的第一步</small>
                   <strong>{verdict.nextActions[0]}</strong>
                 </div>
                 <dl>
@@ -427,7 +447,12 @@ export function ArenaConsole({
                 {verdict.nextActions.length > 1 && (
                   <p className="more">接着做：{listOf(verdict.nextActions.slice(1))}</p>
                 )}
-                <button type="button" onClick={() => setWholeResult((w) => !w)}>
+                <button
+                  type="button"
+                  aria-expanded={wholeResult}
+                  aria-controls="verdict"
+                  onClick={() => setWholeResult((w) => !w)}
+                >
                   {wholeResult ? "收起结论" : "看完整结论"}
                 </button>
               </div>
@@ -450,7 +475,7 @@ export function ArenaConsole({
             onStep={setOpenStep}
             onEvidence={onEvidence}
             entering={intro && !revealed}
-            readOnly={historical || busy}
+            readOnly={(historical && !allowRecordedChallenges) || busy}
             onClaim={onClaim}
           />
           <div className="c-rail">
@@ -564,7 +589,7 @@ export function ArenaConsole({
               <small>
                 {demo
                   ? "演示内容：步骤和用量都是预设的，未调用模型。"
-                  : `模型隐藏推理未保存，这里只有真实步骤。${version.modelSelection?.modelId ?? "早期记录：模型未记录"}`}
+                  : `未保存模型的隐藏推理，这里展示的是实际记录的步骤。${version.modelSelection?.modelId ?? "早期记录：模型未记录"}`}
               </small>
             </section>
           </div>
@@ -615,6 +640,22 @@ export function ArenaConsole({
           reviewing={reviewing}
           onOpen={setOpenStep}
           onClose={() => setOpenStep(null)}
+          onFollowUp={
+            onFollowUp && (!historical || allowRecordedChallenges) && !busy
+              ? (context, trigger) => {
+                  setOpenStep(null);
+                  onFollowUp(context, trigger);
+                }
+              : undefined
+          }
+          onAdjustConditions={
+            onAdjustConditions && (!historical || allowRecordedChallenges) && !busy
+              ? (trigger) => {
+                  setOpenStep(null);
+                  onAdjustConditions(trigger);
+                }
+              : undefined
+          }
           onStage={(i) => {
             setOpenStep(null);
             goTo(i);

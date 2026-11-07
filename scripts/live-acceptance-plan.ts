@@ -43,6 +43,7 @@ export function planCases(
   selected?: string[],
   excluded: string[] = [],
   override?: ModelMode,
+  initialOnly = false,
 ) {
   for (const id of [...(selected ?? []), ...excluded])
     if (!fixture.cases.some((item) => item.id === id)) throw new Error(`Unknown case: ${id}`);
@@ -54,7 +55,7 @@ export function planCases(
       checks: item.checks,
       versions: [
         { name: "initial", challenge: item.initial, reason: "Initial frozen acceptance input" },
-        ...(item.changed
+        ...(item.changed && !initialOnly
           ? [
               {
                 name: "changed",
@@ -71,9 +72,13 @@ export function planCases(
           plannedRoute: routeModel(version.challenge, item.plannedMode),
           executionMode,
           executionRoute: routeModel(version.challenge, executionMode),
-          validationLabel: override
-            ? "supplemental-explicit-override-not-planned-mode-validation"
-            : "planned-mode-validation",
+          validationLabel: initialOnly
+            ? override
+              ? "partial-initial-only-explicit-override-not-planned-mode-or-change-chain-validation"
+              : "partial-initial-only-not-change-chain-validation"
+            : override
+              ? "supplemental-explicit-override-not-planned-mode-validation"
+              : "planned-mode-validation",
           semanticReview: { status: "not-reviewed", findings: [] as string[] },
         };
       }),

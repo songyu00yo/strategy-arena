@@ -37,6 +37,11 @@ export interface BillingSettlement {
   outputTokens: number;
   cachedInputTokens: number;
   responseId?: string;
+  serviceTier?: string;
+  model?: string;
+  cacheWriteInputTokens?: number;
+  cacheWrite30mInputTokens?: number;
+  cacheWrite12hInputTokens?: number;
 }
 interface Settings {
   usd_limit_micros: number;
@@ -60,6 +65,11 @@ interface AttemptRow {
   output_tokens: number | null;
   cached_input_tokens: number | null;
   response_id: string | null;
+  service_tier: string | null;
+  model: string | null;
+  cache_write_input_tokens: number | null;
+  cache_write_30m_input_tokens: number | null;
+  cache_write_12h_input_tokens: number | null;
 }
 function invalid(message: string): never {
   throw new BillingError(message, "BILLING_INVALID_CONFIG");
@@ -73,6 +83,52 @@ function identifier(value: string, label: string) {
   if (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(value))
     invalid(`Invalid billing ${label}.`);
   return value;
+}
+function validateSettlementMetadata(settlement: BillingSettlement) {
+  if (settlement.serviceTier !== undefined) identifier(settlement.serviceTier, "service tier");
+  if (settlement.model !== undefined) identifier(settlement.model, "model");
+  const total = settlement.cacheWriteInputTokens;
+  const short = settlement.cacheWrite30mInputTokens;
+  const long = settlement.cacheWrite12hInputTokens;
+  for (const [value, label] of [
+    [total, "cache write input tokens"],
+    [short, "30m cache write input tokens"],
+    [long, "12h cache write input tokens"],
+  ] as const)
+    if (value !== undefined) integer(value, label);
+  if (total === undefined) {
+    if (short !== undefined || long !== undefined)
+      invalid("Cache write breakdown requires total cache write input tokens.");
+    return;
+  }
+  if (settlement.cachedInputTokens + total > settlement.inputTokens)
+    invalid("Cached and cache write input tokens exceed input tokens.");
+  const breakdown = (short ?? 0) + (long ?? 0);
+  if (breakdown > total || (short !== undefined && long !== undefined && breakdown !== total))
+    invalid("Cache write breakdown does not match total cache write input tokens.");
+}
+function migrateSettlementMetadata(connection: DatabaseSync) {
+  // ALTER-only migration: old settlement amounts, timestamps, and rowids stay intact.
+  // Called inside the same write transaction as settings validation, so two workers
+  // cannot race the schema change and a rejected open leaves the ledger unchanged.
+  const columns = new Set(
+    (connection.prepare("PRAGMA table_info(billing_attempts)").all() as { name: string }[]).map(
+      (column) => column.name,
+    ),
+  );
+  const addedColumns = [
+    "service_tier",
+    "model",
+    "cache_write_input_tokens",
+    "cache_write_30m_input_tokens",
+    "cache_write_12h_input_tokens",
+  ];
+  const present = addedColumns.filter((column) => columns.has(column)).length;
+  if (present === addedColumns.length) return;
+  if (present !== 0) invalid("Incomplete billing settlement metadata schema.");
+  connection.exec(
+    readFileSync(resolve(process.cwd(), "migrations/billing/003_settlement_metadata.sql"), "utf8"),
+  );
 }
 export function billingUsdMicros(amount: number, currency: "CNY" | "USD") {
   integer(amount, "amount");
@@ -154,6 +210,7 @@ export function openBillingLedger(options: BillingOptions) {
           "Shared billing settings differ. Existing limits cannot be changed by environment variables.",
           "BILLING_SETTINGS_MISMATCH",
         );
+      migrateSettlementMetadata(connection);
     });
   } catch (error) {
     connection.close();
@@ -246,6 +303,7 @@ export function openBillingLedger(options: BillingOptions) {
       if (settlement.cachedInputTokens > settlement.inputTokens)
         invalid("Cached input tokens exceed input tokens.");
       if (settlement.responseId !== undefined) identifier(settlement.responseId, "response ID");
+      validateSettlementMetadata(settlement);
       return atomic(() => {
         const row = getAttempt(attemptId);
         if (!row) throw new BillingError("Unknown billing attempt.", "BILLING_ATTEMPT_NOT_FOUND");
@@ -255,7 +313,12 @@ export function openBillingLedger(options: BillingOptions) {
             row.input_tokens !== settlement.inputTokens ||
             row.output_tokens !== settlement.outputTokens ||
             row.cached_input_tokens !== settlement.cachedInputTokens ||
-            row.response_id !== (settlement.responseId ?? null)
+            row.response_id !== (settlement.responseId ?? null) ||
+            row.service_tier !== (settlement.serviceTier ?? null) ||
+            row.model !== (settlement.model ?? null) ||
+            row.cache_write_input_tokens !== (settlement.cacheWriteInputTokens ?? null) ||
+            row.cache_write_30m_input_tokens !== (settlement.cacheWrite30mInputTokens ?? null) ||
+            row.cache_write_12h_input_tokens !== (settlement.cacheWrite12hInputTokens ?? null)
           )
             throw new BillingError(
               "Conflicting billing settlement.",
@@ -266,7 +329,9 @@ export function openBillingLedger(options: BillingOptions) {
         connection
           .prepare(
             `UPDATE billing_attempts SET state='settled',amount_micros=?,settled_usd_micros=?,
-            input_tokens=?,output_tokens=?,cached_input_tokens=?,response_id=?,settled_at=? WHERE attempt_id=?`,
+            input_tokens=?,output_tokens=?,cached_input_tokens=?,response_id=?,service_tier=?,model=?,
+            cache_write_input_tokens=?,cache_write_30m_input_tokens=?,cache_write_12h_input_tokens=?,
+            settled_at=? WHERE attempt_id=?`,
           )
           .run(
             settlement.amount,
@@ -275,6 +340,11 @@ export function openBillingLedger(options: BillingOptions) {
             settlement.outputTokens,
             settlement.cachedInputTokens,
             settlement.responseId ?? null,
+            settlement.serviceTier ?? null,
+            settlement.model ?? null,
+            settlement.cacheWriteInputTokens ?? null,
+            settlement.cacheWrite30mInputTokens ?? null,
+            settlement.cacheWrite12hInputTokens ?? null,
             new Date().toISOString(),
             attemptId,
           );

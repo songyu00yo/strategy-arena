@@ -71,7 +71,7 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       to: a.targetStrategyId,
       packet: attackMeta[a.status].label,
       title: `${a.from} 对 ${a.targetStrategyId} 的质疑：${attackMeta[a.status].label}`,
-      plain: "用你给的材料和计算工具查证，不靠模型自己说。",
+      plain: "用你给的材料和计算工具查证，不能只凭模型的说法。",
       attack: a,
     });
   }
@@ -84,7 +84,7 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       agent: r.strategyId,
       title: r.summary,
       plain: changes.length
-        ? `方案 ${r.strategyId} 被质疑后改了：${changes.join("、")}。`
+        ? `方案 ${r.strategyId} 回应质疑后改了：${changes.join("、")}。`
         : `方案 ${r.strategyId} 复核后没有改动。`,
       revision: r,
       changes,

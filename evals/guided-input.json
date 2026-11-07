@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "guided-input-five-models-20261106-v1",
+  "inputProvenance": "Human-authored synthetic acceptance inputs; these are not user research, model outputs or evidence of success.",
+  "requestLimit": 70,
+  "answerPolicy": "Only return the predeclared fact matched by a question pattern. For unrecognized questions or choice options not explicitly listed, answer unknown; never infer a new fact or invent personal details.",
+  "commonGoal": "两名大一学生计划在两周内用现有笔记本做一个本地可展示的课程作品页，集中展示三个已完成练习。总预算上限300元，总工时上限12小时（两人合计）。两人目前只懂基础HTML和CSS；不能增加成员，不能购买服务器或使用收费平台，也不收集账号或个人信息。请比较从零手写、改现成静态模板、用免费静态生成工具三条路线，给出先验证再实施的行动步骤。",
+  "facts": [
+    {
+      "pattern": "预算|支出|花费|花钱|愿意花",
+      "text": "总预算上限300元，不能购买服务器或使用收费平台。",
+      "number": "300",
+      "options": ["300元", "300", "不超过300元", "300元以内"],
+      "numberUnits": ["元", "人民币", "CNY"]
+    },
+    {
+      "pattern": "总工时|合计.*小时|总.*小时",
+      "text": "总工时上限12小时，两人合计，不是每周工时。",
+      "number": "12",
+      "options": ["12小时", "12"],
+      "numberUnits": ["小时", "工时", "h"]
+    },
+    {
+      "pattern": "人数|几人|几个人|成员|团队规模",
+      "text": "现有两名大一学生，不能增加成员。",
+      "number": "2",
+      "options": ["2人", "两人", "2"],
+      "numberUnits": ["人", "名"]
+    },
+    {
+      "pattern": "期限|截止|多久|几周",
+      "text": "期限为两周。",
+      "number": "2",
+      "options": ["两周", "2周", "2"],
+      "numberUnits": ["周", "星期"]
+    },
+    {
+      "pattern": "基础|经验|技能|能力",
+      "text": "两人目前只懂基础HTML和CSS。",
+      "options": ["基础HTML和CSS"],
+      "numberUnits": []
+    },
+    {
+      "pattern": "设备|电脑|笔记本",
+      "text": "只使用现有笔记本，不购买服务器或使用收费平台。",
+      "options": ["现有笔记本"],
+      "numberUnits": []
+    },
+    {
+      "pattern": "内容|作品|目标受众|展示对象",
+      "text": "做一个本地可展示的课程作品页，展示三个已完成练习。",
+      "options": ["本地展示", "三个已完成练习"],
+      "numberUnits": []
+    }
+  ],
+  "assets": {
+    "chartLines": [
+      "SYNTHETIC INPUT",
+      "Current team: 2 people",
+      "Total spending cap: CNY 300",
+      "Total work cap: 12 hours",
+      "Plan A: CNY 80 / 4 hours",
+      "Plan B: CNY 120 / 6 hours",
+      "Plan C: CNY 200 / 10 hours",
+      "Inputs only; not invoices."
+    ],
+    "csv": "route,spending_cny,hours\nA,80,4\nB,120,6\nC,200,10\n",
+    "docxParagraphs": [
+      "Synthetic comparison brief",
+      "Two current team members; do not add people.",
+      "The spending cap is CNY 300; total work cap is 12 hours.",
+      "This document contains declared scenario inputs, not externally verified facts."
+    ]
+  },
+  "cases": [
+    {
+      "id": "terra-full",
+      "modelId": "gpt-6.1-terra",
+      "scope": "full-flow"
+    },
+    {
+      "id": "sol-full",
+      "modelId": "gpt-6.1-sol",
+      "scope": "full-flow"
+    },
+    {
+      "id": "astra-full",
+      "modelId": "gpt-6-astra",
+      "scope": "full-flow"
+    },
+    {
+      "id": "luna-full",
+      "modelId": "gpt-6-luna",
+      "scope": "full-flow"
+    },
+    {
+      "id": "deepseek-full",
+      "modelId": "deepseek-flash",
+      "scope": "full-flow"
+    },
+    {
+      "id": "terra-vision-documents",
+      "modelId": "gpt-6.1-terra",
+      "scope": "vision-summary",
+      "goal": "请读取上传的计划图、扫描PDF、CSV和DOCX，按文件和页码区分转录原文、图表解读与未知内容，整理用于比较三条课程作品页路线的任务摘要。图像中的数字是合成情景输入，不是外部报价或真实发票。",
+      "facts": []
+    },
+    {
+      "id": "deepseek-vision-documents",
+      "modelId": "deepseek-flash",
+      "scope": "vision-summary",
+      "goal": "请读取上传的计划图、扫描PDF、CSV和DOCX，按文件和页码区分转录原文、图表解读与未知内容，整理用于比较三条课程作品页路线的任务摘要。图像中的数字是合成情景输入，不是外部报价或真实发票。",
+      "facts": []
+    },
+    {
+      "id": "terra-short-questions",
+      "modelId": "gpt-6.1-terra",
+      "scope": "questions-summary",
+      "goal": "我想做个作品页",
+      "facts": []
+    }
+  ],
+  "checks": [
+    "The same exact selected model is used for intake, image reading and arena calls.",
+    "At most two question rounds; unprovided details remain unknown and do not become hard numeric limits.",
+    "Five full-flow cases use the exact same initial goal and answer rules; this is not a quality leaderboard.",
+    "Vision previews use synthetic files and real provider calls, preserving actual locations and interpretation labels.",
+    "A new unknown or unreviewed billing hold stops the whole batch immediately.",
+    "Completion of API flow is distinct from manual semantic acceptance and real browser acceptance."
+  ]
+}

@@ -81,6 +81,40 @@ describe("console motion ownership and interruption", () => {
     expect(removed).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps explicit interaction motion running while an overlay holds the story", async () => {
+    const motion = await import("../src/components/console/motion-runtime");
+    const release = motion.acquireMotionHold();
+    const story = motion.createMotionScope();
+    const interaction = motion.createMotionScope("interaction");
+    const storyDone = vi.fn();
+    const interactionDone = vi.fn();
+    const animation = Object.assign(new EventTarget(), {
+      playState: "running",
+      pause: vi.fn(),
+      play: vi.fn(),
+      cancel: vi.fn(),
+      onfinish: null,
+    });
+    interaction.animate({ animate: () => animation } as unknown as Element, [], { duration: 560 });
+    story.later(420, storyDone);
+    interaction.later(420, interactionDone);
+    let frames = 0;
+    const loop = motion.createMotionLoop(() => ++frames < 2, "interaction");
+    vi.advanceTimersByTime(560);
+    expect(animation.pause).not.toHaveBeenCalled();
+    expect(interactionDone).toHaveBeenCalledOnce();
+    expect(storyDone).not.toHaveBeenCalled();
+    expect(frames).toBe(2);
+    expect(interaction.now()).toBe(560);
+    expect(story.now()).toBe(0);
+    release();
+    vi.advanceTimersByTime(420);
+    expect(storyDone).toHaveBeenCalledOnce();
+    loop.dispose();
+    interaction.dispose();
+    story.dispose();
+  });
+
   it("sleeps when idle or held and never duplicates RAF when particles wake inside a tick", async () => {
     const motion = await import("../src/components/console/motion-runtime");
     let frames = 0;

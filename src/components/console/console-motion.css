@@ -54,8 +54,7 @@
   animation: none;
 }
 .c-root.is-seeking .c-log .hot,
-.c-root.is-seeking .c-row,
-.c-root.is-seeking .struck {
+.c-root.is-seeking .c-row {
   animation: none;
 }
 .c-root.is-seeking .c-scope i {

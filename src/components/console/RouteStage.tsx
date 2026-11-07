@@ -5,7 +5,13 @@ import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
 import type { Beat } from "./beats";
-import { createMotionLoop, createMotionScope, motionNow, motionPaused } from "./motion-runtime";
+import {
+  createMotionLoop,
+  createMotionScope,
+  motionNow,
+  motionPaused,
+  useReducedMotion,
+} from "./motion-runtime";
 import "./stage-motion.css";
 
 const CLAIM = { user: "用户给定", estimate: "估算", unknown: "待核", supported: "有据" };
@@ -73,6 +79,7 @@ export function RouteStage({
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
 }) {
+  const reducePreference = useReducedMotion();
   const motionSpeed = seeking ? 1.25 : speed;
   const shown = beats.slice(0, index + 1);
   const current = beats[index] ?? null;
@@ -144,7 +151,7 @@ export function RouteStage({
 
   // Every asynchronous decoration belongs to the selected step, even after it has started.
   useLayoutEffect(() => {
-    const scope = createMotionScope();
+    const scope = createMotionScope(seeking ? "interaction" : "story");
     stepMotion.current = scope;
     fx.current?.clear();
     if (!directed) {
@@ -156,7 +163,7 @@ export function RouteStage({
       scope.dispose();
       if (stepMotion.current === scope) stepMotion.current = null;
     };
-  }, [beatId, directed]);
+  }, [beatId, directed, seeking, reducePreference]);
 
   const isDirected = () => directed && !reducedMotion();
 
@@ -171,7 +178,7 @@ export function RouteStage({
     flight.current = {
       attack: activeAttack,
       kind: current.stage,
-      began: motionNow(),
+      began: seeking ? performance.now() : motionNow(),
       wait: animate ? lead + (current.stage === "attack" ? 260 : 560) / motionSpeed : 0,
       duration: animate ? 720 / motionSpeed : 0,
       landed: !animate,
@@ -202,7 +209,7 @@ export function RouteStage({
     }
     // Only a new step launches a flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beatId, directed]);
+  }, [beatId, directed, seeking, reducePreference]);
 
   // Energy hands the story on: timeline to board, then each step's own choreography.
   useEffect(() => {
@@ -328,7 +335,7 @@ export function RouteStage({
 
     // A step's choreography plays once, when that step arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beatId, directed]);
+  }, [beatId, directed, seeking, reducePreference]);
 
   // One loop runs everything, so every moving part stays in phase.
   useEffect(() => {
@@ -337,6 +344,25 @@ export function RouteStage({
     const surface = canvas.current;
     const el = world.current;
     if (!host || !dot || !surface || !el) return;
+    if (reducePreference) {
+      flight.current = null;
+      for (const body of Object.values(bodies.current)) {
+        for (const axis of [body.x, body.y, body.z, body.r]) axis.p = axis.v = 0;
+        body.rest = true;
+      }
+      el.querySelectorAll<HTMLElement>("[data-board]").forEach((node) => {
+        node.style.translate = "";
+        node.style.rotate = "";
+      });
+      for (const axis of [cam.current.x, cam.current.y, cam.current.r]) axis.p = axis.v = 0;
+      cam.current.s.p = 1;
+      cam.current.s.v = 0;
+      el.style.transform = "none";
+      if (rig.current) rig.current.style.transform = "none";
+      dot.style.opacity = "0";
+      surface.getContext("2d")?.clearRect(0, 0, surface.width, surface.height);
+      return;
+    }
     const sparks = new Sparks(surface, () => wake.current());
     fx.current = sparks;
     const reduce = reducedMotion();
@@ -415,183 +441,187 @@ export function RouteStage({
       ).onfinish = () => piece.remove();
     };
 
-    const loop = createMotionLoop((now, dt) => {
-      // Read all HTML geometry before writing transforms or SVG attributes.
-      const measuring = kick.current > 0 || (!!flight.current && !flight.current.landed);
-      const origin = measuring ? host.getBoundingClientRect() : null;
-      const rects = new Map<string, DOMRect>();
-      const claims = new Map<string, DOMRect>();
-      if (measuring) {
-        for (const id of ["A", "B", "C"]) {
-          const node = host.querySelector(`[data-board="${id}"]`);
-          if (node) rects.set(id, node.getBoundingClientRect());
-        }
-        for (const attack of live.current) {
-          const id = `${attack.targetStrategyId}:${attack.targetClaimId}`;
-          const node = host.querySelector(`[data-claim="${id}"]`);
-          if (node && !claims.has(id)) claims.set(id, node.getBoundingClientRect());
-        }
-      }
-      const rect = (id: string) => rects.get(id);
-
-      // Camera: sprung, with a slow drift so a held shot never goes dead.
-      const c = cam.current;
-      const on = filming.current && !reduce;
-      const aim = on ? shot.current : { x: 0, y: 0, s: 1, r: 0 };
-      const stiffness = directedRef.current ? 30 : 180;
-      const damping = directedRef.current ? 9.5 : 27;
-      spring(c.x, aim.x, stiffness, damping, dt);
-      spring(c.y, aim.y, stiffness, damping, dt);
-      spring(c.s, aim.s, stiffness, damping, dt);
-      spring(c.r, aim.r, stiffness, damping, dt);
-      const moving =
-        Math.abs(c.x.v) + Math.abs(c.y.v) + Math.abs(c.r.v) > 0.04 ||
-        Math.abs(c.s.v) > 0.0004 ||
-        Math.abs(c.x.p - aim.x) + Math.abs(c.y.p - aim.y) + Math.abs(c.r.p - aim.r) > 0.04 ||
-        Math.abs(c.s.p - aim.s) > 0.0004;
-      if (moving) {
-        kick.current = 2;
-        el.style.transform = `translate3d(${c.x.p}px,${c.y.p}px,0) scale(${c.s.p}) rotateY(${c.r.p}deg)`;
-      } else if (!on && el.style.transform !== "none") {
-        el.style.transform = "none";
-      }
-
-      // Boards: each on its own spring, so a blow rings through them and settles.
-      let bodyMoving = false;
-      for (const id of ["A", "B", "C"]) {
-        const b = bodies.current[id];
-        if (b.rest && !b.x.v && !b.y.v && !b.z.v && !b.r.v) continue;
-        const node = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
-        if (!node) continue;
-        const k = directedRef.current ? 70 : 220;
-        const damping = directedRef.current ? 9 : 30;
-        spring(b.x, 0, k, damping, dt);
-        spring(b.y, 0, k, damping, dt);
-        spring(b.z, 0, k, damping, dt);
-        spring(b.r, 0, k, damping, dt);
-        const quiet =
-          Math.abs(b.x.p) + Math.abs(b.y.p) + Math.abs(b.z.p) + Math.abs(b.r.p) < 0.05 &&
-          Math.abs(b.x.v) + Math.abs(b.z.v) < 0.5;
-        if (quiet) {
-          for (const axis of [b.x, b.y, b.z, b.r]) axis.p = axis.v = 0;
-          b.rest = true;
-          node.style.translate = "";
-          node.style.rotate = "";
-        } else {
-          b.rest = false;
-          bodyMoving = true;
-          kick.current = 2;
-          node.style.translate = `${b.x.p}px ${b.y.p}px ${b.z.p}px`;
-          node.style.rotate = `y ${b.r.p}deg`;
-        }
-      }
-
-      const flying = flight.current;
-      const elapsed = flying ? now - flying.began - flying.wait : 0;
-      const k = flying
-        ? flying.duration
-          ? Math.max(0, Math.min(1, elapsed / flying.duration))
-          : 1
-        : 0;
-      const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-
-      // Threads are re-measured only while something moves: reading layout every frame is what cost time.
-      if (kick.current > 0) kick.current -= 1;
-      const middle = measuring ? rect("B") : undefined;
-      (origin ? live.current : []).forEach((a, i) => {
-        const path = paths.current.get(a.id);
-        const flow = flows.current.get(a.id);
-        const from = rect(a.from);
-        const box = rect(a.targetStrategyId);
-        if (!path || !from || !box || !origin) return;
-        const claim = claims.get(`${a.targetStrategyId}:${a.targetClaimId}`);
-        const rightward = from.left < box.left;
-        const y = claim
-          ? Math.min(box.bottom - 8, Math.max(box.top + 8, claim.top + claim.height / 2))
-          : box.top + 30;
-        const sx = (rightward ? from.right : from.left) - origin.left;
-        const sy = from.top + 34 + (i % 6) * 15 - origin.top;
-        const tx = (rightward ? box.left : box.right) - origin.left;
-        const ty = y - origin.top;
-        const bend = Math.max(36, Math.abs(tx - sx) * 0.42) * (rightward ? 1 : -1);
-        // A and C talk around B: their thread runs below it instead of across its text.
-        const across = a.from !== "B" && a.targetStrategyId !== "B" && middle;
-        let d = `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`;
-        if (across) {
-          const lane = middle.bottom - origin.top + 10 + (i % 6) * 5;
-          const near = (rightward ? middle.left - 6 : middle.right + 6) - origin.left;
-          const far = (rightward ? middle.right + 6 : middle.left - 6) - origin.left;
-          d = `M${sx},${sy} C${(sx + near) / 2},${sy} ${(sx + near) / 2},${lane} ${near},${lane} L${far},${lane} C${(far + tx) / 2},${lane} ${(far + tx) / 2},${ty} ${tx},${ty}`;
-        }
-        const drawing = flying?.kind === "attack" && flying.attack.id === a.id && eased < 1;
-        const from_ = dots.current.get(`${a.id}:from`);
-        const to_ = dots.current.get(`${a.id}:to`);
-        from_?.setAttribute("cx", String(sx));
-        from_?.setAttribute("cy", String(sy));
-        to_?.setAttribute("cx", String(tx));
-        to_?.setAttribute("cy", String(ty));
-        to_?.setAttribute("opacity", drawing ? "0" : "1");
-        path.setAttribute("d", d);
-        flow?.setAttribute("d", d);
-        path.style.strokeDashoffset =
-          flying?.kind === "attack" && flying.attack.id === a.id ? String(1 - eased) : "0";
-      });
-
-      if (!flying || (flying.landed && flying.duration > 0)) dot.style.opacity = "0";
-      const path = flying && paths.current.get(flying.attack.id);
-      if (flying && origin && path?.getAttribute("d")) {
-        const color =
-          flying.kind === "verify"
-            ? STATE_COLOR[flying.attack.status]
-            : (ROUTE_COLOR[flying.attack.from] ?? STATE_COLOR.attack);
-        const point = path.getPointAtLength(path.getTotalLength() * eased);
-        const px = point.x + origin.left;
-        const py = point.y + origin.top;
-        dot.style.transform = `translate(${point.x}px,${point.y}px) translate(-50%,-50%)`;
-        // Once it lands the label steps aside, so it never sits on the sentence it points at.
-        dot.style.opacity = elapsed < 0 || (flying.duration > 0 && flying.landed) ? "0" : "1";
-        if (elapsed < 0 && flying.kind === "attack" && elapsed > -260) sparks.charge(px, py, color);
-        if (elapsed >= 0 && k < 1 && flying.duration) sparks.comet(px, py, color);
-        if (k >= 1 && !flying.landed) {
-          flying.landed = true;
-          const strong = flying.kind === "verify" && flying.attack.status === "supported";
-          sparks.impact(px, py, color, strong ? 1.25 : 0.75);
-          shockwave(px, py, strong ? 1.2 : 0.7);
-          if (flying.kind === "attack") {
-            tear(flying.attack);
-          } else {
-            // Beside the sentence rather than on it, so the words stay readable.
-            stamp(
-              point.x + (point.x > origin.width / 2 ? -86 : 86),
-              Math.max(22, point.y - 40),
-              flying.attack,
-            );
-            host
-              .querySelectorAll(
-                `[data-claim="${flying.attack.targetStrategyId}:${flying.attack.targetClaimId}"] .struck`,
-              )
-              .forEach((line) => {
-                const box = line.getBoundingClientRect();
-                sparks.burn(box.left, box.top, box.width, color);
-              });
-            // The result flows up into the running count, which rolls as it arrives.
-            const metric = document
-              .querySelector(`.c-metrics [data-state="${flying.attack.status}"] dd`)
-              ?.getBoundingClientRect();
-            if (metric) {
-              const to = centre(metric);
-              sparks.stream(px, py, to.x, to.y, color, 620);
-            }
+    const loop = createMotionLoop(
+      (now, dt) => {
+        // Read all HTML geometry before writing transforms or SVG attributes.
+        const measuring = kick.current > 0 || (!!flight.current && !flight.current.landed);
+        const origin = measuring ? host.getBoundingClientRect() : null;
+        const rects = new Map<string, DOMRect>();
+        const claims = new Map<string, DOMRect>();
+        if (measuring) {
+          for (const id of ["A", "B", "C"]) {
+            const node = host.querySelector(`[data-board="${id}"]`);
+            if (node) rects.set(id, node.getBoundingClientRect());
           }
-          const log = document.querySelector(".c-log .hot")?.getBoundingClientRect();
-          if (log) sparks.stream(px, py, log.left + 30, log.top + 8, color, 720);
+          for (const attack of live.current) {
+            const id = `${attack.targetStrategyId}:${attack.targetClaimId}`;
+            const node = host.querySelector(`[data-claim="${id}"]`);
+            if (node && !claims.has(id)) claims.set(id, node.getBoundingClientRect());
+          }
         }
-      }
-      sparks.tick(dt);
-      return (
-        moving || bodyMoving || kick.current > 0 || !!(flying && !flying.landed) || sparks.active
-      );
-    });
+        const rect = (id: string) => rects.get(id);
+
+        // Camera: sprung, with a slow drift so a held shot never goes dead.
+        const c = cam.current;
+        const on = filming.current && !reduce;
+        const aim = on ? shot.current : { x: 0, y: 0, s: 1, r: 0 };
+        const stiffness = directedRef.current ? 30 : 180;
+        const damping = directedRef.current ? 9.5 : 27;
+        spring(c.x, aim.x, stiffness, damping, dt);
+        spring(c.y, aim.y, stiffness, damping, dt);
+        spring(c.s, aim.s, stiffness, damping, dt);
+        spring(c.r, aim.r, stiffness, damping, dt);
+        const moving =
+          Math.abs(c.x.v) + Math.abs(c.y.v) + Math.abs(c.r.v) > 0.04 ||
+          Math.abs(c.s.v) > 0.0004 ||
+          Math.abs(c.x.p - aim.x) + Math.abs(c.y.p - aim.y) + Math.abs(c.r.p - aim.r) > 0.04 ||
+          Math.abs(c.s.p - aim.s) > 0.0004;
+        if (moving) {
+          kick.current = 2;
+          el.style.transform = `translate3d(${c.x.p}px,${c.y.p}px,0) scale(${c.s.p}) rotateY(${c.r.p}deg)`;
+        } else if (!on && el.style.transform !== "none") {
+          el.style.transform = "none";
+        }
+
+        // Boards: each on its own spring, so a blow rings through them and settles.
+        let bodyMoving = false;
+        for (const id of ["A", "B", "C"]) {
+          const b = bodies.current[id];
+          if (b.rest && !b.x.v && !b.y.v && !b.z.v && !b.r.v) continue;
+          const node = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
+          if (!node) continue;
+          const k = directedRef.current ? 70 : 220;
+          const damping = directedRef.current ? 9 : 30;
+          spring(b.x, 0, k, damping, dt);
+          spring(b.y, 0, k, damping, dt);
+          spring(b.z, 0, k, damping, dt);
+          spring(b.r, 0, k, damping, dt);
+          const quiet =
+            Math.abs(b.x.p) + Math.abs(b.y.p) + Math.abs(b.z.p) + Math.abs(b.r.p) < 0.05 &&
+            Math.abs(b.x.v) + Math.abs(b.z.v) < 0.5;
+          if (quiet) {
+            for (const axis of [b.x, b.y, b.z, b.r]) axis.p = axis.v = 0;
+            b.rest = true;
+            node.style.translate = "";
+            node.style.rotate = "";
+          } else {
+            b.rest = false;
+            bodyMoving = true;
+            kick.current = 2;
+            node.style.translate = `${b.x.p}px ${b.y.p}px ${b.z.p}px`;
+            node.style.rotate = `y ${b.r.p}deg`;
+          }
+        }
+
+        const flying = flight.current;
+        const elapsed = flying ? now - flying.began - flying.wait : 0;
+        const k = flying
+          ? flying.duration
+            ? Math.max(0, Math.min(1, elapsed / flying.duration))
+            : 1
+          : 0;
+        const eased = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+
+        // Threads are re-measured only while something moves: reading layout every frame is what cost time.
+        if (kick.current > 0) kick.current -= 1;
+        const middle = measuring ? rect("B") : undefined;
+        (origin ? live.current : []).forEach((a, i) => {
+          const path = paths.current.get(a.id);
+          const flow = flows.current.get(a.id);
+          const from = rect(a.from);
+          const box = rect(a.targetStrategyId);
+          if (!path || !from || !box || !origin) return;
+          const claim = claims.get(`${a.targetStrategyId}:${a.targetClaimId}`);
+          const rightward = from.left < box.left;
+          const y = claim
+            ? Math.min(box.bottom - 8, Math.max(box.top + 8, claim.top + claim.height / 2))
+            : box.top + 30;
+          const sx = (rightward ? from.right : from.left) - origin.left;
+          const sy = from.top + 34 + (i % 6) * 15 - origin.top;
+          const tx = (rightward ? box.left : box.right) - origin.left;
+          const ty = y - origin.top;
+          const bend = Math.max(36, Math.abs(tx - sx) * 0.42) * (rightward ? 1 : -1);
+          // A and C talk around B: their thread runs below it instead of across its text.
+          const across = a.from !== "B" && a.targetStrategyId !== "B" && middle;
+          let d = `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`;
+          if (across) {
+            const lane = middle.bottom - origin.top + 10 + (i % 6) * 5;
+            const near = (rightward ? middle.left - 6 : middle.right + 6) - origin.left;
+            const far = (rightward ? middle.right + 6 : middle.left - 6) - origin.left;
+            d = `M${sx},${sy} C${(sx + near) / 2},${sy} ${(sx + near) / 2},${lane} ${near},${lane} L${far},${lane} C${(far + tx) / 2},${lane} ${(far + tx) / 2},${ty} ${tx},${ty}`;
+          }
+          const drawing = flying?.kind === "attack" && flying.attack.id === a.id && eased < 1;
+          const from_ = dots.current.get(`${a.id}:from`);
+          const to_ = dots.current.get(`${a.id}:to`);
+          from_?.setAttribute("cx", String(sx));
+          from_?.setAttribute("cy", String(sy));
+          to_?.setAttribute("cx", String(tx));
+          to_?.setAttribute("cy", String(ty));
+          to_?.setAttribute("opacity", drawing ? "0" : "1");
+          path.setAttribute("d", d);
+          flow?.setAttribute("d", d);
+          path.style.strokeDashoffset =
+            flying?.kind === "attack" && flying.attack.id === a.id ? String(1 - eased) : "0";
+        });
+
+        if (!flying || (flying.landed && flying.duration > 0)) dot.style.opacity = "0";
+        const path = flying && paths.current.get(flying.attack.id);
+        if (flying && origin && path?.getAttribute("d")) {
+          const color =
+            flying.kind === "verify"
+              ? STATE_COLOR[flying.attack.status]
+              : (ROUTE_COLOR[flying.attack.from] ?? STATE_COLOR.attack);
+          const point = path.getPointAtLength(path.getTotalLength() * eased);
+          const px = point.x + origin.left;
+          const py = point.y + origin.top;
+          dot.style.transform = `translate(${point.x}px,${point.y}px) translate(-50%,-50%)`;
+          // Once it lands the label steps aside, so it never sits on the sentence it points at.
+          dot.style.opacity = elapsed < 0 || (flying.duration > 0 && flying.landed) ? "0" : "1";
+          if (elapsed < 0 && flying.kind === "attack" && elapsed > -260)
+            sparks.charge(px, py, color);
+          if (elapsed >= 0 && k < 1 && flying.duration) sparks.comet(px, py, color);
+          if (k >= 1 && !flying.landed) {
+            flying.landed = true;
+            const strong = flying.kind === "verify" && flying.attack.status === "supported";
+            sparks.impact(px, py, color, strong ? 1.25 : 0.75);
+            shockwave(px, py, strong ? 1.2 : 0.7);
+            if (flying.kind === "attack") {
+              tear(flying.attack);
+            } else {
+              // Beside the sentence rather than on it, so the words stay readable.
+              stamp(
+                point.x + (point.x > origin.width / 2 ? -86 : 86),
+                Math.max(22, point.y - 40),
+                flying.attack,
+              );
+              host
+                .querySelectorAll(
+                  `[data-claim="${flying.attack.targetStrategyId}:${flying.attack.targetClaimId}"] .struck`,
+                )
+                .forEach((line) => {
+                  const box = line.getBoundingClientRect();
+                  sparks.burn(box.left, box.top, box.width, color);
+                });
+              // The result flows up into the running count, which rolls as it arrives.
+              const metric = document
+                .querySelector(`.c-metrics [data-state="${flying.attack.status}"] dd`)
+                ?.getBoundingClientRect();
+              if (metric) {
+                const to = centre(metric);
+                sparks.stream(px, py, to.x, to.y, color, 620);
+              }
+            }
+            const log = document.querySelector(".c-log .hot")?.getBoundingClientRect();
+            if (log) sparks.stream(px, py, log.left + 30, log.top + 8, color, 720);
+          }
+        }
+        sparks.tick(dt);
+        return (
+          moving || bodyMoving || kick.current > 0 || !!(flying && !flying.landed) || sparks.active
+        );
+      },
+      seeking ? "interaction" : "story",
+    );
     wake.current = loop.wake;
     return () => {
       loop.dispose();
@@ -602,7 +632,7 @@ export function RouteStage({
     };
     // The loop reads current state through refs and lives as long as the stage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [seeking, reducePreference]);
 
   // The shot for this step. Every board stays in frame: the camera leans and pushes, it never hides.
   useLayoutEffect(() => {
@@ -701,14 +731,14 @@ export function RouteStage({
     if (entering || !directed || reducedMotion()) return;
     const scope = createMotionScope();
     scope.later(80, () => {
-      push("A", -25, 22, 300, 8);
-      push("B", 0, 25, 340, 0);
-      push("C", 25, 22, 300, -8);
+      push("A", -50, 44, 900, 18);
+      push("B", 0, 50, 1000, 0);
+      push("C", 50, 44, 900, -18);
     });
     stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
       scope.animate(node, [{ opacity: 0 }, { opacity: 1 }], {
-        duration: 420,
-        delay: 80 + i * 60,
+        duration: 620,
+        delay: 80 + i * 90,
         easing: "ease-out",
         fill: "backwards",
       });
@@ -716,7 +746,7 @@ export function RouteStage({
     return () => scope.dispose();
     // Start only when the opening shutter changes, not when playback resumes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entering]);
+  }, [entering, reducePreference]);
 
   // The room leans toward the pointer during a replay; at rest the boards hold still for clicking.
   useEffect(() => {
@@ -784,8 +814,8 @@ export function RouteStage({
     const pick = seen.has("judge") && version.verdict?.preferred === id;
     const speaking = current?.agent === id;
     const target = !speaking && current?.to === id;
-    const enter = directed && !seeking && current?.id === `p:${id}`;
-    const rewriting = directed && !seeking && current?.id === `r:${id}`;
+    const enter = directed && current?.id === `p:${id}`;
+    const rewriting = directed && current?.id === `r:${id}`;
     return (
       <section
         key={id}
@@ -829,11 +859,12 @@ export function RouteStage({
                   data-claim={`${id}:${claimId}`}
                   className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
                   disabled={readOnly || !after}
-                  title={after ? "向这条判断发起挑战" : "这条主张已撤回"}
+                  title={after ? "质疑这条判断" : "这条主张已撤回"}
                   onClick={() => onClaim(view, claimId)}
                 >
                   <em>
                     {claimId} {CLAIM[claim.status]}
+                    {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
                     {!after && " · 已撤回"}
                     {!before && " · 新增"}
                     {hits.map((a) => (

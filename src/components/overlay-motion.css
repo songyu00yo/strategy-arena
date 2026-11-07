@@ -22,3 +22,65 @@
 .drawer-backdrop.overlay-motion .evidence-drawer {
   position: relative;
 }
+
+/* Writing stays beside the workbench; long reference text expands only when requested. */
+.console-shell .modal.modal-side {
+  position: fixed;
+  inset: 50% 16px auto auto;
+  translate: 0 -50%;
+  width: min(404px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(76dvh, 680px);
+  margin: 0;
+  padding: 16px;
+  border: 1px solid #cbd1da;
+  border-radius: 12px;
+  box-shadow: 0 12px 44px rgb(11 13 16 / 0.18);
+  overscroll-behavior: contain;
+}
+.console-shell .modal.modal-side::backdrop {
+  background: rgb(20 28 42 / 0.08);
+  backdrop-filter: none;
+}
+.modal-side .modal-heading {
+  margin-bottom: 12px;
+  gap: 12px;
+}
+.console-shell .modal-side .modal-heading h2 {
+  font-size: 18px;
+}
+.console-shell .modal-side blockquote {
+  font-size: 12px;
+  font-weight: 400;
+}
+.modal-side .condition-editor-bottom,
+.modal-side .step-follow-up-actions,
+.modal-side .recorded-challenge-actions {
+  position: sticky;
+  bottom: -16px;
+  z-index: 2;
+  padding: 12px 0 8px;
+  background: #fff;
+  border-top: 1px solid #e8ebef;
+}
+.modal-side .field textarea {
+  min-height: 88px;
+}
+@media (max-width: 650px) {
+  .console-shell .modal.modal-side {
+    inset: auto 12px 12px 12px;
+    translate: none;
+    width: auto;
+    max-height: calc(100dvh - 24px);
+    padding: 14px;
+  }
+  .modal-side .field textarea,
+  .modal-side .field input {
+    font-size: 16px;
+  }
+  .modal-side .condition-editor-bottom,
+  .modal-side .step-follow-up-actions,
+  .modal-side .recorded-challenge-actions {
+    bottom: -14px;
+  }
+}

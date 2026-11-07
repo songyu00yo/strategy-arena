@@ -28,17 +28,19 @@ interface Options {
   cases?: string[];
   exclude: string[];
   override?: ModelMode;
+  initialOnly?: true;
   acknowledgeHeld?: string[];
   acknowledgementReason?: string;
   help: boolean;
 }
-function options(args: string[]): Options {
+export function parseLiveAcceptanceOptions(args: string[]): Options {
   const result: Options = { run: false, exclude: [], help: false };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--run") result.run = true;
     else if (arg === "--dry-run") result.run = false;
     else if (arg === "--help") result.help = true;
+    else if (arg === "--initial-only") result.initialOnly = true;
     else {
       if (
         ![
@@ -91,6 +93,7 @@ interface RecordFile {
     cases?: string[];
     exclude: string[];
     override?: ModelMode;
+    initialOnly?: true;
     heldAcknowledgement?: HeldAcknowledgement;
   };
   provenance: {
@@ -110,6 +113,33 @@ interface RecordFile {
   semanticAcceptance: "not-reviewed";
   captureScope: string;
 }
+export function resolveLiveAcceptanceExecutionOptions(
+  opts: Options,
+  saved?: RecordFile["executionOptions"],
+): RecordFile["executionOptions"] {
+  if (saved) {
+    if (
+      opts.cases ||
+      opts.exclude.length ||
+      opts.override ||
+      opts.initialOnly ||
+      opts.acknowledgeHeld ||
+      opts.acknowledgementReason
+    )
+      throw new Error(
+        "Resume retains saved selection, initial-only, override and acknowledgement; do not replace them",
+      );
+    return saved;
+  }
+  return {
+    cases: opts.cases,
+    exclude: opts.exclude,
+    override: opts.override,
+    ...(opts.initialOnly ? { initialOnly: true as const } : {}),
+    heldAcknowledgement: heldAcknowledgement(opts.acknowledgeHeld, opts.acknowledgementReason),
+  };
+}
+
 function safeCode(error: unknown) {
   const code = (error as { code?: unknown })?.code;
   return typeof code === "string" && /^[A-Z0-9_:-]{1,100}$/.test(code) ? code : "RUNNER_ERROR";
@@ -140,10 +170,10 @@ function sourceProvenance(): RecordFile["provenance"] {
 }
 
 async function main() {
-  const opts = options(process.argv.slice(2));
+  const opts = parseLiveAcceptanceOptions(process.argv.slice(2));
   if (opts.help) {
     console.log(
-      "Dry run: pnpm exec tsx scripts/live-acceptance.ts [--cases learning,team] [--exclude creation] [--model-mode deepseek]\nReal run: add --run --out artifacts/live-acceptance-NAME.json\nReviewed pre-existing holds only: --acknowledge-held ID[,ID] --acknowledgement-reason TEXT (exact startup set, no reserved attempts; old reservations remain charged/held)\nResume: --run --resume artifacts/live-acceptance-NAME.json (saved selection/override/acknowledgement retained)\nNo .env files are loaded. Set explicit arena and shared billing database paths. Terminal/uncertain attempts are never blindly retried. All semantic review remains manual.",
+      "Dry run: pnpm exec tsx scripts/live-acceptance.ts [--cases learning,team] [--exclude creation] [--model-mode deepseek] [--initial-only]\nInitial-only: initial inputs only; partial regression, not change-chain validation. No changed-only mode.\nReal run: add --run --out artifacts/live-acceptance-NAME.json\nReviewed pre-existing holds only: --acknowledge-held ID[,ID] --acknowledgement-reason TEXT (exact startup set, no reserved attempts; old reservations remain charged/held)\nResume: --run --resume artifacts/live-acceptance-NAME.json (saved selection/initial-only/override/acknowledgement retained; do not pass selection flags)\nNo .env files are loaded. Set explicit arena and shared billing database paths. Terminal/uncertain attempts are never blindly retried. All semantic review remains manual.",
     );
     return;
   }
@@ -152,23 +182,7 @@ async function main() {
   const previous: RecordFile | undefined = opts.resume
     ? JSON.parse(readFileSync(opts.resume, "utf8"))
     : undefined;
-  if (
-    previous &&
-    (opts.cases ||
-      opts.exclude.length ||
-      opts.override ||
-      opts.acknowledgeHeld ||
-      opts.acknowledgementReason)
-  )
-    throw new Error(
-      "Resume retains saved selection, override and acknowledgement; do not replace them",
-    );
-  const executionOptions = previous?.executionOptions ?? {
-    cases: opts.cases,
-    exclude: opts.exclude,
-    override: opts.override,
-    heldAcknowledgement: heldAcknowledgement(opts.acknowledgeHeld, opts.acknowledgementReason),
-  };
+  const executionOptions = resolveLiveAcceptanceExecutionOptions(opts, previous?.executionOptions);
   const acknowledgement = executionOptions.heldAcknowledgement
     ? heldAcknowledgement(
         executionOptions.heldAcknowledgement.attemptIds,
@@ -180,6 +194,7 @@ async function main() {
     executionOptions.cases,
     executionOptions.exclude,
     executionOptions.override,
+    executionOptions.initialOnly,
   );
   if (!plan.length) throw new Error("No cases selected");
   const identity = {

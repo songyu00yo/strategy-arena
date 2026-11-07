@@ -3,6 +3,7 @@ import type {
   ArenaSnapshot,
   ModelMode,
   ModelOption,
+  ModelCatalogOption,
   ModelProvider,
   ArenaVersion,
   Challenge,
@@ -14,11 +15,14 @@ import type {
   Attack,
   Revision,
   Verdict,
+  FollowUpInput,
 } from "@/lib/contracts";
 import type { z } from "zod";
 import { SCHEMA_VERSION } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
+import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
+import { stepContext } from "@/lib/step-context";
 import {
   getModelConfig,
   estimateCallCost,
@@ -31,6 +35,8 @@ import {
 import {
   executeAttackTools,
   checkConstraints,
+  normalizeStrategyResources,
+  proposedClaims,
   validateAttack,
   validateRevision,
   validateVerdict,
@@ -55,6 +61,19 @@ import {
 
 type SelectedConfig = ReturnType<typeof getModelConfig>;
 export function modelInfo(): ArenaSnapshot["model"] {
+  const models: ModelCatalogOption[] = MODEL_CATALOG.map((model) => {
+    try {
+      const c = getModelConfig(model.provider, model.id);
+      return {
+        ...model,
+        configured: c.configured,
+        inputPrice: c.inputPrice,
+        outputPrice: c.outputPrice,
+      };
+    } catch {
+      return { ...model, configured: false, error: "模型配置无效，请运行者检查服务端配置。" };
+    }
+  });
   const providers = (["deepseek", "openai"] as const).map((provider): ModelOption => {
     try {
       const c = getModelConfig(provider);
@@ -70,11 +89,12 @@ export function modelInfo(): ArenaSnapshot["model"] {
     }
   });
   return {
-    id: (providers.find((provider) => provider.configured) ?? providers[0]).id,
+    id: "gpt-6.1-terra",
     configured: providers.some((provider) => provider.configured),
     promptVersion: PROMPT_VERSION,
     schemaVersion: SCHEMA_VERSION,
     providers,
+    models,
   };
 }
 function runConfiguration(config: SelectedConfig) {
@@ -85,19 +105,23 @@ function runConfiguration(config: SelectedConfig) {
     hash: createHash("sha256").update(JSON.stringify(configuration)).digest("hex"),
   };
 }
-function pinConfiguration(version: ArenaVersion, mode: ModelMode) {
+function pinConfiguration(version: ArenaVersion, mode: ModelMode, frozen?: SelectedConfig) {
   const route = routeModel(version.challenge, mode);
-  const config = getModelConfig(route.provider);
+  const config = frozen ?? getModelConfig(route.provider, isModelId(mode) ? mode : undefined);
+  const reason =
+    frozen && mode === "auto"
+      ? `本任务在材料读取阶段已固定 ${config.id}，补问与本轮讨论继续使用同一模型。`
+      : route.reason;
   const current = runConfiguration(config);
   version.runConfiguration = current.configuration;
   version.configurationHash = current.hash;
   version.modelSelection = {
     requestedMode: mode,
-    provider: route.provider,
+    provider: config.provider,
     modelId: config.id,
     currency: config.currency,
     policyVersion: route.policyVersion,
-    reason: route.reason,
+    reason,
   };
   version.costUsd = 0;
   version.reservedUsd = 0;
@@ -109,7 +133,7 @@ function pinConfiguration(version: ArenaVersion, mode: ModelMode) {
     arena.arena_id,
     version.id,
     "model_selected",
-    `本版本选择 ${config.id}：${route.reason}`,
+    `本版本选择 ${config.id}：${reason}`,
     undefined,
     undefined,
     {
@@ -125,14 +149,93 @@ export function getArena(arenaId: string, owner: string) {
   });
   return snapshot(arenaId, owner, modelInfo());
 }
-export function createArena(challenge: Challenge, owner: string, mode: ModelMode = "auto") {
+export function createArena(
+  challenge: Challenge,
+  owner: string,
+  mode: ModelMode = "auto",
+  options?: { intakeId: string; revision: number; assumptions?: string[] },
+) {
   const arenaId = atomic(() => {
+    let draft: { body: string; submitted_arena_id: string | null } | undefined;
+    let draftBody: Record<string, unknown> | undefined;
+    if (options) {
+      draft = db()
+        .prepare("SELECT body,submitted_arena_id FROM intake_drafts WHERE id=? AND owner=?")
+        .get(options.intakeId, owner) as typeof draft;
+      if (!draft) throw new ArenaError("未找到这份任务草稿。", 404, "NOT_FOUND");
+      // Return an already committed result before charging another run or checking stale revisions.
+      if (draft.submitted_arena_id) {
+        assertOwner(draft.submitted_arena_id, owner);
+        return draft.submitted_arena_id;
+      }
+      try {
+        const body: unknown = JSON.parse(draft.body);
+        if (!body || typeof body !== "object" || Array.isArray(body))
+          throw new Error("invalid draft");
+        draftBody = body as Record<string, unknown>;
+      } catch {
+        throw new ArenaError("任务草稿无法读取，请重新整理。", 409, "INTAKE_INVALID");
+      }
+      if (draftBody.revision !== options.revision || draftBody.status !== "summary")
+        throw new ArenaError("任务草稿已更新，请刷新后确认最新摘要。", 409, "STALE_INTAKE");
+    }
+    let frozen: SelectedConfig | undefined;
+    if (
+      draftBody &&
+      typeof draftBody.configHash === "string" &&
+      draftBody.config &&
+      typeof draftBody.config === "object"
+    ) {
+      const previous = draftBody.config as { provider?: unknown; id?: unknown };
+      if (
+        (previous.provider !== "openai" && previous.provider !== "deepseek") ||
+        typeof previous.id !== "string"
+      )
+        throw new ArenaError("草稿模型记录无效，请新建任务。", 409, "CONFIGURATION_CHANGED");
+      frozen = getModelConfig(previous.provider, isModelId(previous.id) ? previous.id : undefined);
+      if (runConfiguration(frozen).hash !== draftBody.configHash)
+        throw new ArenaError(
+          "模型或提示词配置已变化，请重新整理任务。",
+          409,
+          "CONFIGURATION_CHANGED",
+        );
+    }
     consumeRun(owner);
     const arenaId = id();
     db()
       .prepare("INSERT INTO arenas(id,owner,active_version_id,created_at) VALUES(?,?,?,?)")
       .run(arenaId, owner, "", now());
-    pinConfiguration(addVersion(arenaId, challenge, "首次讨论", null), mode);
+    const version = addVersion(arenaId, challenge, "首次讨论", null);
+    if (options && draftBody) {
+      draftBody.challenge = challenge;
+      if (options.assumptions) draftBody.assumptions = options.assumptions;
+      version.intake = {
+        id: options.intakeId,
+        originalGoal: String(draftBody.goal ?? ""),
+        answers: Array.isArray(draftBody.answers)
+          ? (draftBody.answers as NonNullable<ArenaVersion["intake"]>["answers"])
+          : [],
+        assumptions: Array.isArray(draftBody.assumptions)
+          ? (draftBody.assumptions as string[])
+          : [],
+        usedSources: Array.isArray(draftBody.sources)
+          ? (draftBody.sources as NonNullable<ArenaVersion["intake"]>["usedSources"])
+          : [],
+        usage: Array.isArray(draftBody.usage) ? (draftBody.usage as ModelUsage[]) : [],
+      };
+    }
+    pinConfiguration(version, mode, frozen);
+    if (options && draftBody) {
+      draftBody.status = "submitted";
+      draftBody.arenaId = arenaId;
+      draftBody.updatedAt = now();
+      draftBody.revision = options.revision + 1;
+      db()
+        .prepare(
+          "UPDATE intake_drafts SET submitted_arena_id=?,body=?,updated_at=? WHERE id=? AND owner=?",
+        )
+        .run(arenaId, JSON.stringify(draftBody), Date.now(), options.intakeId, owner);
+    }
     return arenaId;
   });
   return getArena(arenaId, owner);
@@ -150,11 +253,49 @@ export function newVersion(
   reason: string,
   intervention?: string,
   mode?: ModelMode,
+  options: {
+    baseVersionId?: string;
+    followUp?: FollowUpInput;
+    claim?: z.infer<typeof InterventionSchema>;
+  } = {},
 ) {
   atomic(() => {
     const arena = assertOwner(arenaId, owner);
-    consumeRun(owner);
     const previous = getVersion(arena.active_version_id);
+    if (options.baseVersionId && previous.id !== options.baseVersionId)
+      throw new ArenaError(
+        "当前版本已更新，你填写的内容已保留。请回到当前版本确认后再提交。",
+        409,
+        "STALE_VERSION",
+      );
+    let supplement = intervention;
+    if (options.followUp) {
+      const source = stepContext(previous, options.followUp.stepId);
+      if (!options.baseVersionId || !source || source.quote !== options.followUp.quote)
+        throw new ArenaError(
+          "这一步的内容已更新，你填写的内容已保留。请重新查看原文后确认。",
+          409,
+          "STALE_SOURCE",
+        );
+      supplement = `用户对 V${previous.number} 步骤「${source.stepId}」的补充，属于待复核意见，不是已证实事实，也不能覆盖当前明确限制。\n原文：\n${source.quote}\n用户意见：\n${options.followUp.text}`;
+    }
+    if (options.claim) {
+      const input = options.claim;
+      const strategy =
+        previous.revisions.find((entry) => entry.strategyId === input.targetStrategyId)?.strategy ??
+        previous.strategies.find((entry) => entry.id === input.targetStrategyId);
+      const claim = strategy?.claims.find((entry) => entry.id === input.targetClaimId);
+      if (!claim)
+        throw new ArenaError("这条观点不属于当前版本，请刷新后重试。", 409, "STALE_CLAIM");
+      if (input.quote !== undefined && input.quote !== claim.text)
+        throw new ArenaError(
+          "这条判断已更新，你填写的内容已保留。请重新查看原文后确认。",
+          409,
+          "STALE_SOURCE",
+        );
+      supplement = `针对方案 ${strategy!.id} 的观点「${claim.text}」：${input.text}`;
+    }
+    consumeRun(owner);
     if (["ready", "running"].includes(previous.status)) {
       previous.status = "superseded";
       saveVersion(previous);
@@ -172,8 +313,10 @@ export function newVersion(
       );
     }
     const version = addVersion(arenaId, challenge, reason, previous.id);
+    if (previous.intake) version.intake = structuredClone(previous.intake);
+    if (options.followUp) version.followUp = { ...options.followUp, sourceVersionId: previous.id };
     pinConfiguration(version, mode ?? previous.modelSelection?.requestedMode ?? "deepseek");
-    for (const text of [...userChallenges(previous.id), ...(intervention ? [intervention] : [])])
+    for (const text of [...userChallenges(previous.id), ...(supplement ? [supplement] : [])])
       db()
         .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
         .run(id(), version.id, text);
@@ -187,17 +330,14 @@ export function intervene(
 ) {
   const arena = assertOwner(arenaId, owner);
   const current = getVersion(arena.active_version_id);
-  const strategy =
-    current.revisions.find((r) => r.strategyId === input.targetStrategyId)?.strategy ||
-    current.strategies.find((s) => s.id === input.targetStrategyId);
-  const claim = strategy?.claims.find((c) => c.id === input.targetClaimId);
-  if (!claim) throw new ArenaError("这条观点不属于当前版本，请刷新后重试。", 409, "STALE_CLAIM");
   return newVersion(
     arenaId,
     owner,
     current.challenge,
     "用户针对观点补充质疑",
-    `针对方案 ${strategy!.id} 的观点「${claim.text}」：${input.text}`,
+    undefined,
+    undefined,
+    { baseVersionId: input.baseVersionId ?? current.id, claim: input },
   );
 }
 export function partialVerdict(version: ArenaVersion): Verdict {
@@ -328,6 +468,7 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
     evidence: independent ? [] : version.evidence,
     revisions: independent ? [] : version.revisions,
     userChallenges: userChallenges(version.id),
+    assumptions: version.intake?.assumptions ?? [],
     ...(previousStrategy ? { previousStrategy } : {}),
     ...(step.role.includes(":retry")
       ? { duplicateHint: "上次方案与其他方案实质重复。请换一种机制、资源分配与执行路径。" }
@@ -390,7 +531,13 @@ function claim(
     if (db().prepare("SELECT id FROM steps WHERE version_id=? AND status='running'").get(versionId))
       return null;
     const provider: ModelProvider = version.modelSelection?.provider ?? "deepseek";
-    const config = getModelConfig(provider);
+    const selected = version.modelSelection;
+    const config = getModelConfig(
+      provider,
+      selected && isModelId(selected.requestedMode) && isModelId(selected.modelId)
+        ? selected.modelId
+        : undefined,
+    );
     if (
       !version.modelSelection ||
       !version.runConfiguration?.provider ||
@@ -436,6 +583,14 @@ function claim(
       } else break;
     }
     if (!step) return null;
+    if (step.stage === "judge" && !version.evidence.some((e) => e.estimateScope === "final")) {
+      const finalStrategies = version.strategies.map(
+        (strategy) =>
+          version.revisions.find((revision) => revision.strategyId === strategy.id)?.strategy ??
+          strategy,
+      );
+      version.evidence.push(...checkConstraints(version.challenge, finalStrategies, "final"));
+    }
     const input = inputFor(version, step);
     if (step.stage !== "verify") {
       if (!config.configured)
@@ -489,11 +644,33 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
     else if (step.stage === "attack") result = await generateAttack(input, config, step.id);
     else if (step.stage === "revise") result = await generateRevision(input, config, step.id);
     else if (step.stage === "judge") result = await generateVerdict(input, config, step.id);
+    if (result?.formatNormalization)
+      atomic(() => {
+        event(
+          arenaId,
+          versionId,
+          "format_normalized",
+          "模型参数仅移除一个冗余尾部右花括号，原始参数已保存；这不表示语义核验通过。",
+          step.stage,
+          step.role,
+          {
+            ...result!.formatNormalization,
+            schemaValidated: true,
+            semanticValidation: "pending",
+            model: result!.usage.model,
+            responseId: result!.usage.responseId,
+          },
+        );
+      });
     const evidence =
       step.stage === "verify"
         ? [
             ...input.attacks.flatMap((attack) =>
-              executeAttackTools(attack, input.challenge.materials),
+              executeAttackTools(
+                attack,
+                input.challenge.materials,
+                getVersion(versionId).intake?.usedSources,
+              ),
             ),
             ...checkConstraints(input.challenge, input.strategies),
           ]
@@ -503,6 +680,12 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
     try {
       if (step.stage === "propose" && (result!.value as Strategy).id !== input.role)
         throw new Error("模型返回的方案编号与指定角色不一致。");
+      if (step.stage === "propose")
+        result!.value = normalizeStrategyResources(
+          result!.value as Strategy,
+          input.challenge,
+          getVersion(versionId).intake?.usedSources,
+        );
       if (step.stage === "attack" && (result!.value as Attack).from !== input.role)
         throw new Error("质疑发起者与本轮角色不一致。");
       value =
@@ -512,9 +695,17 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
               input.strategies,
             )
           : step.stage === "revise"
-            ? validateRevision(result!.value as Revision, input)
+            ? validateRevision(
+                result!.value as Revision,
+                input,
+                getVersion(versionId).intake?.usedSources,
+              )
             : step.stage === "judge"
-              ? validateVerdict(result!.value as Verdict, input)
+              ? validateVerdict(
+                  result!.value as Verdict,
+                  input,
+                  getVersion(versionId).intake?.usedSources,
+                )
               : result?.value;
     } catch (error) {
       const feedback = error instanceof Error ? error.message.slice(0, 500) : "协议引用不合法";
@@ -532,24 +723,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
       settle(version, step, result?.usage);
       if (step.stage === "propose") {
         const strategy = value as Strategy;
-        const userText = [
-          input.challenge.goal,
-          input.challenge.constraints,
-          input.challenge.preferences,
-          input.challenge.materials,
-          ...input.challenge.options,
-        ].join("\n");
-        strategy.claims = strategy.claims.map((c, index) => ({
-          ...c,
-          id: `${strategy.id}-claim-${index + 1}`,
-          status:
-            c.status === "estimate"
-              ? "estimate"
-              : c.status === "user" && userText.includes(c.text)
-                ? "user"
-                : "unknown",
-          sourceIds: [],
-        }));
+        strategy.claims = proposedClaims(strategy, input.challenge, version.intake?.usedSources);
         const duplicate = version.strategies.some((other) => strategiesDuplicate(other, strategy));
         const duplicateRetryExists = db()
           .prepare("SELECT id FROM steps WHERE version_id=? AND stage='propose' AND role=?")
@@ -676,6 +850,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
         step.role,
         {
           usage: usage ?? null,
+          ...(modelError?.diagnostic ? { structureDiagnostic: modelError.diagnostic } : {}),
           ...(config.currency === "USD"
             ? { heldReservationUsd: uncertain ? step.reservation : 0 }
             : { heldReservationCny: uncertain ? step.reservation : 0 }),
@@ -708,7 +883,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           arenaId,
           versionId,
           "protocol_repair_scheduled",
-          "已记录格式或引用错误，将使用额外额度尝试一次修复；不会替换成模拟结果。",
+          "输出校验发现格式、引用或明确条件冲突，原结果已保留，将在额度内尝试一次修正。",
           step.stage,
           input.role,
           modelError.repair,

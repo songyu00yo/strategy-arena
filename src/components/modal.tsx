@@ -8,20 +8,29 @@ export function Modal({
   children,
   onClose,
   wide = false,
+  side = false,
   motionRef,
+  trigger,
 }: {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
   wide?: boolean;
+  side?: boolean;
   motionRef?: Ref<OverlayMotionHandle>;
+  trigger?: HTMLElement | null;
 }) {
   const titleId = useId();
-  const { panel, close } = useOverlayMotion<HTMLDialogElement>("modal", onClose, motionRef);
+  const { panel, close } = useOverlayMotion<HTMLDialogElement>(
+    "modal",
+    onClose,
+    motionRef,
+    trigger,
+  );
   return (
     <dialog
       ref={panel}
-      className={`modal overlay-motion ${wide ? "wide-modal" : ""}`}
+      className={`modal overlay-motion ${wide ? "wide-modal" : ""} ${side ? "modal-side" : ""}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();

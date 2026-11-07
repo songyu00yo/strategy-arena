@@ -20,6 +20,10 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 const protectedPorts = new Set([3000, 3001, 3100, 3101, 3200, 3302, 3303]);
+// Match the billing ledger's supported numeric range, including audited future stages.
+function billingInteger(value, minimum = 1, maximum = 1_000_000_000_000) {
+  return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+}
 function absolute(value, name) {
   if (typeof value !== "string" || !isAbsolute(value))
     throw new Error(`${name} must be an absolute path.`);
@@ -162,30 +166,45 @@ export async function prepareLivePreview(options, dependencies = {}) {
       ".next/BUILD_ID",
       ".next/static",
       "migrations/001_initial.sql",
+      "migrations/002_intakes.sql",
+      "migrations/003_decision_reviews.sql",
       "migrations/billing/002_limit_audit.sql",
     ].every((path) => existsSync(join(release, path)))
   )
     throw new Error("Standalone release is incomplete.");
   const billing = (dependencies.readBillingStatus ?? billingStatus)(billingDatabase);
+  const stage = billing.activeStage;
   if (
     billing.usdLimitMicros !== 10_000_000 ||
-    !Number.isInteger(billing.requestLimit) ||
-    billing.requestLimit < 300 ||
-    billing.requestLimit > 400 ||
-    billing.tokenLimit !== 5_000_000 ||
+    !billingInteger(billing.requestLimit) ||
+    !billingInteger(billing.tokenLimit) ||
     billing.hardTotalUsdMicros !== 200_000_000 ||
     billing.developmentMaxUsdMicros !== 120_000_000 ||
     billing.finalReserveUsdMicros !== 80_000_000 ||
-    !billing.activeStage ||
-    billing.revision < 1
+    !billingInteger(billing.revision) ||
+    !stage ||
+    typeof stage.id !== "string" ||
+    !/^[A-Za-z0-9_.:-]{1,200}$/.test(stage.id) ||
+    !billingInteger(stage.usdLimitMicros, 1, 10_000_000) ||
+    !billingInteger(stage.requestLimit, 1, 300) ||
+    !billingInteger(stage.tokenLimit, 1, 5_000_000) ||
+    !billingInteger(billing.committedUsdMicros, 0) ||
+    !billingInteger(billing.requests, 0) ||
+    !billingInteger(billing.tokens, 0) ||
+    !billingInteger(stage.usage?.committedUsdMicros, 0) ||
+    !billingInteger(stage.usage?.requests, 0) ||
+    !billingInteger(stage.usage?.tokens, 0)
   )
     throw new Error(
-      "Ledger must already have audited cumulative USD 10 / 300–400 requests / 5000000 token limits; launcher never raises them.",
+      "Ledger must already have audited positive cumulative limits within the billing range, USD 10 total and valid incremental stage ceilings; launcher never raises them.",
     );
   if (
     billing.committedUsdMicros >= billing.usdLimitMicros ||
     billing.requests >= billing.requestLimit ||
-    billing.tokens >= billing.tokenLimit
+    billing.tokens >= billing.tokenLimit ||
+    stage.usage.committedUsdMicros >= stage.usdLimitMicros ||
+    stage.usage.requests >= stage.requestLimit ||
+    stage.usage.tokens >= stage.tokenLimit
   )
     throw new Error("Shared billing allowance is exhausted.");
   await (dependencies.assertPortFree ?? assertPortFree)(port);
@@ -209,8 +228,9 @@ export async function prepareLivePreview(options, dependencies = {}) {
     ARENA_ACCESS_CODE: "",
     ARENA_PUBLIC_ORIGIN: `http://127.0.0.1:${port}`,
     ARENA_WORKER_ENABLED: "false",
-    ARENA_RUN_BUDGET_USD: "0.5",
-    ARENA_RUN_BUDGET_CNY: "3",
+    // Astra's conservative next-call reservation needs headroom within the shared USD 10 cap.
+    ARENA_RUN_BUDGET_USD: "2",
+    ARENA_RUN_BUDGET_CNY: "12",
     ARENA_GLOBAL_BUDGET_USD: "10",
     ARENA_GLOBAL_BUDGET_CNY: "60",
     ARENA_MAX_CONCURRENT_CALLS: "1",

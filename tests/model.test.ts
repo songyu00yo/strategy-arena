@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChallengeSchema, StrategySchema, type StageInput } from "../src/lib/contracts";
+import {
+  ChallengeSchema,
+  StrategySchema,
+  AttackSchema,
+  RevisionSchema,
+  VerdictSchema,
+  type StageInput,
+} from "../src/lib/contracts";
 import {
   buildMessages,
   buildRequestBody,
@@ -8,6 +15,7 @@ import {
   estimateCallTokens,
   estimateCallCost,
   generateStrategy,
+  generateVerdict,
   ModelCallError,
 } from "../src/lib/server/model";
 // Explicit billing test double: these tests never touch a live budget or provider.
@@ -44,6 +52,10 @@ const strategy = {
   failureCondition: "没有素材",
   estimatedCost: null,
   estimatedHours: 8,
+  costPlan: {
+    complete: false,
+    items: [{ id: "c1", label: "费用范围待确认", amount: null, basis: "unknown", quote: "" }],
+  },
 };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -78,6 +90,63 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
     expect(JSON.stringify(messages)).not.toContain("OPPONENT_PRIVATE_PROPOSAL");
     expect(messages[1].content).toContain("静态生成网站");
     expect(estimateCallCost(input)).toBeGreaterThan(0);
+  });
+  it("includes confirmed assumptions in every stage and prioritizes current fields over historical material", () => {
+    const current: StageInput = {
+      ...input,
+      assumptions: ["先验证已有设备是否可用"],
+      challenge: {
+        ...input.challenge,
+        constraints: "当前团队两人，不可增人",
+        materials: "早期用户原话：团队五人",
+      },
+    };
+    for (const [kind, schema] of [
+      ["propose", StrategySchema],
+      ["attack", AttackSchema],
+      ["revise", RevisionSchema],
+      ["judge", VerdictSchema],
+    ] as const) {
+      const messages = buildMessages(kind, current, schema);
+      const data = JSON.parse(messages[1].content.slice(messages[1].content.indexOf("\n") + 1));
+      expect(data).toMatchObject({
+        assumptions: ["先验证已有设备是否可用"],
+        challenge: { constraints: "当前团队两人，不可增人" },
+      });
+      expect(messages[0].content).toContain("优先于材料内的历史原话");
+      expect(messages[0].content).toContain("不是材料原文或工具证据");
+    }
+  });
+  it("keeps the assigned route and explicit deliverables in revision requests with the strengthened protocol", () => {
+    const revision: StageInput = {
+      ...input,
+      role: "B",
+      challenge: {
+        ...input.challenge,
+        goal: "交付三个可离线打开的练习页面，并保留互动按钮及全部说明",
+        constraints: "固定两名成员，合计工时不超过12小时",
+        options: ["手写HTML和CSS", "修改免费静态模板", "免费静态生成工具"],
+      },
+      strategies: [{ ...strategy, id: "B", title: "静态模板路线" }] as StageInput["strategies"],
+    };
+    const messages = buildMessages("revise", revision, RevisionSchema);
+    expect(messages[1].content).toContain('本角色负责比较的已有路线："修改免费静态模板"');
+    const data = JSON.parse(messages[1].content.slice(messages[1].content.indexOf("\n") + 1));
+    expect(data).toMatchObject({
+      role: "B",
+      challenge: { goal: revision.challenge.goal, constraints: revision.challenge.constraints },
+      strategies: [{ id: "B", title: "静态模板路线" }],
+    });
+    expect(messages[0].content).toContain("保留本角色原路线的关键执行机制");
+    expect(messages[0].content).toContain(
+      "减少交付数量、删除必要功能或缩减交付范围，必须先获得用户明确同意",
+    );
+    expect(messages[0].content).toContain(
+      "标题、分项、第一步、下一步、停止阈值中的累计时间必须一致",
+    );
+    const judge = buildMessages("judge", revision, VerdictSchema)[0].content;
+    expect(judge).toContain("逐个累计各验证或撤回节点之前的全部前置步骤");
+    expect(judge).toContain("不等于“已证明满足全部硬限制”");
   });
   it("sends bounded JSON request and records returned model and actual usage", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -138,6 +207,157 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
       }),
     );
   });
+  it("returns the judge's five-condition boundary and received count with original output and usage", async () => {
+    vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "strict-tool");
+    vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com/beta");
+    const rejected = JSON.stringify({
+      outcome: "insufficient",
+      preferred: "unknown",
+      headline: "合成裁决，尚未核实",
+      rationale: "仅测试超项反馈，不评价模型质量",
+      conditions: Array.from({ length: 6 }, (_, index) => `合成硬限制${index + 1}须保留`),
+      uncertainties: ["检测费用未知"],
+      nextActions: ["先核实安全与总费用"],
+      exitCondition: "必要前提未确认则停止",
+      evidenceIds: [],
+      comparisons: [],
+      attackFindings: [],
+    });
+    const fetchDouble = vi.fn().mockResolvedValue(
+      Response.json({
+        id: "synthetic-six-conditions",
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              tool_calls: [
+                { type: "function", function: { name: "submit_judge", arguments: rejected } },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 50 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchDouble);
+    const error = await generateVerdict({ ...input, role: "judge" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ModelCallError);
+    if (!(error instanceof ModelCallError)) throw new Error("Expected bounded validation failure");
+    expect(error).toMatchObject({
+      uncertain: false,
+      usage: { inputTokens: 100, outputTokens: 50 },
+      repair: { rejectedOutput: rejected },
+    });
+    expect(error.repair?.feedback).toContain("conditions: too_big");
+    expect(error.repair?.feedback).toContain("maximum=5");
+    expect(error.repair?.feedback).toContain("最多5项");
+    expect(error.repair?.feedback).toContain("实收6项");
+    expect(error.repair?.feedback).not.toContain("合成硬限制");
+    expect(error.repair!.feedback.length).toBeLessThanOrEqual(1500);
+    const sent = JSON.parse(fetchDouble.mock.calls[0][1].body).messages[0].content;
+    for (const limit of [
+      "conditions 最多 5 项",
+      "uncertainties 最多 6 项",
+      "nextActions 最多 5 项",
+    ])
+      expect(sent).toContain(limit);
+    expect(sent).toContain("数组超项时合并同类内容");
+    expect(sent).toContain("保留全部硬限制、证据和未知");
+    expect(fetchDouble).toHaveBeenCalledTimes(1);
+    expect(billing.reserveBilling).toHaveBeenCalledTimes(1);
+    expect(billing.settleBilling).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ inputTokens: 100, outputTokens: 50 }),
+    );
+    expect(billing.holdBilling).not.toHaveBeenCalled();
+  });
+  it.each([
+    {
+      patch: { title: "PRIVATE-MODEL-CONTENT ".repeat(3) },
+      path: "title",
+      code: "too_big",
+      bound: "maximum=50",
+      rule: "最多50字符",
+      count: "实收66字符",
+    },
+    {
+      patch: { thesis: "" },
+      path: "thesis",
+      code: "too_small",
+      bound: "minimum=1",
+      rule: "至少1字符",
+      count: "实收0字符",
+    },
+    {
+      patch: { steps: [] },
+      path: "steps",
+      code: "too_small",
+      bound: "minimum=1",
+      rule: "至少1项",
+      count: "实收0项",
+    },
+    {
+      patch: { estimatedCost: -987654321 },
+      path: "estimatedCost",
+      code: "too_small",
+      bound: "minimum=0",
+      rule: "至少0（数值）",
+      count: null,
+    },
+  ])(
+    "reports safe $path bounds without exposing input contents or retrying",
+    async ({ patch, path, code, bound, rule, count }) => {
+      const rejected = JSON.stringify({ ...strategy, ...patch });
+      const fetchDouble = vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [{ finish_reason: "stop", message: { content: rejected } }],
+          usage: { prompt_tokens: 100, completion_tokens: 50 },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchDouble);
+      const error = await generateStrategy(input).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ModelCallError);
+      if (!(error instanceof ModelCallError))
+        throw new Error("Expected bounded validation failure");
+      expect(error.repair?.rejectedOutput).toBe(rejected);
+      expect(error.repair?.feedback).toContain(`${path}: ${code}`);
+      expect(error.repair?.feedback).toContain(bound);
+      expect(error.repair?.feedback).toContain(rule);
+      if (count) expect(error.repair?.feedback).toContain(count);
+      expect(error.repair?.feedback).not.toContain("PRIVATE-MODEL-CONTENT");
+      expect(error.repair?.feedback).not.toContain("987654321");
+      expect(error.repair!.feedback.length).toBeLessThanOrEqual(1500);
+      expect(error.usage).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each([
+    ["ETIMEDOUT", "连接模型服务超时"],
+    ["ENOTFOUND", "模型服务域名暂时无法解析"],
+    ["CERT_HAS_EXPIRED", "模型服务安全连接校验失败"],
+    ["ECONNRESET", "模型服务连接中断或被拒绝"],
+    ["PRIVATE_UNKNOWN_CODE", "模型服务连接异常"],
+  ])(
+    "stores only a safe connection category for %s without making the attempt retryable",
+    async (code, category) => {
+      const failure = new Error("private input and secret URL", {
+        cause: { code, message: "private cause" },
+      });
+      const fetchDouble = vi.fn().mockRejectedValue(failure);
+      vi.stubGlobal("fetch", fetchDouble);
+      const error = await generateStrategy(input).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ uncertain: true });
+      expect(String(error)).toContain(category);
+      expect(String(error)).toMatch(/本次已等待 \d+\.\d 秒/);
+      expect(String(error)).not.toContain("private");
+      expect(String(error)).not.toContain("PRIVATE_UNKNOWN_CODE");
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+      expect(billing.holdBilling).toHaveBeenCalledTimes(1);
+      expect(billing.settleBilling).not.toHaveBeenCalled();
+    },
+  );
   it("treats connection loss as unknown and hides arbitrary upstream body", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("sensitive upstream message")));
     try {
@@ -163,11 +383,166 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
   });
 });
 
+describe.each(["deepseek", "openai"] as const)(
+  "%s safe strict-function diagnostics",
+  (provider) => {
+    it.each([
+      "two-calls",
+      "wrong-name",
+      "non-string-arguments",
+      "untrusted-finish",
+      "wrong-type",
+    ] as const)("records only safe structure metadata for %s without retrying", async (variant) => {
+      vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "strict-tool");
+      vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com/beta");
+      vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
+      const config = getModelConfig(provider);
+      const args = JSON.stringify({
+        ...strategy,
+        title: "PRIVATE_ARGUMENT_CONTENT",
+        estimatedCost: "unknown",
+      });
+      const functions: { name: string; arguments: unknown }[] = [
+        { name: "submit_propose", arguments: args },
+      ];
+      if (variant === "two-calls") functions.push({ ...functions[0] });
+      if (variant === "wrong-name") functions[0].name = "PRIVATE_FUNCTION_NAME";
+      if (variant === "non-string-arguments")
+        functions[0].arguments = { private: "PRIVATE_ARGUMENT_CONTENT" };
+      const finish =
+        variant === "untrusted-finish"
+          ? "PRIVATE_FINISH_STATE"
+          : provider === "openai"
+            ? "completed"
+            : "tool_calls";
+      const envelope =
+        provider === "openai"
+          ? {
+              id: "synthetic-structure-response",
+              model: config.id,
+              service_tier: "default",
+              status: finish,
+              output: functions.map((call) => ({
+                ...call,
+                type: variant === "wrong-type" ? "PRIVATE_OUTPUT_TYPE" : "function_call",
+                status: "completed",
+              })),
+              usage: {
+                input_tokens: 10,
+                output_tokens: 20,
+                input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+              },
+            }
+          : {
+              id: "synthetic-structure-response",
+              model: config.id,
+              choices: [
+                {
+                  finish_reason: finish,
+                  message: {
+                    content: "PRIVATE_MESSAGE_CONTENT",
+                    tool_calls: functions.map((call) => ({
+                      type: variant === "wrong-type" ? "PRIVATE_OUTPUT_TYPE" : "function",
+                      function: call,
+                    })),
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 10, completion_tokens: 20 },
+            };
+      const fetchDouble = vi.fn().mockResolvedValue(Response.json(envelope));
+      vi.stubGlobal("fetch", fetchDouble);
+      const error = await generateStrategy(input, config).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ModelCallError);
+      if (!(error instanceof ModelCallError)) throw new Error("Expected strict structure failure");
+      const count = variant === "two-calls" ? 2 : 1;
+      const countedCalls = variant === "wrong-type" && provider === "openai" ? 0 : count;
+      expect(error).toMatchObject({
+        uncertain: false,
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+      expect(error.repair).toBeUndefined();
+      expect(error.diagnostic).toEqual({
+        expectedFunction: "submit_propose",
+        receivedFunctionCount: countedCalls,
+        matchingFunctionCount: variant === "wrong-name" ? 0 : countedCalls,
+        stringArgumentCount: variant === "non-string-arguments" ? 0 : countedCalls,
+        unexpectedItemCount: variant === "wrong-type" ? 1 : 0,
+        incompleteFunctionCount: 0,
+        finishState:
+          variant === "untrusted-finish"
+            ? "other"
+            : provider === "openai"
+              ? "completed"
+              : "tool_calls",
+      });
+      expect(JSON.stringify(error.diagnostic)).not.toContain("PRIVATE_");
+      expect(String(error)).not.toContain("PRIVATE_");
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+      expect(billing.reserveBilling).toHaveBeenCalledTimes(1);
+      expect(billing.settleBilling).toHaveBeenCalledTimes(1);
+      expect(billing.holdBilling).not.toHaveBeenCalled();
+    });
+  },
+);
+
+describe("strict unknown sentinel is exact", () => {
+  it.each(["unknown", '"unknown"', String.raw`\"unknown\"`, "unknown "])(
+    "does not silently normalize extra quoting or whitespace: %j",
+    async (sentinel) => {
+      vi.stubEnv("MODEL_STRUCTURED_OUTPUT", "strict-tool");
+      vi.stubEnv("MODEL_BASE_URL", "https://api.deepseek.com/beta");
+      const output = JSON.stringify({
+        ...strategy,
+        estimatedCost: sentinel,
+        estimatedHours: "unknown",
+      });
+      const fetchDouble = vi.fn().mockResolvedValue(
+        Response.json({
+          id: "synthetic-unknown-response",
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                tool_calls: [
+                  { type: "function", function: { name: "submit_propose", arguments: output } },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 20 },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchDouble);
+      const result = await generateStrategy(input).catch((caught: unknown) => caught);
+      if (sentinel === "unknown") {
+        expect(result).toMatchObject({ value: { estimatedCost: null, estimatedHours: null } });
+      } else {
+        expect(result).toBeInstanceOf(ModelCallError);
+        if (!(result instanceof ModelCallError))
+          throw new Error("Expected unchanged invalid sentinel");
+        expect(result.repair).toMatchObject({
+          feedback: expect.stringContaining("estimatedCost: invalid_type"),
+          rejectedOutput: output,
+        });
+        expect(result.diagnostic).toBeUndefined();
+      }
+      const sent = JSON.parse(fetchDouble.mock.calls[0][1].body).messages[0].content;
+      const rule = sent.slice(sent.indexOf("在 estimatedCost"), sent.indexOf("其他字段的 unknown"));
+      expect(rule).toContain("字符串“unknown”");
+      expect(rule).toContain("字符串内容仅为 unknown，不含额外引号或反斜杠");
+      expect(rule).not.toContain(String.raw`\"`);
+      expect(fetchDouble).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
 describe("provider isolation and native billing with explicit test doubles", () => {
   const gptResponse = (content = JSON.stringify(strategy)) =>
     Response.json({
       id: "gpt-fixture",
       model: "gpt-6.1-terra",
+      service_tier: "default",
       status: "completed",
       output: [
         { type: "function_call", name: "submit_propose", arguments: content, status: "completed" },
@@ -175,7 +550,7 @@ describe("provider isolation and native billing with explicit test doubles", () 
       usage: {
         input_tokens: 1000,
         output_tokens: 500,
-        input_tokens_details: { cached_tokens: 200 },
+        input_tokens_details: { cached_tokens: 200, cache_write_tokens: 0 },
         output_tokens_details: { reasoning_tokens: 300 },
       },
     });
@@ -199,6 +574,8 @@ describe("provider isolation and native billing with explicit test doubles", () 
     const body = buildRequestBody("propose", input, StrategySchema, gpt);
     expect(body).toMatchObject({
       max_output_tokens: 2200,
+      service_tier: "default",
+      prompt_cache_options: { mode: "explicit", ttl: "30m" },
       reasoning: { effort: "low" },
       store: false,
       parallel_tool_calls: false,
@@ -239,7 +616,7 @@ describe("provider isolation and native billing with explicit test doubles", () 
       outputTokens: 500,
       cachedInputTokens: 200,
       estimatedCny: 0,
-      estimatedUsd: 0.0035,
+      estimatedUsd: 0.00331,
       currency: "USD",
       provider: "openai",
       billingAttemptId: "gpt-attempt-fixture",
@@ -252,11 +629,16 @@ describe("provider isolation and native billing with explicit test doubles", () 
       maxTokens: estimateCallTokens(input, gpt),
     });
     expect(billing.settleBilling).toHaveBeenCalledWith("gpt-attempt-fixture", {
-      amount: 3500,
+      amount: 3310,
       inputTokens: 1000,
       outputTokens: 500,
       cachedInputTokens: 200,
       responseId: "gpt-fixture",
+      model: "gpt-6.1-terra",
+      serviceTier: "default",
+      cacheWriteInputTokens: 0,
+      cacheWrite30mInputTokens: 0,
+      cacheWrite12hInputTokens: 0,
     });
     expect(billing.reserveBilling.mock.invocationCallOrder[0]).toBeLessThan(
       fn.mock.invocationCallOrder[0],
@@ -355,10 +737,13 @@ describe("provider isolation and native billing with explicit test doubles", () 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(gptResponse("invalid JSON")));
     await expect(
       generateStrategy(input, getModelConfig("openai"), "invalid-gpt"),
-    ).rejects.toMatchObject({ uncertain: false, usage: { estimatedUsd: 0.0035, estimatedCny: 0 } });
+    ).rejects.toMatchObject({
+      uncertain: false,
+      usage: { estimatedUsd: 0.00331, estimatedCny: 0 },
+    });
     expect(billing.settleBilling).toHaveBeenCalledWith(
       "invalid-gpt",
-      expect.objectContaining({ amount: 3500 }),
+      expect.objectContaining({ amount: 3310 }),
     );
     expect(billing.holdBilling).not.toHaveBeenCalled();
   });

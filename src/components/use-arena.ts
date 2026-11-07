@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ArenaSnapshot, Challenge, ModelMode } from "@/lib/contracts";
+import type { ArenaSnapshot, Challenge, ModelMode, FollowUpInput } from "@/lib/contracts";
+import type { IntakeDraft } from "@/lib/intake-contracts";
+import { clearExplicitArenaRequest, examplePickerRequested } from "@/lib/example-navigation";
+import {
+  clearIntakeDraftPointer,
+  readIntakeDraftPointer,
+  saveIntakeDraftPointer,
+} from "./intake-draft-pointer";
+import { clearArenaPointer, readArenaPointer, saveArenaPointer } from "./arena-pointer";
 
 export interface Health {
   status: string;
@@ -30,7 +38,6 @@ async function api<T>(url: string, body?: unknown, signal?: AbortSignal): Promis
   if (!response.ok) throw new ApiError(data.error ?? "请求未完成，请稍后重试", data.code);
   return data;
 }
-const storageKey = "strategy-arena:last-id";
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 function revisionOf(value: ArenaSnapshot) {
   return {
@@ -69,14 +76,17 @@ export function useArena() {
       controllers.current.delete(controller);
     }
   }, []);
-  const accept = useCallback((value: ArenaSnapshot, expectedGeneration: number) => {
-    if (!mounted.current || expectedGeneration !== generation.current) return false;
-    if (latest.current && snapshotIsOlder(value, latest.current)) return false;
-    latest.current = value;
-    setSnapshot(value);
-    localStorage.setItem(storageKey, value.id);
-    return true;
-  }, []);
+  const accept = useCallback(
+    (value: ArenaSnapshot, expectedGeneration: number, created = false) => {
+      if (!mounted.current || expectedGeneration !== generation.current) return false;
+      if (latest.current && snapshotIsOlder(value, latest.current)) return false;
+      latest.current = value;
+      setSnapshot(value);
+      saveArenaPointer(value.id, created);
+      return true;
+    },
+    [],
+  );
   const refresh = useCallback(
     async (id: string) => {
       const epoch = generation.current;
@@ -87,23 +97,61 @@ export function useArena() {
     [request, accept],
   );
   const restore = useCallback(async () => {
-    const id = localStorage.getItem(storageKey);
     const epoch = generation.current;
-    if (!id) {
-      setRestoring(false);
-      return;
-    }
+    let id: string | null = null;
+    let restoringPreviousArena = false;
+    let restoringExplicitArena = false;
     try {
+      const parameters = new URL(window.location.href).searchParams;
+      if (parameters.has("arena")) {
+        restoringExplicitArena = true;
+        const requestedId = parameters.get("arena")?.trim();
+        if (!requestedId) throw new ApiError("没有指定要打开的推演。", "INVALID_ARENA");
+        const value = await request<ArenaSnapshot>(
+          `/api/arenas/${encodeURIComponent(requestedId)}`,
+        );
+        accept(value, epoch);
+        return;
+      }
+      if (examplePickerRequested()) return;
+      id = readArenaPointer();
+      const draftId = readIntakeDraftPointer();
+      if (draftId) {
+        let draft: IntakeDraft | null = null;
+        try {
+          draft = await request<IntakeDraft>(`/api/intakes/${encodeURIComponent(draftId)}`);
+        } catch (failure) {
+          if (failure instanceof ApiError && failure.code === "NOT_FOUND")
+            clearIntakeDraftPointer(draftId);
+          else throw failure;
+        }
+        if (draft) {
+          saveIntakeDraftPointer(draft.id);
+          // The server may have committed submit even when the browser lost its response.
+          if (draft.status === "submitted" && draft.arenaId) {
+            const committed = await request<ArenaSnapshot>(`/api/arenas/${draft.arenaId}`);
+            if (accept(committed, epoch)) clearIntakeDraftPointer(draft.id);
+          }
+          // A pending draft takes precedence over an older discussion in this browser.
+          return;
+        }
+      }
+      if (!id) return;
+      restoringPreviousArena = true;
       const value = await request<ArenaSnapshot>(`/api/arenas/${encodeURIComponent(id)}`);
       accept(value, epoch);
     } catch (e) {
       if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
-        if (!(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
-          localStorage.removeItem(storageKey);
+        if (restoringPreviousArena && !(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
+          clearArenaPointer(id);
         setError(
-          e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
-            ? "上次的擂台无法在当前浏览器身份下打开。你可以开始新一轮。"
-            : "未能恢复上次的擂台，你可以重新开始。",
+          restoringExplicitArena
+            ? e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
+              ? "当前浏览器无法访问指定的推演。未恢复之前的任务，请检查打开的链接。"
+              : "未能打开指定的推演。未恢复之前的任务，请稍后重试。"
+            : e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
+              ? "当前浏览器无法访问上次的擂台，你可以开始新一轮。"
+              : "未能恢复上次的擂台，你可以重新开始。",
         );
       }
     } finally {
@@ -209,8 +257,8 @@ export function useArena() {
             setAuto(false);
             setError(
               e instanceof Error
-                ? `${e.message}。为避免重复计费，自动推进已停止；请先刷新状态。`
-                : "请求状态不明，已停止自动推进。请先刷新状态。",
+                ? `${e.message}。为避免重复计费，已停止自动推演，请先刷新状态。`
+                : "请求状态不明，已停止自动推演，请先刷新状态。",
             );
             return;
           }
@@ -231,13 +279,14 @@ export function useArena() {
   }, [arenaId, activeId, auto, driverRevision, request, accept, refresh]);
   const mutate = useCallback(
     async (path: string, body: unknown, keepDriving = true) => {
+      if (mutationBusy.current) return false;
       mutationBusy.current = true;
       const epoch = ++generation.current;
       setBusy(true);
       setError("");
       try {
         const value = await request<ArenaSnapshot>(path, body);
-        accept(value, epoch);
+        accept(value, epoch, path === "/api/arenas");
         setAuto(keepDriving);
         setDriverRevision((v) => v + 1);
         return true;
@@ -281,22 +330,45 @@ export function useArena() {
       }
     },
     clearError: () => setError(""),
+    adopt: (value: ArenaSnapshot) => {
+      const epoch = ++generation.current;
+      setError("");
+      accept(value, epoch, readArenaPointer() !== value.id);
+      setAuto(true);
+      setDriverRevision((revision) => revision + 1);
+    },
     create: (challenge: Challenge, modelMode: ModelMode = "auto") =>
       mutate("/api/arenas", { ...challenge, modelMode }),
-    rematch: (challenge: Challenge, changeReason: string, modelMode?: ModelMode) =>
+    rematch: (
+      challenge: Challenge,
+      changeReason: string,
+      modelMode?: ModelMode,
+      baseVersionId?: string,
+      followUp?: FollowUpInput,
+    ) =>
       latest.current
         ? mutate(`/api/arenas/${latest.current.id}/versions`, {
             challenge,
             changeReason,
             modelMode,
+            baseVersionId,
+            followUp,
           })
         : Promise.resolve(false),
-    intervene: (targetStrategyId: string, targetClaimId: string, text: string) =>
+    intervene: (
+      targetStrategyId: string,
+      targetClaimId: string,
+      text: string,
+      baseVersionId?: string,
+      quote?: string,
+    ) =>
       latest.current
         ? mutate(`/api/arenas/${latest.current.id}/interventions`, {
             targetStrategyId,
             targetClaimId,
             text,
+            baseVersionId,
+            quote,
           })
         : Promise.resolve(false),
     stop: async () => {
@@ -323,12 +395,14 @@ export function useArena() {
       setDriverRevision((v) => v + 1);
     },
     reset: () => {
+      const ownId = latest.current?.id ?? null;
+      clearExplicitArenaRequest();
       generation.current++;
       latest.current = null;
       setAuto(false);
       setSnapshot(null);
       setError("");
-      localStorage.removeItem(storageKey);
+      clearArenaPointer(ownId);
     },
   };
 }

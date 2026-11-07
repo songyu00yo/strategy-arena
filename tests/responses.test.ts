@@ -45,11 +45,15 @@ const strategy = {
   failureCondition: "没有可发布作品",
   estimatedCost: "unknown",
   estimatedHours: 8,
+  costPlan: {
+    complete: false,
+    items: [{ id: "c1", label: "费用范围待确认", amount: null, basis: "unknown", quote: "" }],
+  },
 };
 const usage = {
   input_tokens: 1000,
   output_tokens: 500,
-  input_tokens_details: { cached_tokens: 200 },
+  input_tokens_details: { cached_tokens: 200, cache_write_tokens: 0 },
   output_tokens_details: { reasoning_tokens: 300 },
 };
 const call = () => ({
@@ -60,7 +64,8 @@ const call = () => ({
 });
 const response = (patch: Record<string, unknown> = {}) => ({
   id: "resp_fixture",
-  model: "returned-gpt-snapshot",
+  model: "gpt-6.1-terra",
+  service_tier: "default",
   status: "completed",
   output: [{ type: "reasoning", summary: [] }, call()],
   usage,
@@ -95,7 +100,7 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
   it("sends the actual flat Responses schema, disables storage and accounts reasoning once", async () => {
     const fetch = mockResponse();
     const config = getModelConfig("openai");
-    expect(config.configurationVersion).toBe("openai-1.1.1");
+    expect(config.configurationVersion).toBe("openai-standard-no-cache-1.3.0");
     const result = await generateStrategy(input, config, "responses-fixture");
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
@@ -132,18 +137,24 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
       inputTokens: 1000,
       outputTokens: 500,
       cachedInputTokens: 200,
-      estimatedUsd: 0.0035,
+      estimatedUsd: 0.00331,
       estimatedCny: 0,
       responseId: "resp_fixture",
-      model: "returned-gpt-snapshot",
+      model: "gpt-6.1-terra",
+      serviceTier: "default",
       durationMs: expect.any(Number),
     });
     expect(billing.settleBilling).toHaveBeenCalledWith("responses-fixture", {
-      amount: 3500,
+      amount: 3310,
       inputTokens: 1000,
       outputTokens: 500,
       cachedInputTokens: 200,
       responseId: "resp_fixture",
+      model: "gpt-6.1-terra",
+      serviceTier: "default",
+      cacheWriteInputTokens: 0,
+      cacheWrite30mInputTokens: 0,
+      cacheWrite12hInputTokens: 0,
     });
     expect(billing.holdBilling).not.toHaveBeenCalled();
   });
@@ -202,7 +213,7 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
       const attempt = generateStrategy(input, getModelConfig("openai"), "known-response");
       await expect(attempt).rejects.toMatchObject({
         uncertain: false,
-        usage: { estimatedUsd: 0.0035 },
+        usage: { estimatedUsd: 0.00331 },
       });
       await expect(attempt).rejects.not.toThrow("private upstream detail");
       await expect(attempt).rejects.not.toThrow("private refusal text");
@@ -236,7 +247,11 @@ describe("OpenAI Responses with authorized low reasoning and forced structured t
       status: "incomplete",
       incomplete_details: { reason: "max_output_tokens" },
       output: [],
-      usage: { input_tokens: 0, output_tokens: 0, input_tokens_details: { cached_tokens: 0 } },
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+      },
     });
     const attempt = generateStrategy(input, getModelConfig("openai"), "incomplete-schema-fixture");
     await expect(attempt).rejects.toMatchObject({

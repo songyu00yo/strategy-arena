@@ -1,0 +1,36 @@
+.goal-landing {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 90px 16px 64px;
+}
+.goal-landing-center {
+  width: min(100%, 1040px);
+  text-align: center;
+}
+.focus-home .h-form {
+  animation: none;
+  text-align: left;
+}
+.goal-landing .h-examples-link {
+  position: relative;
+  z-index: 1;
+  margin-top: -24px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--c-t2);
+}
+.focus-home .site-header .model-pill {
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-t2);
+  font-size: 11px;
+}
+@media (max-width: 650px) {
+  .goal-landing {
+    padding: 74px 2px 40px;
+  }
+  .goal-landing .h-examples-link {
+    margin-top: -14px;
+  }
+}

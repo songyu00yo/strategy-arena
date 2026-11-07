@@ -1,7 +1,7 @@
 "use client";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { reducedMotion } from "./effects";
-import { createMotionScope } from "./motion-runtime";
+import { createMotionScope, useReducedMotion } from "./motion-runtime";
 
 /** Keep the result in the flow until its space has closed. A new request starts at the current size. */
 export function ResultRegion({
@@ -13,12 +13,13 @@ export function ResultRegion({
   expanded: boolean;
   children: ReactNode;
 }) {
+  const reducePreference = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const host = ref.current;
     const card = host?.firstElementChild as HTMLElement | null;
     if (!host || !card) return;
-    const scope = createMotionScope();
+    const scope = createMotionScope("interaction");
     let parts: Animation[] = [];
     let target = -1;
     const freeze = () => {
@@ -76,7 +77,7 @@ export function ResultRegion({
       freeze();
       scope.dispose();
     };
-  }, [open, expanded]);
+  }, [open, expanded, reducePreference]);
   return (
     <div ref={ref} className="c-result-region" inert={!open} aria-hidden={!open}>
       {children}

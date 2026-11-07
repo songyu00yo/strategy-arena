@@ -49,6 +49,10 @@ const strategy = {
   failureCondition: "时间不足",
   estimatedCost: "unknown",
   estimatedHours: 8,
+  costPlan: {
+    complete: false,
+    items: [{ id: "c1", label: "费用范围待确认", amount: null, basis: "unknown", quote: "" }],
+  },
 };
 function response(args = JSON.stringify(strategy), name = "submit_propose") {
   return {
@@ -441,7 +445,9 @@ describe("explicit strict-tool adapter", () => {
       nextActions: ["补充材料"],
       exitCondition: "证据不足不执行",
       evidenceIds: [],
-      comparisons: [{ strategyId: "A", status: "unknown", reason: "待核验" }],
+      comparisons: [
+        { strategyId: "A", status: "unknown", reason: "待核验", basis: "unknown", quote: "" },
+      ],
       attackFindings: [],
     };
     vi.stubGlobal(

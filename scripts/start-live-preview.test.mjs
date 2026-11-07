@@ -126,9 +126,9 @@ test("passes only trusted proxy variables and appends loopback bypasses for both
   });
 });
 
-test("uses audited 300, 400 or 650 request caps without adjusting the ledger or other ceilings", async (t) => {
+test("uses audited 300, 400, 650 or 700 request caps without adjusting the ledger or other ceilings", async (t) => {
   const { directory, options, deps } = fixture(t);
-  for (const requestLimit of [300, 400, 650]) {
+  for (const requestLimit of [300, 400, 650, 700]) {
     let reads = 0;
     const summary = { ...billingFixture, requestLimit, requests: 243 };
     const before = structuredClone(summary);
@@ -146,7 +146,7 @@ test("uses audited 300, 400 or 650 request caps without adjusting the ledger or 
     assert.deepEqual(summary, before);
     assert.equal(existsSync(join(directory, "data")), false);
   }
-  for (const requestLimit of [299, 651, 300.5])
+  for (const requestLimit of [299, 701, 300.5])
     await assert.rejects(
       prepareLivePreview(options, {
         ...deps,

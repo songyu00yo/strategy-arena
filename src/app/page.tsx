@@ -46,6 +46,8 @@ import "@/components/friend-feedback.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import type { OverlayMotionHandle } from "@/components/overlay-motion";
+import { IdentityHistory } from "@/components/identity-history";
+import { AgentProgress } from "@/components/agent-progress";
 import { useArena } from "@/components/use-arena";
 
 const ERROR_EXIT: Keyframe[] = [
@@ -117,6 +119,7 @@ function RunNotice({
 }
 export default function Page() {
   const arena = useArena();
+  const [identityEpoch, setIdentityEpoch] = useState(0);
   const [versionId, setVersionId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -321,6 +324,24 @@ export default function Page() {
           <span>方案擂台</span>
         </button>
         <div className="header-right">
+          {!demo && (
+            <IdentityHistory
+              disabled={accessRequired}
+              onIdentityChanged={() => {
+                arena.changeIdentity();
+                setIdentityEpoch((epoch) => epoch + 1);
+              }}
+              onOpenArena={async (id) => {
+                await arena.openArena(id);
+                chooseVersion(null);
+              }}
+              onOpenIntake={(id) => {
+                arena.openIntake(id);
+                chooseVersion(null);
+                setIdentityEpoch((epoch) => epoch + 1);
+              }}
+            />
+          )}
           <button
             type="button"
             className={`model-pill ${configured === false ? "unconfigured" : ""}`}
@@ -360,6 +381,7 @@ export default function Page() {
             </div>
           </Leaving>
         )}
+
         {!arena.snapshot ? (
           <>
             <div className="goal-landing">
@@ -400,26 +422,30 @@ export default function Page() {
                         </div>
                       </form>
                     )}
-                    {arena.restoring ? (
-                      <div className="restoring-state">
-                        <LoaderCircle className="spin" size={24} />
-                        <p>正在恢复上一次的推演…</p>
+                    {arena.restoring && (
+                      <div className="home-connection-state" role="status">
+                        <LoaderCircle className="spin" size={16} />
+                        <span>正在连接并检查上次的任务…</span>
                       </div>
-                    ) : demo ? (
+                    )}
+                    {demo ? (
                       <ChallengeForm
                         demo={demo}
                         modelProviders={arena.health?.model.providers}
                         pending={arena.busy}
-                        disabled={configured === false || !arena.health || accessRequired}
+                        disabled={
+                          arena.restoring || configured === false || !arena.health || accessRequired
+                        }
                         onSubmit={async (challenge, _reason, modelMode) => {
                           if (await arena.create(challenge, modelMode)) chooseVersion(null);
                         }}
                       />
                     ) : (
                       <GuidedIntake
+                        key={identityEpoch}
                         modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
                         pending={arena.busy}
-                        disabled={!arena.health || accessRequired}
+                        disabled={arena.restoring || !arena.health || accessRequired}
                         onCreated={(snapshot) => {
                           arena.adopt(snapshot);
                           chooseVersion(null);
@@ -491,127 +517,143 @@ export default function Page() {
                   historical ? undefined : (trigger) => openConditions(selected, trigger)
                 }
                 conditions={
-                  <section className="arena-intro">
-                    <div>
-                      <div className="arena-conditions">
-                        {selected.challenge.constraints && (
-                          <button
-                            type="button"
-                            className="condition-trigger"
-                            disabled={historical || arena.busy}
-                            onClick={(event) =>
-                              openConditions(selected, event.currentTarget, "constraints")
-                            }
-                          >
-                            <strong>硬性限制</strong>
-                            {selected.challenge.constraints}
-                          </button>
+                  <>
+                    <AgentProgress
+                      version={selected}
+                      drafts={arena.snapshot?.drafts ?? []}
+                      web={arena.snapshot?.model.tools}
+                    />
+                    <section className="arena-intro">
+                      <div>
+                        <div className="arena-conditions">
+                          {selected.challenge.constraints && (
+                            <button
+                              type="button"
+                              className="condition-trigger"
+                              disabled={historical || arena.busy}
+                              onClick={(event) =>
+                                openConditions(selected, event.currentTarget, "constraints")
+                              }
+                            >
+                              <strong>硬性限制</strong>
+                              {selected.challenge.constraints}
+                            </button>
+                          )}
+                          {selected.challenge.preferences && (
+                            <button
+                              type="button"
+                              className="condition-trigger"
+                              disabled={historical || arena.busy}
+                              onClick={(event) =>
+                                openConditions(selected, event.currentTarget, "preferences")
+                              }
+                            >
+                              <strong>偏好</strong>
+                              {selected.challenge.preferences}
+                            </button>
+                          )}
+                          {selected.challenge.budget !== null && (
+                            <button
+                              type="button"
+                              className="condition-trigger"
+                              disabled={historical || arena.busy}
+                              onClick={(event) =>
+                                openConditions(selected, event.currentTarget, "budget")
+                              }
+                            >
+                              <strong>预算上限</strong>¥{selected.challenge.budget.toLocaleString()}
+                            </button>
+                          )}
+                          {selected.challenge.timeHours !== null && (
+                            <button
+                              type="button"
+                              className="condition-trigger"
+                              disabled={historical || arena.busy}
+                              onClick={(event) =>
+                                openConditions(selected, event.currentTarget, "timeHours")
+                              }
+                            >
+                              <strong>可用时间</strong>
+                              {selected.challenge.timeHours} 小时
+                            </button>
+                          )}
+                        </div>
+                        {selected.intake && <IntakeContext intake={selected.intake} />}
+                        {selected.changeReason && (
+                          <p className="version-reason">
+                            <CornerIcon />
+                            本轮改动：{selected.changeReason}
+                          </p>
                         )}
-                        {selected.challenge.preferences && (
-                          <button
-                            type="button"
-                            className="condition-trigger"
-                            disabled={historical || arena.busy}
-                            onClick={(event) =>
-                              openConditions(selected, event.currentTarget, "preferences")
-                            }
-                          >
-                            <strong>偏好</strong>
-                            {selected.challenge.preferences}
-                          </button>
+                        {(parentVersion || selected.followUp) && (
+                          <VersionComparison version={selected} parent={parentVersion} />
                         )}
-                        {selected.challenge.budget !== null && (
-                          <button
-                            type="button"
-                            className="condition-trigger"
-                            disabled={historical || arena.busy}
-                            onClick={(event) =>
-                              openConditions(selected, event.currentTarget, "budget")
-                            }
-                          >
-                            <strong>预算上限</strong>¥{selected.challenge.budget.toLocaleString()}
-                          </button>
-                        )}
-                        {selected.challenge.timeHours !== null && (
-                          <button
-                            type="button"
-                            className="condition-trigger"
-                            disabled={historical || arena.busy}
-                            onClick={(event) =>
-                              openConditions(selected, event.currentTarget, "timeHours")
-                            }
-                          >
-                            <strong>可用时间</strong>
-                            {selected.challenge.timeHours} 小时
-                          </button>
+                        {parentVersion && parentChanges.length > 0 && (
+                          <div className="condition-delta">
+                            <span>相比 V{String(parentVersion.number).padStart(2, "0")}</span>
+                            <ul>
+                              {parentChanges.map((c) => (
+                                <li key={c.label}>
+                                  <strong>{c.label}</strong>
+                                  {c.detail}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
                         )}
                       </div>
-                      {selected.intake && <IntakeContext intake={selected.intake} />}
-                      {selected.changeReason && (
-                        <p className="version-reason">
-                          <CornerIcon />
-                          本轮改动：{selected.changeReason}
-                        </p>
-                      )}
-                      {(parentVersion || selected.followUp) && (
-                        <VersionComparison version={selected} parent={parentVersion} />
-                      )}
-                      {parentVersion && parentChanges.length > 0 && (
-                        <div className="condition-delta">
-                          <span>相比 V{String(parentVersion.number).padStart(2, "0")}</span>
-                          <ul>
-                            {parentChanges.map((c) => (
-                              <li key={c.label}>
-                                <strong>{c.label}</strong>
-                                {c.detail}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                    <div className="arena-cost">
-                      <span>{demo ? "演示费用（预设）" : "本轮费用估算"}</span>
-                      <strong>
-                        {selected.modelSelection?.currency === "USD"
-                          ? money(selected.costUsd ?? 0, "USD")
-                          : money(selected.costCny)}
-                      </strong>
-                      {!demo && (preparationUsd > 0 || preparationCny > 0) && (
-                        <small>
-                          准备阶段另计 {preparationUsd > 0 ? money(preparationUsd, "USD") : ""}
-                          {preparationUsd > 0 && preparationCny > 0 ? " + " : ""}
-                          {preparationCny > 0 ? money(preparationCny) : ""}
-                          （含材料辨读与补问）
-                        </small>
-                      )}
-                      {(selected.reservedCny > 0 || (selected.reservedUsd ?? 0) > 0) && (
-                        <small>
-                          另有{" "}
+                      <div className="arena-cost">
+                        <span>{demo ? "演示费用（预设）" : "本轮费用估算"}</span>
+                        <strong>
                           {selected.modelSelection?.currency === "USD"
-                            ? money(selected.reservedUsd ?? 0, "USD")
-                            : money(selected.reservedCny)}{" "}
-                          调用中预留
-                        </small>
-                      )}
-                      {!demo && (
+                            ? money(selected.costUsd ?? 0, "USD")
+                            : money(selected.costCny)}
+                        </strong>
+                        {!demo && (preparationUsd > 0 || preparationCny > 0) && (
+                          <small>
+                            准备阶段另计 {preparationUsd > 0 ? money(preparationUsd, "USD") : ""}
+                            {preparationUsd > 0 && preparationCny > 0 ? " + " : ""}
+                            {preparationCny > 0 ? money(preparationCny) : ""}
+                            （含材料辨读与补问）
+                          </small>
+                        )}
+                        {selected.toolUsage && selected.toolUsage.requests > 0 && (
+                          <small>
+                            联网工具估算 ${selected.toolUsage.estimatedUsd.toFixed(6)} ·{" "}
+                            {selected.toolUsage.requests} 次
+                            {selected.toolUsage.reservedUsd > 0
+                              ? ` · 预留 $${selected.toolUsage.reservedUsd.toFixed(6)}`
+                              : ""}
+                          </small>
+                        )}
+                        {(selected.reservedCny > 0 || (selected.reservedUsd ?? 0) > 0) && (
+                          <small>
+                            另有{" "}
+                            {selected.modelSelection?.currency === "USD"
+                              ? money(selected.reservedUsd ?? 0, "USD")
+                              : money(selected.reservedCny)}{" "}
+                            调用中预留
+                          </small>
+                        )}
+                        {!demo && (
+                          <small>
+                            {selected.modelSelection?.modelId ?? "早期记录：模型未记录"}
+                            {selected.modelSelection && (
+                              <>
+                                <br />
+                                {selected.modelSelection.reason}
+                              </>
+                            )}
+                          </small>
+                        )}
                         <small>
-                          {selected.modelSelection?.modelId ?? "早期记录：模型未记录"}
-                          {selected.modelSelection && (
-                            <>
-                              <br />
-                              {selected.modelSelection.reason}
-                            </>
-                          )}
+                          {demo
+                            ? "预设用量与费用，未调用模型，实际费用为 0"
+                            : "按已记录用量估算，非最终账单"}
                         </small>
-                      )}
-                      <small>
-                        {demo
-                          ? "预设用量与费用，未调用模型，实际费用为 0"
-                          : "按已记录用量估算，非最终账单"}
-                      </small>
-                    </div>
-                  </section>
+                      </div>
+                    </section>
+                  </>
                 }
                 slate={
                   <>

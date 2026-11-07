@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MODEL_IDS } from "./model-catalog";
 
-export const SCHEMA_VERSION = "1.2.0";
+export const SCHEMA_VERSION = "1.3.0";
 export const STAGES = ["propose", "attack", "verify", "revise", "judge"] as const;
 export type Stage = (typeof STAGES)[number];
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -47,7 +47,10 @@ export interface ModelCatalogOption extends ModelOption {
   inputPrice: number;
   outputPrice: number;
 }
+export const ExecutionModeSchema = z.enum(["fixed", "agent"]);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 export const CreateArenaRequestSchema = ChallengeSchema.extend({
+  executionMode: ExecutionModeSchema.default("agent"),
   modelMode: ModelModeSchema.default("auto"),
 });
 export const ClaimSchema = z.object({
@@ -87,6 +90,8 @@ export const StrategySchema = z.object({
 export type Strategy = z.infer<typeof StrategySchema>;
 export const ToolRequestSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("search_materials"), query: z.string().min(1).max(300) }),
+  z.object({ tool: z.literal("search_web"), query: z.string().min(1).max(300) }),
+  z.object({ tool: z.literal("read_web"), url: z.string().url().max(2000) }),
   z.object({
     tool: z.literal("calculate"),
     expression: z.string().min(1).max(300),
@@ -106,19 +111,40 @@ export const AttackSchema = z.object({
   requests: z.array(ToolRequestSchema).max(2),
   status: z.enum(["pending", "supported", "refuted", "unresolved"]).default("pending"),
 });
-export type Attack = z.infer<typeof AttackSchema>;
+export type Attack = z.infer<typeof AttackSchema> & { round?: number; targetRevisionHash?: string };
 export const EvidenceSchema = z.object({
   id: short,
   attackId: short,
-  tool: z.enum(["search_materials", "calculate", "constraint_check"]),
+  tool: z.enum(["search_materials", "calculate", "constraint_check", "search_web", "read_web"]),
   status: z.enum(["found", "calculated", "unavailable", "error"]),
   title: short,
   content: z.string().max(6000),
   source: short,
   sourceIds: z.array(z.string()).default([]),
   provenance: z
-    .enum(["user_text", "document", "model_transcription", "model_interpretation", "unknown"])
+    .enum([
+      "user_text",
+      "document",
+      "model_transcription",
+      "model_interpretation",
+      "unknown",
+      "web",
+    ])
     .optional(),
+  references: z
+    .array(
+      z.object({
+        id: z.string(),
+        location: z.string(),
+        url: z.string().optional(),
+        contentHash: z.string(),
+        corpusHash: z.string().optional(),
+        accessedAt: z.string().optional(),
+      }),
+    )
+    .optional(),
+  query: z.string().optional(),
+  actionId: z.string().optional(),
   estimateScope: z.enum(["proposal", "final"]).optional(),
   expression: z.string().nullable().default(null),
   result: z.number().nullable().default(null),
@@ -143,7 +169,7 @@ export const RevisionSchema = z.object({
   summary: short,
   changed: z.boolean(),
 });
-export type Revision = z.infer<typeof RevisionSchema>;
+export type Revision = z.infer<typeof RevisionSchema> & { revisionId?: string; round?: number };
 export const VerdictSchema = z.object({
   outcome: z.enum(["recommendation", "tie", "insufficient", "infeasible", "partial"]),
   preferred: z.enum(["A", "B", "C"]).nullable(),
@@ -200,6 +226,8 @@ export type RunStatus =
   | "superseded";
 export type StepStatus = "pending" | "running" | "completed" | "failed" | "uncertain" | "skipped";
 export interface ArenaStep {
+  kind?: import("./agent-contracts").AgentAction["kind"];
+  round?: number;
   id: string;
   versionId: string;
   stage: Stage;
@@ -221,6 +249,12 @@ export interface ArenaEvent {
   createdAt: string;
 }
 export interface ArenaVersion {
+  executionMode?: ExecutionMode;
+  agent?: import("./agent-contracts").AgentState;
+  corpusHash?: string;
+  toolCostUsd?: number;
+  toolReservedUsd?: number;
+  toolUsage?: { estimatedUsd: number; reservedUsd: number; requests: number };
   id: string;
   number: number;
   challenge: Challenge;
@@ -259,6 +293,8 @@ export interface ArenaSnapshot {
   versions: ArenaVersion[];
   steps: ArenaStep[];
   events: ArenaEvent[];
+  eventCursor?: number;
+  drafts?: ModelDraft[];
   model: {
     id: string;
     configured: boolean;
@@ -266,7 +302,17 @@ export interface ArenaSnapshot {
     schemaVersion: string;
     providers?: ModelOption[];
     models?: ModelCatalogOption[];
+    tools?: { webConfigured: boolean; protocol: string; provider?: "deepseek" | "tavily" };
   };
+}
+export interface ModelDraft {
+  stepId: string;
+  versionId: string;
+  stage: Stage;
+  role: string;
+  revision: number;
+  fields: Record<string, string>;
+  status: "generating" | "committed" | "rejected" | "interrupted";
 }
 export interface ModelUsage {
   inputTokens: number;
@@ -298,6 +344,9 @@ export interface ModelResult<T> {
   formatNormalization?: ModelFormatNormalization;
 }
 export interface StageInput {
+  researchContext?: Evidence[];
+  routeBrief?: string;
+  toolCapabilities?: string[];
   challenge: Challenge;
   role: string;
   strategies: Strategy[];
@@ -331,6 +380,7 @@ export const VersionRequestSchema = z
     challenge: ChallengeSchema,
     changeReason: z.string().min(1).max(1000),
     modelMode: ModelModeSchema.optional(),
+    executionMode: ExecutionModeSchema.default("agent"),
     baseVersionId: z.string().min(1).max(200).optional(),
     followUp: FollowUpSchema.optional(),
   })

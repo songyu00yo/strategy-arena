@@ -115,6 +115,7 @@ describe("per-version selected provider and native currency", () => {
       expect.anything(),
       expect.objectContaining({ id: "gpt-6.1-sol", provider: "openai" }),
       expect.any(String),
+      expect.any(Function),
     );
     const rematch = newVersion(arena.id, "owner", challenge, "补充细节");
     expect(rematch.versions[1].modelSelection).toMatchObject({
@@ -186,6 +187,7 @@ describe("per-version selected provider and native currency", () => {
       expect.anything(),
       expect.objectContaining({ provider: "openai", id: "gpt-fixture" }),
       expect.any(String),
+      expect.any(Function),
     );
   });
   it("inherits manual mode and allows explicitly choosing auto on a rematch", () => {

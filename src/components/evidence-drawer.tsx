@@ -118,7 +118,7 @@ export function EvidenceDrawer({
     return () => document.removeEventListener("keydown", handle);
   }, [close, dialogRef]);
   const evidence = version.evidence.filter((e) => e.attackId === attack.id);
-  const revision = version.revisions.find((r) => r.strategyId === attack.targetStrategyId);
+  const revision = version.revisions.findLast((r) => r.strategyId === attack.targetStrategyId);
   const response = revision?.responses.find((r) => r.attackId === attack.id);
   const borrowed = version.revisions
     .filter((r) => r.strategyId !== attack.targetStrategyId)

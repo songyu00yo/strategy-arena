@@ -110,7 +110,7 @@ function source(arenaId: string, versionId: string, owner: string) {
   ).map((entry) => entry.body);
   const routes = ROUTE_IDS.map(
     (role) =>
-      version.revisions.find((revision) => revision.strategyId === role)?.strategy ??
+      version.revisions.findLast((revision) => revision.strategyId === role)?.strategy ??
       version.strategies.find((strategy) => strategy.id === role),
   );
   return {

@@ -4,7 +4,7 @@ import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
-import type { Beat } from "./beats";
+import { latestShownRevision, type Beat } from "./beats";
 import {
   createMotionLoop,
   createMotionScope,
@@ -805,9 +805,7 @@ export function RouteStage({
   const board = (id: "A" | "B" | "C") => {
     const strategy = version.strategies.find((s) => s.id === id);
     const present = !!strategy && seen.has(`p:${id}`);
-    const revision = seen.has(`r:${id}`)
-      ? version.revisions.find((r) => r.strategyId === id)
-      : undefined;
+    const revision = latestShownRevision(shown, id)?.revision;
     const view = revision?.strategy ?? strategy;
     const taken = attacks.filter((a) => a.targetStrategyId === id);
     const sent = attacks.filter((a) => a.from === id);
@@ -815,7 +813,7 @@ export function RouteStage({
     const speaking = current?.agent === id;
     const target = !speaking && current?.to === id;
     const enter = directed && current?.id === `p:${id}`;
-    const rewriting = directed && current?.id === `r:${id}`;
+    const rewriting = directed && current?.revision?.strategyId === id;
     return (
       <section
         key={id}

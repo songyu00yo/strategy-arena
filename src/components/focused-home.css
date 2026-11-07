@@ -28,9 +28,25 @@
 }
 @media (max-width: 650px) {
   .goal-landing {
-    padding: 74px 2px 40px;
+    min-height: 0;
+    padding: 56px 2px 24px;
+    align-items: start;
+  }
+  .console-shell.home.focus-home .h-form {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
   .goal-landing .h-examples-link {
     margin-top: -14px;
   }
+}
+
+.home-connection-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--c-t2);
+  font-size: 13px;
 }

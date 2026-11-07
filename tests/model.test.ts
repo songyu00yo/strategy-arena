@@ -179,7 +179,7 @@ describe("real adapter protocol with explicit HTTP test doubles", () => {
     expect(body).toMatchObject({
       response_format: { type: "json_object" },
       thinking: { type: "disabled" },
-      stream: false,
+      stream: true,
     });
     expect(body.max_tokens).toBeLessThanOrEqual(6000);
     expect(fetchMock.mock.calls[0][1].redirect).toBe("error");

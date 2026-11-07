@@ -39,6 +39,11 @@ export type Beat = {
   verdict?: Verdict;
 };
 
+/** Read only the playback section already revealed to the user. */
+export function latestShownRevision(shown: readonly Beat[], strategyId: string) {
+  return shown.findLast((beat) => beat.revision?.strategyId === strategyId);
+}
+
 export function beatsOf(version: ArenaVersion): Beat[] {
   const beats: Beat[] = [];
   for (const s of version.strategies)
@@ -71,15 +76,16 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       to: a.targetStrategyId,
       packet: attackMeta[a.status].label,
       title: `${a.from} 对 ${a.targetStrategyId} 的质疑：${attackMeta[a.status].label}`,
-      plain: "用你给的材料和计算工具查证，不能只凭模型的说法。",
+      plain: "根据材料、公开来源和计算记录核验这项质疑。",
       attack: a,
     });
   }
+  const previousStrategies = new Map(version.strategies.map((strategy) => [strategy.id, strategy]));
   for (const r of version.revisions) {
-    const proposal = version.strategies.find((s) => s.id === r.strategyId);
-    const changes = proposal ? strategyChanges(proposal, r.strategy).map((c) => c.label) : [];
+    const previous = previousStrategies.get(r.strategyId);
+    const changes = previous ? strategyChanges(previous, r.strategy).map((c) => c.label) : [];
     beats.push({
-      id: `r:${r.strategyId}`,
+      id: `r:${r.revisionId ?? r.strategyId}`,
       stage: "revise",
       agent: r.strategyId,
       title: r.summary,
@@ -89,6 +95,7 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       revision: r,
       changes,
     });
+    previousStrategies.set(r.strategyId, r.strategy);
   }
   if (version.verdict)
     beats.push({
@@ -99,7 +106,34 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       plain: "裁判看完全部质疑和证据后，给出有条件的结论。",
       verdict: version.verdict,
     });
-  return beats;
+  if (!version.agent) return beats;
+  const byId = new Map(beats.map((beat) => [beat.id, beat]));
+  const ordered: Beat[] = [];
+  const seen = new Set<string>();
+  const push = (id: string) => {
+    const beat = byId.get(id);
+    if (beat && !seen.has(id)) {
+      ordered.push(beat);
+      seen.add(id);
+    }
+  };
+  for (const action of version.agent.actions) {
+    if (action.kind === "propose") push(`p:${action.role}`);
+    if (action.kind === "attack") push(`a:attack-${action.id}`);
+    if (action.kind === "revise") push(`r:${action.id}`);
+    if (action.kind === "tools")
+      for (const attack of version.attacks) {
+        if (
+          version.evidence.some(
+            (evidence) => evidence.attackId === attack.id && evidence.actionId === action.id,
+          )
+        )
+          push(`v:${attack.id}`);
+      }
+    if (action.kind === "judge") push("judge");
+  }
+  for (const beat of beats) push(beat.id);
+  return ordered;
 }
 
 type EventData = { usage?: ModelUsage | null; modelOutput?: unknown } | null;

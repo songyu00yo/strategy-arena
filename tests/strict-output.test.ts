@@ -428,7 +428,7 @@ describe("explicit strict-tool adapter", () => {
       ],
       tool_choice: { type: "function", function: { name: "submit_propose" } },
       thinking: { type: "disabled" },
-      stream: false,
+      stream: true,
     });
     expect(body).not.toHaveProperty("response_format");
     expect(body.messages[0].content).toContain('"unknown"');

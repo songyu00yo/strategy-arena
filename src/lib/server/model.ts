@@ -29,6 +29,12 @@ import {
   toStrictToolSchema,
 } from "./strict-schema";
 
+import { ToolBudgetError } from "./tool-budget";
+import { readModelStream } from "./model-stream";
+import { assertUniqueJsonKeys } from "./stream-preview";
+import type { ModelPreviewCallback } from "./stream-preview";
+export type { ModelPreview, ModelPreviewCallback } from "./stream-preview";
+
 type Kind = keyof typeof STAGE_PROMPTS;
 function numberEnv(name: string, fallback: number, min: number, max: number) {
   const value = process.env[name] === undefined ? fallback : Number(process.env[name]);
@@ -425,7 +431,7 @@ export function buildRequestBody(
             tool_choice: { type: "function", name: functionName },
           }
         : { text: { format: { type: "json_object" } } }),
-      stream: false,
+      stream: true,
     };
   return {
     model: config.id,
@@ -433,13 +439,14 @@ export function buildRequestBody(
     temperature: config.temperature,
     max_tokens: config.maxOutputTokens,
     thinking: { type: "disabled" },
+    stream_options: { include_usage: true },
     ...(strict
       ? {
           tools: [{ type: "function", function: functionDefinition }],
           tool_choice: { type: "function", function: { name: functionName } },
         }
       : { response_format: { type: "json_object" } }),
-    stream: false,
+    stream: true,
   };
 }
 export function resolveModelConfig(mode: ModelMode = DEFAULT_MODEL_ID): ModelConfig {
@@ -461,6 +468,7 @@ export interface StructuredRequest<T> {
   modelId?: ModelId;
   config?: ModelConfig;
   attemptId?: string;
+  onPreview?: ModelPreviewCallback;
 }
 // Operational reservation ceiling, not a claim about the providers' undocumented tokenizers.
 // Enforced for <=1536px decoded images; reported usage above the reservation stops the draft.
@@ -570,7 +578,7 @@ export async function generateStructured<T>(
           parallel_tool_calls: false,
           tools: [{ type: "function", ...common }],
           tool_choice: { type: "function", name: functionName },
-          stream: false,
+          stream: true,
         }
       : {
           model: c.id,
@@ -592,9 +600,10 @@ export async function generateStructured<T>(
           temperature: c.temperature,
           max_tokens: c.maxOutputTokens,
           thinking: { type: "disabled" },
+          stream_options: { include_usage: true },
           tools: [{ type: "function", function: common }],
           tool_choice: { type: "function", function: { name: functionName } },
-          stream: false,
+          stream: true,
         };
   const estimate = estimateStructuredCall({ ...request, config: c });
   return executeStructured({
@@ -606,6 +615,8 @@ export async function generateStructured<T>(
     estimatedTokens: estimate.tokens,
     estimatedCost: estimate.amount,
     allowRepair: false,
+    onPreview: request.onPreview,
+    stage: request.name,
   });
 }
 async function generate<T>(
@@ -614,6 +625,7 @@ async function generate<T>(
   schema: z.ZodType<T>,
   c: ModelConfig = getModelConfig(),
   attemptId: string = randomUUID(),
+  onPreview?: ModelPreviewCallback,
 ): Promise<ModelResult<T>> {
   return executeStructured({
     c,
@@ -624,6 +636,8 @@ async function generate<T>(
     estimatedCost: estimateCallCost(input, c),
     estimatedTokens: estimateCallTokens(input, c),
     allowRepair: true,
+    onPreview,
+    stage: kind,
   });
 }
 async function executeStructured<T>({
@@ -635,6 +649,8 @@ async function executeStructured<T>({
   estimatedCost,
   estimatedTokens,
   allowRepair,
+  onPreview,
+  stage,
 }: {
   c: ModelConfig;
   schema: z.ZodType<T>;
@@ -644,6 +660,8 @@ async function executeStructured<T>({
   estimatedCost: number;
   estimatedTokens: number;
   allowRepair: boolean;
+  onPreview?: ModelPreviewCallback;
+  stage: string;
 }): Promise<ModelResult<T>> {
   if (!c.configured)
     throw new ModelCallError(
@@ -682,8 +700,11 @@ async function executeStructured<T>({
       maxTokens: estimatedTokens,
     });
   } catch (error) {
-    const code = error instanceof BillingError ? error.code : "";
+    const code =
+      error instanceof BillingError || error instanceof ToolBudgetError ? error.code : "";
     const messages: Record<string, string> = {
+      TOOL_BATCH_LIMIT_REACHED: "本批次模型与联网工具额度已用尽，本次请求未发送。",
+      TOOL_BATCH_NOT_INITIALIZED: "联网工具验收批次尚未初始化，本次请求未发送。",
       BILLING_LIMIT_REACHED: "共享模型额度已达到金额、请求次数或 Token 上限，本次请求未发送。",
       BILLING_INVALID_CONFIG:
         "共享计费配置缺失或无效，请检查服务器的共享账本路径和额度配置；本次请求未发送。",
@@ -804,8 +825,23 @@ async function executeStructured<T>({
       };
     }[];
   };
+  let streamProtocolError: string | undefined;
   try {
-    raw = await response.json();
+    if (response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
+      const streamed = await readModelStream(
+        response,
+        c.provider,
+        functionName,
+        strict,
+        stage,
+        onPreview,
+      );
+      raw = streamed.value as typeof raw;
+      streamProtocolError = streamed.protocolError;
+    } else {
+      // Explicit JSON test doubles and non-streaming provider responses keep the same validator.
+      raw = await response.json();
+    }
   } catch {
     throw unknown("模型响应未完整接收，执行结果待确认。");
   } finally {
@@ -877,6 +913,8 @@ async function executeStructured<T>({
     usage.responseId,
     billingDetails,
   );
+  if (streamProtocolError)
+    throw new ModelCallError(streamProtocolError + " 已记录实际用量。", false, usage);
   if (
     openaiBilling &&
     (openaiBilling.serviceTier !== "default" || openaiBilling.cacheWriteInputTokens > 0)
@@ -1024,6 +1062,11 @@ async function executeStructured<T>({
     const parsedJson = decodeModelJson(output);
     decoded = parsedJson.value;
     formatNormalization = parsedJson.formatNormalization;
+    const normalizedOutput = formatNormalization
+      ? output.slice(0, formatNormalization.removedOffset) +
+        output.slice(formatNormalization.removedOffset + 1)
+      : output;
+    assertUniqueJsonKeys(normalizedOutput);
   } catch (error) {
     throw new ModelCallError(
       "模型没有返回有效 JSON；已记录实际用量。",
@@ -1084,22 +1127,26 @@ export const generateStrategy = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
   attemptId?: string,
-) => generate("propose", input, GeneratedStrategySchema, config, attemptId);
+  onPreview?: ModelPreviewCallback,
+) => generate("propose", input, GeneratedStrategySchema, config, attemptId, onPreview);
 export const generateAttack = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
   attemptId?: string,
-) => generate("attack", input, AttackSchema, config, attemptId);
+  onPreview?: ModelPreviewCallback,
+) => generate("attack", input, AttackSchema, config, attemptId, onPreview);
 export const generateRevision = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
   attemptId?: string,
-) => generate("revise", input, GeneratedRevisionSchema, config, attemptId);
+  onPreview?: ModelPreviewCallback,
+) => generate("revise", input, GeneratedRevisionSchema, config, attemptId, onPreview);
 export const generateVerdict = (
   input: StageInput,
   config: ModelConfig = getModelConfig(),
   attemptId?: string,
-) => generate("judge", input, GeneratedVerdictSchema, config, attemptId);
+  onPreview?: ModelPreviewCallback,
+) => generate("judge", input, GeneratedVerdictSchema, config, attemptId, onPreview);
 // The legacy evaluator aggregates CNY only. Refuse USD until its aggregation is upgraded.
 export function generateEvaluation(
   kind: Kind,

@@ -1,24 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { z } from "zod";
 import { ChallengeSchema, type Challenge } from "@/lib/contracts";
 import type { IntakeDraft } from "@/lib/intake-contracts";
-
-export const SUMMARY_JOURNAL_KEY = "strategy-arena:intake-summary";
-const JournalSchema = z.object({
-  draftId: z.string(),
-  baseRevision: z.number().int().nonnegative(),
-  challenge: ChallengeSchema.extend({
-    goal: z.string().max(3000),
-    options: z.array(z.string().max(300)).max(3),
-    budget: z.number().finite().nullable(),
-    timeHours: z.number().finite().nullable(),
-  }),
-  assumptions: z.array(z.string().max(500)).max(6),
-  updatedAt: z.string(),
-});
-export type SummaryJournal = z.infer<typeof JournalSchema>;
+import {
+  clearStoredSummaryJournal,
+  readStoredSummaryJournal,
+  writeStoredSummaryJournal,
+  type SummaryJournal,
+} from "./intake-summary-journal";
+export {
+  SUMMARY_JOURNAL_KEY,
+  SUMMARY_TAB_JOURNAL_KEY,
+  readSummaryJournal,
+  type SummaryJournal,
+} from "./intake-summary-journal";
 const EMPTY: Challenge = {
   goal: "",
   constraints: "",
@@ -30,15 +26,6 @@ const EMPTY: Challenge = {
   timeHours: null,
 };
 type Summary = { challenge: Challenge; assumptions: string[] };
-export function readSummaryJournal(raw: string | null, draftId: string): SummaryJournal | null {
-  if (!raw) return null;
-  try {
-    const result = JournalSchema.safeParse(JSON.parse(raw));
-    return result.success && result.data.draftId === draftId ? result.data : null;
-  } catch {
-    return null;
-  }
-}
 const same = (a: Summary, b: Summary) =>
   JSON.stringify([a.challenge, a.assumptions]) === JSON.stringify([b.challenge, b.assumptions]);
 
@@ -75,17 +62,14 @@ export function useIntakeSummary({
   const lastServer = useRef("");
 
   const clearJournal = useCallback(() => {
+    const draftId = journal.current?.draftId ?? current.current?.id;
     journal.current = null;
-    try {
-      localStorage.removeItem(SUMMARY_JOURNAL_KEY);
-    } catch {
-      /* Server-saved content remains available. */
-    }
-  }, []);
+    if (draftId) clearStoredSummaryJournal(draftId);
+  }, [current]);
   const writeJournal = useCallback((entry: SummaryJournal) => {
     journal.current = entry;
     try {
-      localStorage.setItem(SUMMARY_JOURNAL_KEY, JSON.stringify(entry));
+      writeStoredSummaryJournal(entry);
       setJournalWarning("");
     } catch {
       setJournalWarning("未能在本机保存恢复记录，请保持此页打开，等待服务器保存成功。");
@@ -109,10 +93,7 @@ export function useIntakeSummary({
   );
   const recover = useCallback(
     (draft: IntakeDraft) => {
-      let saved: SummaryJournal | null = null;
-      try {
-        saved = readSummaryJournal(localStorage.getItem(SUMMARY_JOURNAL_KEY), draft.id);
-      } catch {}
+      const saved = readStoredSummaryJournal(draft.id);
       if (!saved) return;
       journal.current = saved;
       if (

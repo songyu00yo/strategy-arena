@@ -1,7 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ArenaSnapshot, Challenge, ModelMode } from "../../src/lib/contracts";
 import type { IntakeAnswer, IntakeDraft } from "../../src/lib/intake-contracts";
-import { SUMMARY_JOURNAL_KEY } from "../../src/components/use-intake-summary";
+import {
+  SUMMARY_JOURNAL_KEY,
+  SUMMARY_TAB_JOURNAL_KEY,
+} from "../../src/components/use-intake-summary";
 import { ANSWER_JOURNAL_KEY } from "../../src/components/intake-answer-journal";
 import { configureFixtureModels, fixtureIntake, intakeStorageKey } from "./intake.fixture";
 import { advanceFixture, fixtureChallenge, fixtureSnapshot } from "./ui.fixture";
@@ -299,6 +302,9 @@ test("explicit UI fixture: summary saves serialize, preserve newer edits and rec
     expect(draft.challenge?.budget).toBe(123);
     expect(draft.assumptions).toEqual(["测试：保留的假设"]);
     expect(await page.evaluate((key) => localStorage.getItem(key), SUMMARY_JOURNAL_KEY)).toBeNull();
+    expect(
+      await page.evaluate((key) => sessionStorage.getItem(key), SUMMARY_TAB_JOURNAL_KEY),
+    ).toBeNull();
     await page.reload();
     await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
     await page.getByRole("button", { name: "预算、时间与备选方案", exact: true }).click();

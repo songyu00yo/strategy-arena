@@ -6,6 +6,10 @@ import {
   INTAKE_TAB_STORAGE_KEY,
 } from "../../src/components/intake-draft-pointer";
 import { ARENA_STORAGE_KEY, ARENA_TAB_STORAGE_KEY } from "../../src/components/arena-pointer";
+import {
+  SUMMARY_JOURNAL_KEY,
+  SUMMARY_TAB_JOURNAL_KEY,
+} from "../../src/components/intake-summary-journal";
 import { configureFixtureModels, fixtureIntake } from "./intake.fixture";
 import { advanceFixture, fixtureChallenge, fixtureSnapshot } from "./ui.fixture";
 
@@ -403,4 +407,99 @@ test("explicit UI fixture: clearing one submitted discussion cannot clear anothe
   await expect(other.getByRole("heading", { name: secondArenaGoal, exact: true })).toBeVisible();
   expect(await arenaPointers(other)).toEqual({ tab: secondArenaId, shared: secondArenaId });
   expect(fixture.unexpected).toEqual([]);
+});
+
+test("explicit UI fixture: unsynced summaries survive another tab's edits and starting over clears only its own tail", async ({
+  page,
+  context,
+}) => {
+  const snapshot = completedSnapshot();
+  const drafts = new Map(
+    [firstId, secondId].map((id) => [
+      id,
+      fixtureIntake({
+        id,
+        status: "summary",
+        goal: id === firstId ? firstArenaGoal : secondArenaGoal,
+        challenge: {
+          ...structuredClone(fixtureChallenge),
+          goal: id === firstId ? firstArenaGoal : secondArenaGoal,
+        },
+      }),
+    ]),
+  );
+  const saves: string[] = [];
+  const unexpected: string[] = [];
+  await context.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path === "/api/health")
+      return route.fulfill({
+        json: {
+          status: "ok",
+          version: "explicit-summary-tab-fixture",
+          model: snapshot.model,
+          requiresAccessCode: false,
+          accessGranted: true,
+        },
+      });
+    const id = path.match(/^\/api\/intakes\/([^/]+)$/)?.[1];
+    if (id && drafts.has(id)) {
+      if (method === "GET") return route.fulfill({ json: drafts.get(id) });
+      if (method === "PATCH") {
+        expect(route.request().postDataJSON().summary).toBeTruthy();
+        saves.push(id);
+        return route.fulfill({ status: 503, json: { error: "合成测试：摘要尚未同步" } });
+      }
+    }
+    unexpected.push(`${method} ${path}`);
+    return route.fulfill({ status: 500, json: { error: "Unexpected synthetic summary request" } });
+  });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await seedPointer(page, firstId, { tabOwned: true });
+  await page.goto("/");
+  const firstField = page.getByRole("textbox", { name: "必须满足的限制", exact: true });
+  const firstTail = "合成摘要A未同步：不能离职，保留现有收入。";
+  await firstField.fill(firstTail);
+  await expect(page.getByRole("status").filter({ hasText: "摘要尚未保存" })).toBeVisible();
+  const other = await context.newPage();
+  await other.emulateMedia({ reducedMotion: "reduce" });
+  await seedPointer(other, secondId, { tabOwned: true });
+  await other.goto("/");
+  const secondField = other.getByRole("textbox", { name: "必须满足的限制", exact: true });
+  const secondTail = "合成摘要B未同步：只使用现有设备。";
+  await secondField.fill(secondTail);
+  await expect(other.getByRole("status").filter({ hasText: "摘要尚未保存" })).toBeVisible();
+  const secondJournal = await other.evaluate(
+    ({ tab, legacy }) => {
+      const raw = sessionStorage.getItem(tab);
+      // Also retain an older client's B journal to exercise matching legacy cleanup in the real hook.
+      if (raw) localStorage.setItem(legacy, raw);
+      return raw;
+    },
+    { tab: SUMMARY_TAB_JOURNAL_KEY, legacy: SUMMARY_JOURNAL_KEY },
+  );
+  expect(secondJournal).not.toBeNull();
+  await page.reload();
+  await expect(firstField).toHaveValue(firstTail);
+  await expect(page.getByRole("status").filter({ hasText: "摘要尚未保存" })).toBeVisible();
+  expect(await other.evaluate((key) => sessionStorage.getItem(key), SUMMARY_TAB_JOURNAL_KEY)).toBe(
+    secondJournal,
+  );
+  await page.getByRole("button", { name: "准备新问题", exact: true }).click();
+  await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toHaveValue("");
+  expect(
+    await page.evaluate((key) => sessionStorage.getItem(key), SUMMARY_TAB_JOURNAL_KEY),
+  ).toBeNull();
+  expect(await page.evaluate((key) => localStorage.getItem(key), SUMMARY_JOURNAL_KEY)).toBe(
+    secondJournal,
+  );
+  expect(await other.evaluate((key) => sessionStorage.getItem(key), SUMMARY_TAB_JOURNAL_KEY)).toBe(
+    secondJournal,
+  );
+  await other.reload();
+  await expect(secondField).toHaveValue(secondTail);
+  expect(saves).toContain(firstId);
+  expect(saves).toContain(secondId);
+  expect(unexpected).toEqual([]);
 });

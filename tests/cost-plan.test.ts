@@ -73,6 +73,58 @@ const verdict = (): Verdict => ({
 });
 
 describe("single necessary-expense list and server execution gate", () => {
+  it.each([
+    "将完整费用清单累计总额与1000元预算比较，并预留交付后复检与缓冲。",
+    "完整费用清单累计总额超过1000元预算则退出。",
+    "完整费用清单累计总额核实且不超过1000元预算后才付款。",
+    "完整费用清单累计总额≤1000元才可正式执行。",
+    "完整费用清单累计总额不超过当前预算1000元后才付款。",
+    "完整费用清单累计总额<=1000元才可正式执行。",
+  ])("retains the verified current-budget comparison without declaring a total: %s", (text) => {
+    expect(() => assertCanonicalCostReference(text, 1000)).not.toThrow();
+    expect(() => assertCanonicalCostReference(text)).not.toThrow();
+    expect(() => assertCanonicalCostReference(text, 650)).toThrow("当前用户预算");
+    expect(() => assertCanonicalCostReference(text, null)).toThrow("当前上限未知");
+  });
+
+  it.each([
+    "完整费用清单累计总额=1000元才付款。",
+    "完整费用清单累计总额算出总额1000元才付款。",
+    "完整费用清单累计总额不超过1000元，同时租金+押金合计500元才签约。",
+    "完整费用清单累计总额≤1000元+500元才付款。",
+    "完整费用清单累计总额与1000元预算比较，另核对场地费＋设备费合计500元才付款。",
+  ])("does not exempt another formula merely because a valid reference is present: %s", (text) => {
+    expect(() => assertCanonicalCostReference(text, 1000)).toThrow("费用正文格式");
+  });
+
+  it.each([
+    "利用已有旧车减少外部依赖：先自行做免费静态检查（车架、刹车、轮胎、传动、锁具），确认能安全测试后才安排试骑；维修口头报价300元仅为线索，配件、锁具与安全检测费用未知，须在完整费用核清且累计不超1000元预算后才付款维修。若静态检查发现车架裂纹或刹车失效等不可安全修复问题，则退出本路线。",
+    "利用已有旧车减少外部依赖：先自行做免费静态检查（车架、刹车、轮胎、传动、锁具），确认能安全测试后才安排试骑；维修口头报价300元仅为线索，配件、锁具与安全检测费用未知，须在完整费用清单累计总额核实且不超过1000元预算后才付款维修。若静态检查发现车架裂纹或刹车失效等不可安全修复问题，则退出本路线。",
+  ])(
+    "replays the complete recorded R4 thesis and cost comparison with an unknown total",
+    (thesis) => {
+      const candidate = route({
+        complete: false,
+        items: [
+          item("quote", "原文报价", 300),
+          item("safety", "安全检测费用", null),
+          item("extra", "其它必要费用", null),
+        ],
+      });
+      candidate.thesis = thesis;
+      candidate.steps = [
+        "将完整费用清单累计总额与1000元预算比较，并预留交付后复检与缓冲；若累计总额未知或超预算，暂停维修，不先付款。",
+      ];
+      candidate.failureCondition =
+        "若静态检查发现车架裂纹、刹车失效等无法安全修复的问题，或书面分项报价后完整费用清单累计总额超过1000元预算、或关键费用仍无法核实，则停止维修并退出本路线。";
+      const before = structuredClone(candidate);
+      const normalized = normalizeCostPlan(candidate, undefined, 1000);
+      expect(normalized.estimatedCost).toBeNull();
+      expect(normalized.resources).toContain("累计总额未知");
+      expect(candidate).toEqual(before);
+      expect(() => normalizeCostPlan(candidate, undefined, 650)).toThrow("当前用户预算");
+    },
+  );
   it("rejects the complete recorded R3 narrow gate despite a separate canonical unknown fee", () => {
     const plan: CostPlan = {
       complete: false,
@@ -99,7 +151,7 @@ describe("single necessary-expense list and server execution gate", () => {
     "教材、课程和报名费合计须≤800元才开始。",
     "预算650-300=350元，按此剩余额度执行。",
     "正式执行前总支出合计为300元。",
-    "完整费用清单累计总额≤1000元才付款。",
+    "完整费用清单累计总额=1000元才付款。",
     "费用100+20=120元，算术正确才付款。",
     "先问场地费+器材费合计是否不超预算，确认后才启动活动。",
     "只有“房租+押金合计不超过预算”满足才签约。",

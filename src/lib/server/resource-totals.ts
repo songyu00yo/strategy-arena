@@ -3,7 +3,7 @@ import type { CostPlan, Strategy } from "../contracts";
 const COST_GATE = "【服务端费用门槛】";
 
 /** Protocol-format check only. Cost item names are never used to infer coverage. */
-export function assertCanonicalCostReference(text: string): void {
+export function assertCanonicalCostReference(text: string, budget?: number | null): void {
   const financialContext =
     /费|预算|成本|支出|报价|价款|租金|押金|定金|总投入|\d+(?:\.\d+)?\s*元|[¥￥]/;
   const additiveItems =
@@ -18,13 +18,33 @@ export function assertCanonicalCostReference(text: string): void {
     /\d+(?:\.\d+)?\s*(?:元)?\s*[+＋\-−*/×÷=＝≤≥<>]\s*[^，,。；;！？?\n]{0,24}\d+(?:\.\d+)?\s*元/;
   const executionGate =
     /(?:才|方可|则|否则|即|就)(?!不|暂不|先不|未)[^。；;\n]{0,24}(?:执行|实施|付款|支付|成交|签约|启动|开始|退出|停止|交付)|(?:满足|符合|确认|核实)[^。；;\n]{0,12}后[^。；;\n]{0,8}(?:执行|实施|付款|支付|成交|签约|启动|开始)/;
+  const canonicalName = "完整费用清单累计总额";
+  const confirmed = "(?:(?:已核实|核实|已确认|确认)(?:且|并且|并)?\\s*)?";
+  const comparison =
+    "(?:不(?:得)?超过|不超出?|未超(?:过|出)?|超过|超出|超|低于|高于|小于|大于|少于|多于|不高于|不低于|至多|至少|<=|>=|[≤≥<>])";
+  const budgetLabel = "(?:(?:当前|原|用户)(?:的)?)?(?:总预算|预算(?:上限)?|上限|限额)";
+  const budgetAmount = `(?:${budgetLabel}\\s*)?(${amount})(?:的?${budgetLabel})?`;
+  const budgetComparisons = [
+    new RegExp(`${canonicalName}\\s*${confirmed}${comparison}\\s*${budgetAmount}`, "g"),
+    new RegExp(`${canonicalName}\\s*与\\s*${budgetAmount}(?:作|进行)?(?:比较|对比|核对)`, "g"),
+  ];
   // Mask complete quotes first so punctuation inside a quotation cannot split its boundary.
   for (const sentence of unquoted(text).matchAll(/[^。；;\n]+/g)) {
     const own = sentence[0];
     const gated = executionGate.test(own);
     // A quoted formula used as an execution condition is still a second gate.
     const inspected = gated ? text.slice(sentence.index, sentence.index! + own.length) : own;
-    for (const clause of inspected.split(/[，,]/)) {
+    for (let clause of inspected.split(/[，,]/)) {
+      for (const pattern of budgetComparisons) {
+        clause = clause.replace(pattern, (reference: string, limit: string) => {
+          if (budget === null || (budget !== undefined && Number.parseFloat(limit) !== budget))
+            throw new Error(
+              "完整费用清单的数字比较必须使用当前用户预算。当前上限未知时不写数字门槛，先核实；已知时原样使用当前上限，不改成另一金额。",
+            );
+          // Preserve the amount so an adjacent extra operation cannot hide behind this reference.
+          return " ".repeat(reference.length - limit.length) + limit;
+        });
+      }
       if (!financialContext.test(clause)) continue;
       if (!gated && (question(clause) || /数学|算术|加法|减法|练习|讨论等式/.test(clause)))
         continue;
@@ -59,7 +79,11 @@ export function costPlanGate(plan: CostPlan): string {
 }
 
 /** This validates a declaration and literal provenance, not the real-world quote's truth. */
-export function normalizeCostPlan(strategy: Strategy, provided?: string): Strategy {
+export function normalizeCostPlan(
+  strategy: Strategy,
+  provided?: string,
+  budget?: number | null,
+): Strategy {
   const declaredPlan = strategy.costPlan;
   if (!declaredPlan) return strategy; // Historical data stays readable without manufacturing a breakdown.
   const plan = { ...declaredPlan, items: declaredPlan.items.map((item) => ({ ...item })) };
@@ -128,7 +152,7 @@ export function normalizeCostPlan(strategy: Strategy, provided?: string): Strate
     ...strategy.claims.map((claim) => claim.text),
   ];
   for (const field of ownFields) {
-    assertCanonicalCostReference(field);
+    assertCanonicalCostReference(field, budget);
   }
   const canonicalResources = `${resources}\n${gate}`;
   if (canonicalResources.length > 500)

@@ -365,7 +365,7 @@ export function normalizeStrategyResources(
   sources: MaterialSource[] = [],
 ): Strategy {
   assertStrategyArithmetic(strategy);
-  const normalized = normalizeCostPlan(strategy, userText(challenge, sources));
+  const normalized = normalizeCostPlan(strategy, userText(challenge, sources), challenge.budget);
   if (!normalized.costPlan) return normalized;
   const prefix = "待验证的方案假设，";
   const thesis = prefix + normalized.thesis.replace(/^(?:待验证的方案假设[，,:：。]\s*)+/, "");
@@ -576,7 +576,7 @@ export function validateVerdict(
     ...verdict.conditions,
     verdict.exitCondition,
   ]) {
-    if (usesCostPlan) assertCanonicalCostReference(field);
+    if (usesCostPlan) assertCanonicalCostReference(field, input.challenge.budget);
     assertNoCircularPreconditions(field);
     assertExplicitArithmetic(field);
   }

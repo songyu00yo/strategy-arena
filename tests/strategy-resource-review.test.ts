@@ -75,6 +75,29 @@ it.each([
   },
 );
 
+it("checks the original budget when normalizing a route and validating its final action", () => {
+  const task = input();
+  const route = strategy({
+    estimatedCost: null,
+    costPlan: { complete: false, items: [] },
+    steps: ["核对完整费用清单累计总额不超过100元预算后再执行。"],
+  });
+  expect(() => normalizeStrategyResources(route, task.challenge)).not.toThrow();
+  expect(() =>
+    normalizeStrategyResources(
+      { ...route, steps: [route.steps[0].replace("100元", "120元")] },
+      task.challenge,
+    ),
+  ).toThrow("预算");
+
+  task.strategies[0] = route;
+  const decision = { ...verdict(), nextActions: route.steps };
+  expect(() => validateVerdict(decision, task)).not.toThrow();
+  expect(() =>
+    validateVerdict({ ...decision, nextActions: [route.steps[0].replace("100元", "120元")] }, task),
+  ).toThrow("预算");
+});
+
 describe("resource uncertainty keeps route-specific explanations", () => {
   it("retains a specific career-route limitation when estimates are unknown", () => {
     const reason = "远程已被书面拒绝，本路线退出；不能作为当前可用选项。";

@@ -86,6 +86,36 @@ export class CostPlanValidationError extends AggregateError {
   }
 }
 
+/** Exact same-item monthly/period totals only, with no second item allowed before the total. */
+function recurringCostQuote(quote: string) {
+  const monthly =
+    /^([^，,。；;！？?\n]+?)每月\s*(\d+(?:\.\d+)?)\s*元[，,]\s*([1-9]\d*)个月\s*(?:合计|总计|共计)?\s*(\d+(?:\.\d+)?)\s*元[。.]?$/.exec(
+      quote,
+    ) ??
+    /^每月([^\d，,。；;！？?\n]+?)\s*(\d+(?:\.\d+)?)\s*元[，,]\s*([1-9]\d*)个月\s*(?:合计|总计|共计)?\s*(\d+(?:\.\d+)?)\s*元[。.]?$/.exec(
+      quote,
+    );
+  if (monthly)
+    return {
+      subject: monthly[1].trim(),
+      monthlyAmount: Number(monthly[2]),
+      months: Number(monthly[3]),
+      total: Number(monthly[4]),
+    };
+  const period =
+    /^([1-9]\d*)个月每月([^\d，,。；;！？?\n]+?)\s*(\d+(?:\.\d+)?)\s*元\s*(?:合计|总计|共计|总)\s*(\d+(?:\.\d+)?)\s*元[。.]?$/.exec(
+      quote,
+    );
+  return period
+    ? {
+        subject: period[2].trim(),
+        monthlyAmount: Number(period[3]),
+        months: Number(period[1]),
+        total: Number(period[4]),
+      }
+    : undefined;
+}
+
 /** This validates a declaration and literal provenance, not the real-world quote's truth. */
 export function normalizeCostPlan(
   strategy: Strategy,
@@ -117,12 +147,9 @@ export function normalizeCostPlan(
         );
       const prices = [...item.quote.matchAll(/\d+(?:\.\d+)?\s*元/g)];
       // One item may state both its monthly charge and an explicit, arithmetically bound total.
-      const recurring =
-        /^([^，,。；;！？?\n]+?每月)\s*(\d+(?:\.\d+)?)\s*元[，,]\s*([1-9]\d*)个月\s*(?:合计|总计|共计)?\s*(\d+(?:\.\d+)?)\s*元[。.]?$/.exec(
-          item.quote,
-        );
-      const monthlyCents = recurring ? Number(recurring[2]) * 100 : 0;
-      const months = recurring ? Number(recurring[3]) : 0;
+      const recurring = recurringCostQuote(item.quote);
+      const monthlyCents = (recurring?.monthlyAmount ?? 0) * 100;
+      const months = recurring?.months ?? 0;
       const recurringTotalMatches = Boolean(
         prices.length === 2 &&
         recurring &&
@@ -131,7 +158,7 @@ export function normalizeCostPlan(
         Math.abs(monthlyCents - Math.round(monthlyCents)) <= 1e-6 &&
         Number.isSafeInteger(Math.round(monthlyCents) * months) &&
         Math.round(monthlyCents) * months === Math.round(item.amount * 100) &&
-        Number(recurring[4]) === item.amount,
+        recurring.total === item.amount,
       );
       if (item.amount !== null) {
         if (
@@ -140,7 +167,7 @@ export function normalizeCostPlan(
         )
           issues.push(
             new Error(
-              `费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额。同项“每月X元，N个月Y元”可引用总额，但X×N必须等于Y且amount=Y。label可取原文短片段。${correction}`,
+              `费用事实不能补造报价或把其他项目金额移用；quote只复制同一项目及金额的原文短句，一条只含一个元金额。同项月额和整数月数的明确总额可引用，含“项目每月X元，N个月Y元”“每月项目X元，N个月Y元”或“N个月每月项目X元总Y元”，须X×N=Y且amount=Y。label可取原文短片段。${correction}`,
             ),
           );
       }
@@ -163,7 +190,7 @@ export function normalizeCostPlan(
       });
       // The model's display label is not evidence. Keep only wording derived from the quote.
       const quotedLabel = recurringTotalMatches
-        ? `${recurring![1].replace(/每月$/, "")}（${months}个月）`
+        ? `${recurring!.subject}（${months}个月）`
         : prices.length === 1
           ? item.quote.replace(prices[0][0], "")
           : item.quote;

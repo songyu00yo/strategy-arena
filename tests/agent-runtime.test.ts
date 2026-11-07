@@ -304,6 +304,16 @@ afterEach(() => {
 });
 
 describe("durable bounded agent with synthetic models", () => {
+  it("freezes planner protocol 1.3 with single-expression tools and scoped resource directions", async () => {
+    const created = arena();
+    expect(created.versions[0].agent?.protocol).toBe("bounded-agent-1.3");
+    await advanceArena(created.id, owner, created.activeVersionId);
+    const request = models.plan.mock.calls[0][0];
+    expect(request.system).toContain("每个calculate.expression只填写一个十进制算式");
+    expect(request.system).toContain("禁止分号、逗号、等号或多个公式");
+    expect(request.system).toContain("需要多项计算时拆为不同工具请求，总数仍不得超过6");
+    expect(request.system).toContain("保持用户所指时间范围与题设明确完整的费用基线");
+  });
   it("compiles research, independent proposals, attacks, evidence, targeted revisions and final checks", async () => {
     const snapshot = arena();
     expect(snapshot.steps).toHaveLength(1);

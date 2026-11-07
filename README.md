@@ -26,7 +26,9 @@ pnpm install --frozen-lockfile
 test -e .env.local || cp .env.example .env.local
 ```
 
-已有 `.env.local` 时不要覆盖。用编辑器填写 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`、会话密钥，以及共享账本的绝对路径 `ARENA_BILLING_DATABASE_PATH`。配置说明见 [模型与费用](docs/model-budget.md)。该文保留早期预算记录；截至 2026 年 11 月 7 日，本轮累计上限为 10 美元、650 次请求和 5,000,000 Token，以共享账本审计值及匹配的环境设置为准。会话密钥可以在本机生成：
+已有 `.env.local` 时不要覆盖。用编辑器填写 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`、会话密钥，以及共享账本的绝对路径 `ARENA_BILLING_DATABASE_PATH`。配置说明见 [模型与费用](docs/model-budget.md)。该文保留早期预算记录；截至 2026 年 11 月 7 日，本轮累计上限为 10 美元、650 次请求和 5,000,000 Token，以共享账本审计值及匹配的环境设置为准。接入本机现有账本时，将 `ARENA_BILLING_USD_LIMIT`、`ARENA_BILLING_REQUEST_LIMIT` 和 `ARENA_BILLING_TOKEN_LIMIT` 设为该账本的审计值；只改环境变量不能升额。新安装保留 `.env.example` 中 2 美元、100 次请求和 2,000,000 Token 的保守初始上限。
+
+会话密钥可以在本机生成：
 
 ```sh
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"

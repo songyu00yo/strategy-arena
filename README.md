@@ -37,7 +37,7 @@ pnpm dev
 
 在浏览器打开 [本地应用](http://127.0.0.1:3000)。密钥只放在服务端环境文件中。填写后的 `.env.local` 已加入忽略规则；不要提交、截图或粘贴密钥。更改环境配置后重启服务。
 
-DeepSeek 路径使用官方 Beta 接口 `https://api.deepseek.com/beta`，模型标识为 `deepseek-flash`，结构化输出模式为 `strict-tool`。DeepSeek 基础配置版本为 `1.2.1`；当前提示词版本为 `1.2.5`，Schema 版本为 `1.1.0`。模型别名可能由服务商更新，并不代表不可变模型快照。配置依据和价格估算见 [模型配置](config/model.json)。运行记录还应保留服务商实际返回的模型标识与用量。
+DeepSeek 路径使用官方 Beta 接口 `https://api.deepseek.com/beta`，模型标识为 `deepseek-flash`，结构化输出模式为 `strict-tool`。DeepSeek 基础配置版本为 `1.2.1`；当前提示词版本为 `1.2.6`，Schema 版本为 `1.1.0`。模型别名可能由服务商更新，并不代表不可变模型快照。配置依据和价格估算见 [模型配置](config/model.json)。运行记录还应保留服务商实际返回的模型标识与用量。
 
 缺少模型密钥时，页面会显示配置提示，阻止开始推演。API 创建空擂台后，推进接口会返回 `MODEL_NOT_CONFIGURED`；生产路径不会生成模拟回答。
 

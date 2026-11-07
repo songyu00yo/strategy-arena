@@ -99,6 +99,19 @@ describe("complete serial step allocations", () => {
     ).not.toThrow();
   });
   it.each([
+    "步骤合计30分钟，仅指第一步的验证窗口，实施工时另列。",
+    "第一步和第二步并行进行，步骤合计30分钟。",
+  ])(
+    "respects explicit partial or parallel scope declared outside step headers: %s",
+    (resources) => {
+      const serial = ["第1步（约30分钟）：验证。", "第2步（约30分钟）：实施。"];
+      expect(extractSerialStepAllocation(serial)?.minutes).toBe(60);
+      expect(() =>
+        assertStrategyResourceTotals({ ...strategy("按原范围执行。", serial), resources }),
+      ).not.toThrow();
+    },
+  );
+  it.each([
     ["第1步（约40分钟）：验证。", "完成制作，时间未知。"],
     ["第1步（约40-60分钟）：验证。", "第2步（约60分钟）：制作。"],
     ["第1步（约40分钟，累计用时）：验证。", "第2步（约60分钟）：制作。"],

@@ -146,6 +146,13 @@ export function assertStrategyResourceTotals(
     strategy.firstAction,
     strategy.failureCondition,
   ];
+  // Other fields can explicitly describe overlapping work even when individual headers do not.
+  if (
+    fields.some((field) =>
+      /并行|并发|重叠|同步(?:执行|进行)|同时(?:执行|进行)|可同时/.test(unquoted(field)),
+    )
+  )
+    return;
   for (const field of fields) {
     const own = unquoted(field);
     const pattern =
@@ -153,6 +160,12 @@ export function assertStrategyResourceTotals(
     for (const match of own.matchAll(pattern)) {
       const clause = clauseAt(own, match.index!, match.index! + match[0].length);
       if (question(clause)) continue;
+      if (
+        /仅(?:指|覆盖)[^。；;！!\n]{0,60}(?:验证|窗口|样片|小样|前置|第[一二两三四五六七八九十\d]+步)/.test(
+          clause,
+        )
+      )
+        continue;
       const prefix =
         own
           .slice(0, match.index)

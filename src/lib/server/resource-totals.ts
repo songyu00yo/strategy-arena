@@ -2,6 +2,45 @@ import type { CostPlan, Strategy } from "../contracts";
 
 const COST_GATE = "【服务端费用门槛】";
 
+/** Protocol-format check only. Cost item names are never used to infer coverage. */
+export function assertCanonicalCostReference(text: string): void {
+  const financialContext =
+    /费|预算|成本|支出|报价|价款|租金|押金|定金|总投入|\d+(?:\.\d+)?\s*元|[¥￥]/;
+  const additiveItems =
+    /[\p{L}_][\p{L}\p{N}_（）()· \t]{0,31}[+＋][ \t]*[\p{L}_][\p{L}\p{N}_（）()· \t]{0,31}/u;
+  const listedTotal =
+    /[\p{L}_]{1,24}(?:、|以及|及|与|和)[\p{L}_、 \t]{1,32}(?:合计|加总|相加|汇总)/u;
+  const totalName =
+    "(?:总费用|总支出|总价|总额|总投入|总成本|合计|总计|共计|累计支出|累计总额|全程费用)";
+  const amount = String.raw`\d+(?:\.\d+)?\s*元`;
+  const declaredTotal = new RegExp(`${totalName}[^，,。；;！？?\\n]{0,20}${amount}`);
+  const monetaryFormula =
+    /\d+(?:\.\d+)?\s*(?:元)?\s*[+＋\-−*/×÷=＝≤≥<>]\s*[^，,。；;！？?\n]{0,24}\d+(?:\.\d+)?\s*元/;
+  const executionGate =
+    /(?:才|方可|则|否则|即|就)(?!不|暂不|先不|未)[^。；;\n]{0,24}(?:执行|实施|付款|支付|成交|签约|启动|开始|退出|停止|交付)|(?:满足|符合|确认|核实)[^。；;\n]{0,12}后[^。；;\n]{0,8}(?:执行|实施|付款|支付|成交|签约|启动|开始)/;
+  // Mask complete quotes first so punctuation inside a quotation cannot split its boundary.
+  for (const sentence of unquoted(text).matchAll(/[^。；;\n]+/g)) {
+    const own = sentence[0];
+    const gated = executionGate.test(own);
+    // A quoted formula used as an execution condition is still a second gate.
+    const inspected = gated ? text.slice(sentence.index, sentence.index! + own.length) : own;
+    for (const clause of inspected.split(/[，,]/)) {
+      if (!financialContext.test(clause)) continue;
+      if (!gated && (question(clause) || /数学|算术|加法|减法|练习|讨论等式/.test(clause)))
+        continue;
+      if (
+        additiveItems.test(clause) ||
+        listedTotal.test(clause) ||
+        declaredTotal.test(clause) ||
+        monetaryFormula.test(clause)
+      )
+        throw new Error(
+          "费用正文格式不符合单一门槛规则。正文正式门槛仅引用“完整费用清单累计总额”，不得另写分项合计或金额公式，即使算术正确。费用项与金额只在费用清单维护，服务端展示公式。这是格式限制，不是否定用户提供的预算事实。",
+        );
+    }
+  }
+}
+
 /** A declared scope is not proof of completeness. Unknown amounts never become zero. */
 export function costPlanTotal(plan: CostPlan): number | null {
   if (!plan.complete || !plan.items.length || plan.items.some((item) => item.amount === null))
@@ -89,14 +128,7 @@ export function normalizeCostPlan(strategy: Strategy, provided?: string): Strate
     ...strategy.claims.map((claim) => claim.text),
   ];
   for (const field of ownFields) {
-    const own = unquoted(field);
-    for (const match of own.matchAll(
-      /(?:总费用|总支出|总价|费用合计)\s*(?:为|是|=|[:：])?\s*(\d+(?:\.\d+)?)\s*元/g,
-    )) {
-      if (question(clauseAt(own, match.index!, match.index! + match[0].length))) continue;
-      if (total === null || Math.abs(Number(match[1]) - total) > 1e-8)
-        throw new Error("文字中的完整支出总额与必要费用清单不一致，正式门槛必须使用同一清单。");
-    }
+    assertCanonicalCostReference(field);
   }
   const canonicalResources = `${resources}\n${gate}`;
   if (canonicalResources.length > 500)

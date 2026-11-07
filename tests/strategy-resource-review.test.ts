@@ -8,6 +8,7 @@ import {
 } from "../src/lib/contracts";
 import {
   assertStrategyArithmetic,
+  normalizeStrategyResources,
   validateRevision,
   validateVerdict,
 } from "../src/lib/server/tools";
@@ -53,6 +54,26 @@ function verdict(comparisons: Verdict["comparisons"] = []): Verdict {
     evidenceIds: [],
   };
 }
+
+it.each([
+  "待验证的方案假设，待验证的方案假设：先核实必要条件。",
+  "待验证的方案假设，待验证的方案假设。先核实必要条件。",
+])(
+  "normalizes copied assumption headers once without changing the original output: %s",
+  (thesis) => {
+    const original = strategy({
+      thesis,
+      estimatedCost: null,
+      costPlan: { complete: false, items: [] },
+    });
+    const saved = structuredClone(original);
+    const challenge = input().challenge;
+    const normalized = normalizeStrategyResources(original, challenge);
+    expect(normalized.thesis).toBe("待验证的方案假设，先核实必要条件。");
+    expect(normalizeStrategyResources(normalized, challenge)).toEqual(normalized);
+    expect(original).toEqual(saved);
+  },
+);
 
 describe("resource uncertainty keeps route-specific explanations", () => {
   it("retains a specific career-route limitation when estimates are unknown", () => {

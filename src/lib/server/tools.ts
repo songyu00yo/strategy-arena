@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { MaterialSource } from "../intake-contracts";
 import { normalizedRevisionSummary } from "./revision-summary";
+import { assertDeclaredCheckOrder } from "./action-preconditions";
 import {
+  assertCanonicalCostReference,
   assertDeclaredResourceArithmetic,
   assertStrategyResourceTotals,
   costPlanGate,
@@ -366,9 +368,7 @@ export function normalizeStrategyResources(
   const normalized = normalizeCostPlan(strategy, userText(challenge, sources));
   if (!normalized.costPlan) return normalized;
   const prefix = "待验证的方案假设，";
-  const thesis = normalized.thesis.startsWith(prefix)
-    ? normalized.thesis
-    : prefix + normalized.thesis;
+  const thesis = prefix + normalized.thesis.replace(/^(?:待验证的方案假设[，,:：。]\s*)+/, "");
   if (thesis.length > 500) throw new Error("方案假设说明超过500字，请保留成立条件并精简表述。");
   return { ...normalized, thesis };
 }
@@ -540,6 +540,7 @@ export function assertNoCircularPreconditions(text: string): void {
  * allocations. A learning plan may discuss an incorrect equation without asserting it;
  * questions, quoted sources and ambiguous or partial allocations stay untouched. */
 export function assertStrategyArithmetic(strategy: Strategy): void {
+  assertDeclaredCheckOrder(strategy);
   normalizeCostPlan(strategy);
   assertStrategyResourceTotals(strategy);
   const resourceEquation =
@@ -564,6 +565,9 @@ export function validateVerdict(
   input: StageInput,
   sources: MaterialSource[] = [],
 ): Verdict {
+  const usesCostPlan = [...input.strategies, ...input.revisions.map((r) => r.strategy)].some(
+    (strategy) => strategy.costPlan !== undefined,
+  );
   for (const field of [
     verdict.headline,
     verdict.rationale,
@@ -572,6 +576,7 @@ export function validateVerdict(
     ...verdict.conditions,
     verdict.exitCondition,
   ]) {
+    if (usesCostPlan) assertCanonicalCostReference(field);
     assertNoCircularPreconditions(field);
     assertExplicitArithmetic(field);
   }

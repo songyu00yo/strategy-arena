@@ -883,7 +883,7 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
           arenaId,
           versionId,
           "protocol_repair_scheduled",
-          "已记录格式或引用错误，将使用额外额度尝试一次修复；不会替换成模拟结果。",
+          "输出校验发现格式、引用或明确条件冲突，原结果已保留，将在额度内尝试一次修正。",
           step.stage,
           input.role,
           modelError.repair,

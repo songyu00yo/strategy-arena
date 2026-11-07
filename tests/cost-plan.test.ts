@@ -12,7 +12,11 @@ import {
   type Strategy,
   type Verdict,
 } from "../src/lib/contracts";
-import { costPlanTotal, normalizeCostPlan } from "../src/lib/server/resource-totals";
+import {
+  assertCanonicalCostReference,
+  costPlanTotal,
+  normalizeCostPlan,
+} from "../src/lib/server/resource-totals";
 import {
   checkConstraints,
   normalizeStrategyResources,
@@ -69,6 +73,76 @@ const verdict = (): Verdict => ({
 });
 
 describe("single necessary-expense list and server execution gate", () => {
+  it("rejects the complete recorded R3 narrow gate despite a separate canonical unknown fee", () => {
+    const plan: CostPlan = {
+      complete: false,
+      items: [
+        item("base", "原文报价", 300),
+        item("part", "必要配件", null),
+        item("accessory", "必要附件", null),
+        item("diagnostic", "安全检测费", null),
+        item("buffer", "缓冲", null),
+      ],
+    };
+    const candidate = route(plan);
+    candidate.steps = [
+      "按明细核算：维修费+必要配件+锁具+缓冲，与1000元上限比较；若合计超限或关键项目仍无报价，则退出本路线，不支付维修费。",
+    ];
+    const before = structuredClone(candidate);
+    expect(() => normalizeCostPlan(candidate)).toThrow("正文正式门槛仅引用");
+    expect(candidate).toEqual(before);
+  });
+
+  it.each([
+    "房租+押金+水电，与原预算比较，满足才签约。",
+    "活动场地费＋器材费＋清洁费合计不超过500元才付款。",
+    "教材、课程和报名费合计须≤800元才开始。",
+    "预算650-300=350元，按此剩余额度执行。",
+    "正式执行前总支出合计为300元。",
+    "完整费用清单累计总额≤1000元才付款。",
+    "费用100+20=120元，算术正确才付款。",
+    "先问场地费+器材费合计是否不超预算，确认后才启动活动。",
+    "只有“房租+押金合计不超过预算”满足才签约。",
+    "工时分为准备+执行，共3小时，正式费用门槛为场地费+设备费合计500元才付款。",
+    "“房租+押金合计500元。”满足后才签约。",
+  ])("rejects independently maintained financial formulas and execution gates: %s", (text) => {
+    expect(() => assertCanonicalCostReference(text)).toThrow("费用正文格式");
+  });
+
+  it.each([
+    "完整费用清单累计总额已核实且不超过原总预算，才可正式执行。",
+    "完整费用清单累计总额未知，先核实费用，暂不付正式执行费。",
+    "用户总预算1000元，不借贷。",
+    "已知报价超过用户预算，当前路线退出。",
+    "先确认诊断费已封顶且不超剩余额度，已付诊断费无论结果均计入清单。",
+    "询问房租+押金是否已含在总价900元内，暂不签约。",
+    "请判断费用示例20+30=50元是否正确，仅讨论加法。",
+    "数学讨论中1+2=3，费用仍按完整费用清单累计总额判断。",
+    "材料原文“场地费+器材费合计500元”，此处只是记录待核实信息。",
+    "只讨论原文中的错误等式“费用1+1=3元”。",
+    "第一步1小时，第二步2小时，总工时1+2=3小时，资金按完整费用清单累计总额核对。",
+    "单元测试中A+B验证输入组合。",
+    "工时分为准备+执行，共3小时，费用按完整费用清单累计总额核对。",
+    "学习、剪辑和导出合计4小时，费用按完整费用清单累计总额核对。",
+    "材料原文“房租+押金合计500元。”这里仅引用，不作为执行门槛。",
+    "“教材、课程和报名费合计800元。”是未核实原文。",
+  ])(
+    "retains canonical references, budget facts, inquiries, quotes and pure mathematics: %s",
+    (text) => {
+      expect(() => assertCanonicalCostReference(text)).not.toThrow();
+    },
+  );
+
+  it("checks every strategy-owned prose field while preserving the server-only gate", () => {
+    const candidate = route({ complete: true, items: [item("fee", "情景费用", 100)] });
+    for (const field of ["thesis", "firstAction", "failureCondition", "resources"] as const)
+      expect(() =>
+        normalizeCostPlan({ ...candidate, [field]: "场地费+器材费合计100元才付款" }),
+      ).toThrow("费用正文格式");
+    const normalized = normalizeCostPlan(candidate);
+    expect(normalized.resources).toContain("合计100元");
+    expect(normalizeCostPlan(normalized)).toEqual(normalized);
+  });
   it.each([
     "询问总价900元是否包含检测费，未知则不执行。",
     "总费用900元是否成立？先核实完整项目。",

@@ -89,9 +89,11 @@ export function normalizeCostPlan(strategy: Strategy, provided?: string): Strate
     ...strategy.claims.map((claim) => claim.text),
   ];
   for (const field of ownFields) {
-    for (const match of unquoted(field).matchAll(
+    const own = unquoted(field);
+    for (const match of own.matchAll(
       /(?:总费用|总支出|总价|费用合计)\s*(?:为|是|=|[:：])?\s*(\d+(?:\.\d+)?)\s*元/g,
     )) {
+      if (question(clauseAt(own, match.index!, match.index! + match[0].length))) continue;
       if (total === null || Math.abs(Number(match[1]) - total) > 1e-8)
         throw new Error("文字中的完整支出总额与必要费用清单不一致，正式门槛必须使用同一清单。");
     }

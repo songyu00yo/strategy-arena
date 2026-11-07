@@ -69,6 +69,15 @@ const verdict = (): Verdict => ({
 });
 
 describe("single necessary-expense list and server execution gate", () => {
+  it.each([
+    "询问总价900元是否包含检测费，未知则不执行。",
+    "总费用900元是否成立？先核实完整项目。",
+    "请判断总支出900元是否正确。",
+    "原文写着“总价900元”，尚未核实。",
+  ])("does not promote an inquiry or quotation to a declared full cost: %s", (text) => {
+    const candidate = route({ complete: false, items: [item("fee", "待核实费用", null)] });
+    expect(() => normalizeCostPlan({ ...candidate, firstAction: text })).not.toThrow();
+  });
   it("includes travel and follow-up verification in the same execution sum", () => {
     const plan: CostPlan = {
       complete: true,

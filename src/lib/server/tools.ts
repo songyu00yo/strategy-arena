@@ -503,6 +503,37 @@ export function assertExplicitArithmetic(text: string): void {
     if (Math.abs(actual - Number(match[3])) > 1e-8) mismatch(match[0], actual);
   }
 }
+/** Only explicit same-action cycles with a positive post-action check and a first-execution
+ * gate. This does not establish safety, sequence correctness or semantic completeness. */
+export function assertNoCircularPreconditions(text: string): void {
+  const ownText = text.replace(
+    /“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"\n]*"|'[^'\n]*'/g,
+    (quote) => " ".repeat(quote.length),
+  );
+  const action = String.raw`([\p{Script=Han}]{2,8})`;
+  const clauseText = String.raw`[^。；;！？?!\n]`;
+  const postActionCheck = `(?:完成|完毕|结束)?(?:之)?后(?=${clauseText}{0,45}(?:复检|验收|检查|检测|核验))${clauseText}{0,60}?`;
+  const passedCondition = `(?:通过|达标|合格)${clauseText}{0,8}?`;
+  const sameActionGate = String.raw`(?:才|方可)(?:能|可)?(?:(?:允许|执行|进行|开始|安排|启动)(?:进行|执行)?\1|\1(?=$|[，,。；;]))`;
+  const cycle = new RegExp(action + postActionCheck + passedCondition + sameActionGate, "gu");
+  for (const sentence of ownText.split(/[。；;\n]/)) {
+    if (/[?？]|是否|能否/.test(sentence)) continue;
+    for (const match of sentence.matchAll(cycle)) {
+      const prefix = sentence.slice(0, match.index);
+      const after = sentence.slice(match.index! + match[0].length);
+      if (
+        /(?:不应|不得|不能|不要|避免|并非|不是)[^，,。；;]{0,12}$/.test(prefix) ||
+        /讨论|解释|原文|示例|错误句/.test(prefix) ||
+        /未(?:能)?通过|没通过|未达标|不达标|不合格|未合格|不通过/.test(match[0]) ||
+        /^(?:下一|另一|其他|新一|第[二三四五六七八九十\d]|后续)/.test(after)
+      )
+        continue;
+      throw new Error(
+        `执行前置条件存在循环：${match[0]}。执行后的复检或验收不能作为同一动作首次执行的前提；先核对执行前检查，允许的封顶诊断费与正式执行费分开，执行后再验收。`,
+      );
+    }
+  }
+}
 /** Check standalone resource equations and declared totals of completely labelled serial
  * allocations. A learning plan may discuss an incorrect equation without asserting it;
  * questions, quoted sources and ambiguous or partial allocations stay untouched. */
@@ -518,6 +549,7 @@ export function assertStrategyArithmetic(strategy: Strategy): void {
     strategy.firstAction,
     strategy.failureCondition,
   ]) {
+    assertNoCircularPreconditions(field);
     const ownText = field.replace(/“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"\n]*"|'[^'\n]*'/g, "");
     for (const sentence of ownText.split(/[。；;\n]/)) {
       const calculation = sentence.trim();
@@ -537,8 +569,10 @@ export function validateVerdict(
     ...verdict.nextActions,
     ...verdict.conditions,
     verdict.exitCondition,
-  ])
+  ]) {
+    assertNoCircularPreconditions(field);
     assertExplicitArithmetic(field);
+  }
   const strategies = input.strategies.map((s) =>
     normalizeCostPlan(input.revisions.find((r) => r.strategyId === s.id)?.strategy || s),
   );

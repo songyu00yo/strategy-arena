@@ -10,6 +10,7 @@ import type {
   RecoveryCodeResult,
 } from "@/lib/identity-contracts";
 import { Modal } from "./modal";
+import { bootstrapIdentity } from "./identity-bootstrap";
 import "./identity-history.css";
 
 const IDENTITY_CHANGE_KEY = "strategy-arena:identity-changed";
@@ -90,7 +91,7 @@ export function IdentityHistory({
     setBusy(true);
     setError("");
     try {
-      const next = await identityRequest<IdentityState>("/api/identity");
+      const next = await bootstrapIdentity();
       if (current !== epoch.current) return;
       if (identityTag.current && identityTag.current !== next.identityTag) {
         setRecoveryCode("");

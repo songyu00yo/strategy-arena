@@ -10,6 +10,7 @@ import {
   saveIntakeDraftPointer,
 } from "./intake-draft-pointer";
 import { clearArenaPointer, readArenaPointer, saveArenaPointer } from "./arena-pointer";
+import { bootstrapIdentity } from "./identity-bootstrap";
 
 export interface Health {
   status: string;
@@ -18,6 +19,7 @@ export interface Health {
   model: ArenaSnapshot["model"];
   requiresAccessCode?: boolean;
   accessGranted?: boolean;
+  identityBootstrap?: boolean;
 }
 class ApiError extends Error {
   code?: string;
@@ -167,9 +169,15 @@ export function useArena() {
     request<Health>("/api/health")
       .then(async (value) => {
         if (!mounted.current) return;
-        setHealth(value);
-        if (!value.requiresAccessCode || value.accessGranted) await restore();
-        else setRestoring(false);
+        if (!value.requiresAccessCode || value.accessGranted) {
+          if (value.identityBootstrap === true) await bootstrapIdentity();
+          if (!mounted.current) return;
+          setHealth(value);
+          await restore();
+        } else {
+          setHealth(value);
+          setRestoring(false);
+        }
       })
       .catch((e) => {
         if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
@@ -357,14 +365,17 @@ export function useArena() {
     unlock: async (code: string) => {
       setBusy(true);
       setError("");
+      setRestoring(true);
       try {
         await request("/api/access", { code });
         const next = await request<Health>("/api/health");
+        if (next.identityBootstrap === true) await bootstrapIdentity();
         setHealth(next);
         await restore();
         return true;
       } catch (e) {
         setError(e instanceof Error ? e.message : "访问码验证失败");
+        setRestoring(false);
         return false;
       } finally {
         setBusy(false);

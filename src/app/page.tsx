@@ -326,7 +326,7 @@ export default function Page() {
         <div className="header-right">
           {!demo && (
             <IdentityHistory
-              disabled={accessRequired}
+              disabled={accessRequired || arena.restoring || !arena.health}
               onIdentityChanged={() => {
                 arena.changeIdentity();
                 setIdentityEpoch((epoch) => epoch + 1);
@@ -443,6 +443,7 @@ export default function Page() {
                     ) : (
                       <GuidedIntake
                         key={identityEpoch}
+                        restoreReady={!arena.restoring}
                         modelProviders={arena.health?.model.models ?? arena.health?.model.providers}
                         pending={arena.busy}
                         disabled={arena.restoring || !arena.health || accessRequired}

@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { toolUsage } from "./tool-usage";
 import { randomBytes, randomUUID } from "node:crypto";
+import { usageLimitsEnabled } from "./usage-policy";
 import type {
   ArenaEvent,
   ArenaSnapshot,
@@ -229,7 +230,7 @@ export function consumeRun(owner: string) {
   const row = db()
     .prepare("SELECT count FROM visitor_runs WHERE owner=? AND day=?")
     .get(owner, day) as { count: number } | undefined;
-  if ((row?.count || 0) >= positiveEnv("ARENA_DAILY_VISITOR_LIMIT", 6))
+  if (usageLimitsEnabled() && (row?.count || 0) >= positiveEnv("ARENA_DAILY_VISITOR_LIMIT", 6))
     throw new ArenaError("今天的讨论次数已用完，请明天再试。", 429, "DAILY_LIMIT");
   db()
     .prepare(

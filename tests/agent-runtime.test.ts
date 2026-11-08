@@ -252,6 +252,7 @@ beforeEach(() => {
   closeDb();
   directory = mkdtempSync(join(tmpdir(), "arena-agent-test-"));
   vi.stubEnv("ARENA_DATABASE_PATH", join(directory, "runtime.sqlite"));
+  vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", undefined);
   vi.stubEnv("ARENA_RUN_BUDGET_USD", "10");
   vi.stubEnv("ARENA_GLOBAL_BUDGET_USD", "120");
   vi.stubEnv("ARENA_RUN_BUDGET_CNY", undefined);
@@ -861,41 +862,45 @@ describe("durable bounded agent with synthetic models", () => {
     expect(models.plan).not.toHaveBeenCalled();
     expect(stopped.steps.every((step) => step.status === "skipped")).toBe(true);
   });
-  it("does not send a twenty-first model call when synthetic persisted history reaches its cap", async () => {
-    const snapshot = arena();
-    atomic(() => {
-      for (let index = 0; index < AGENT_LIMITS.modelRequests; index++) {
-        const stepId = id();
-        db()
-          .prepare(
-            "INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal,status,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
-          )
-          .run(
-            stepId,
-            snapshot.id,
-            snapshot.activeVersionId,
-            "propose",
-            `synthetic-history-${index}`,
-            -100 + index,
-            "completed",
-            now(),
-            now(),
-          );
-        db()
-          .prepare(
-            "INSERT INTO agent_actions(step_id,version_id,kind,role,round,dependencies,payload) VALUES(?,?,?,?,?,?,?)",
-          )
-          .run(stepId, snapshot.activeVersionId, "propose", "A", 1, "[]", "{}");
-      }
-    });
-    const stopped = await advanceArena(snapshot.id, owner, snapshot.activeVersionId);
-    expect(stopped.versions[0]).toMatchObject({
-      status: "paused",
-      verdict: { outcome: "partial" },
-    });
-    expect(models.plan).not.toHaveBeenCalled();
-    expect(modelRequestsUsed(snapshot.activeVersionId)).toBe(20);
-  });
+  it.each(["true", "false"])(
+    "retains the finite agent request boundary with usage quotas %s",
+    async (enabled) => {
+      vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", enabled);
+      const snapshot = arena();
+      atomic(() => {
+        for (let index = 0; index < AGENT_LIMITS.modelRequests; index++) {
+          const stepId = id();
+          db()
+            .prepare(
+              "INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal,status,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            )
+            .run(
+              stepId,
+              snapshot.id,
+              snapshot.activeVersionId,
+              "propose",
+              `synthetic-history-${index}`,
+              -100 + index,
+              "completed",
+              now(),
+              now(),
+            );
+          db()
+            .prepare(
+              "INSERT INTO agent_actions(step_id,version_id,kind,role,round,dependencies,payload) VALUES(?,?,?,?,?,?,?)",
+            )
+            .run(stepId, snapshot.activeVersionId, "propose", "A", 1, "[]", "{}");
+        }
+      });
+      const stopped = await advanceArena(snapshot.id, owner, snapshot.activeVersionId);
+      expect(stopped.versions[0]).toMatchObject({
+        status: "paused",
+        verdict: { outcome: "partial" },
+      });
+      expect(models.plan).not.toHaveBeenCalled();
+      expect(modelRequestsUsed(snapshot.activeVersionId)).toBe(20);
+    },
+  );
   it("keeps the fixed legacy entry path independent of planner exports and calls", async () => {
     const snapshot = createArena(challenge, owner, "deepseek");
     await advanceArena(snapshot.id, owner, snapshot.activeVersionId);

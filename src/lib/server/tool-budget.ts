@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { assertLedgerUsagePolicy } from "./billing-usage-policy";
 
 // Both official tariff references are retained. Six CNY/USD is the existing budget
 // estimate, not an exchange rate or a statement about the account's native charge.
@@ -156,6 +157,7 @@ export function assertToolBatchModelBudget(
   additionalUsdMicros: number,
   batchId = configuredToolBatchId(),
 ) {
+  const limitsEnabled = assertLedgerUsagePolicy(connection);
   if (!batchId) return;
   if (!hasTable(connection, "tool_budget_batches"))
     throw new ToolBudgetError("工具验收批次尚未初始化。", "TOOL_BATCH_NOT_INITIALIZED");
@@ -163,6 +165,7 @@ export function assertToolBatchModelBudget(
     .prepare("SELECT * FROM tool_budget_batches WHERE batch_id=?")
     .get(batchId) as { model_baseline_rowid: number; max_usd_micros: number } | undefined;
   if (!batch) throw new ToolBudgetError("工具验收批次尚未初始化。", "TOOL_BATCH_NOT_INITIALIZED");
+  if (!limitsEnabled) return;
   const models = modelTotals(connection, batch.model_baseline_rowid);
   const limits = batchLimits(connection, batchId);
   const tools = connection
@@ -272,6 +275,7 @@ export function reserveToolAttempt(input: ToolReservation, databasePath?: string
   if (!Number.isSafeInteger(amount) || amount < 1 || Math.abs(price - amount / 1_000_000) > 1e-10)
     throw new ToolBudgetError("Tavily每credit费用估计配置无效。", "TOOL_PRICE_INVALID");
   return withLedger(databasePath, (connection) => {
+    const limitsEnabled = assertLedgerUsagePolicy(connection);
     if (connection.prepare("SELECT 1 FROM tool_attempts WHERE attempt_id=?").get(input.attemptId))
       throw new ToolBudgetError("此工具调用已有记录，禁止重复发送。", "TOOL_DUPLICATE_ATTEMPT");
     const batch = connection
@@ -313,12 +317,13 @@ export function reserveToolAttempt(input: ToolReservation, databasePath?: string
       : 0;
     if (
       count >= 6 ||
-      tools.calls >= limits.webRequests ||
-      tools.credits + credits > limits.webRequests ||
-      models.requests > limits.modelRequests ||
-      (stage && stageAmount > stage.stage_usd_limit_micros) ||
-      tools.amount + models.amount + amount > limits.usdMicros ||
-      allAmount > Math.min(settings.usd_limit_micros, settings.hard_total_usd_micros)
+      (limitsEnabled &&
+        (tools.calls >= limits.webRequests ||
+          tools.credits + credits > limits.webRequests ||
+          models.requests > limits.modelRequests ||
+          (stage && stageAmount > stage.stage_usd_limit_micros) ||
+          tools.amount + models.amount + amount > limits.usdMicros ||
+          allAmount > Math.min(settings.usd_limit_micros, settings.hard_total_usd_micros)))
     )
       throw new ToolBudgetError(
         "工具调用次数或模型与工具共享费用额度已用尽。",

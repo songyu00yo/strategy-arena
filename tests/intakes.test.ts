@@ -725,6 +725,25 @@ describe("attachment sources and atomic confirmation", () => {
     expect(first.versions[0].modelSelection?.modelId).toBe("gpt-6.1-terra");
     expect(getIntake(draft.id, "alice").status).toBe("submitted");
   });
+  it("submits guided discussions for multiple owners beyond the disabled daily quota", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    vi.stubEnv("ARENA_DAILY_VISITOR_LIMIT", "1");
+    for (const owner of ["alice", "bob"]) {
+      for (let index = 0; index < 2; index++) {
+        let draft = createIntake(owner, { goal, modelMode: "gpt-6.1-terra" });
+        draft = await analyzeIntake(draft.id, owner, operation(draft));
+        const payload = { revision: draft.revision, challenge: draft.challenge!, assumptions: [] };
+        const arena = submitIntake(draft.id, owner, payload);
+        expect(submitIntake(draft.id, owner, payload).id).toBe(arena.id);
+      }
+      expect(db().prepare("SELECT count FROM visitor_runs WHERE owner=?").get(owner)).toMatchObject(
+        {
+          count: 2,
+        },
+      );
+    }
+    expect(fixture.generate).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("lazy retention at every existing-draft read entry", () => {

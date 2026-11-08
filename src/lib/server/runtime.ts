@@ -48,6 +48,7 @@ import { PROMPT_VERSION } from "../../../prompts/protocol";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
 import { stepContext } from "@/lib/step-context";
+import { usageLimitsEnabled } from "./usage-policy";
 import {
   getModelConfig,
   estimateCallCost,
@@ -564,24 +565,26 @@ export function reserveCall(version: ArenaVersion, amount: number) {
   if (!Number.isFinite(amount) || amount <= 0)
     throw new ArenaError("模型费用配置无效。", 503, "INVALID_COST_CONFIG");
   const currency = version.modelSelection?.currency ?? "CNY";
-  const amountUsd = currency === "USD" ? amount : amount / CNY_PER_USD_BUDGET;
-  const arena = db().prepare("SELECT arena_id FROM versions WHERE id=?").get(version.id) as {
-    arena_id: string;
-  };
-  const related = db()
-    .prepare("SELECT body FROM versions WHERE arena_id=?")
-    .all(arena.arena_id) as { body: string }[];
-  const arenaSpent = related.reduce((sum, row) => sum + spentUsd(JSON.parse(row.body)), 0);
-  if (arenaSpent + amountUsd > localBudget("ARENA_RUN_BUDGET_USD", "ARENA_RUN_BUDGET_CNY", 0.25))
-    throw new ArenaError(
-      "这场讨论及其历史版本的费用上限不足以启动下一步，请联系管理员或缩短材料。",
-      429,
-      "RUN_BUDGET",
-    );
-  const all = db().prepare("SELECT body FROM versions").all() as { body: string }[];
-  const spent = all.reduce((sum, row) => sum + spentUsd(JSON.parse(row.body)), 0);
-  if (spent + amountUsd > localBudget("ARENA_GLOBAL_BUDGET_USD", "ARENA_GLOBAL_BUDGET_CNY", 120))
-    throw new ArenaError("服务总费用额度已用完，请联系管理员。", 429, "GLOBAL_BUDGET");
+  if (usageLimitsEnabled()) {
+    const amountUsd = currency === "USD" ? amount : amount / CNY_PER_USD_BUDGET;
+    const arena = db().prepare("SELECT arena_id FROM versions WHERE id=?").get(version.id) as {
+      arena_id: string;
+    };
+    const related = db()
+      .prepare("SELECT body FROM versions WHERE arena_id=?")
+      .all(arena.arena_id) as { body: string }[];
+    const arenaSpent = related.reduce((sum, row) => sum + spentUsd(JSON.parse(row.body)), 0);
+    if (arenaSpent + amountUsd > localBudget("ARENA_RUN_BUDGET_USD", "ARENA_RUN_BUDGET_CNY", 0.25))
+      throw new ArenaError(
+        "这场讨论及其历史版本的费用上限不足以启动下一步，请联系管理员或缩短材料。",
+        429,
+        "RUN_BUDGET",
+      );
+    const all = db().prepare("SELECT body FROM versions").all() as { body: string }[];
+    const spent = all.reduce((sum, row) => sum + spentUsd(JSON.parse(row.body)), 0);
+    if (spent + amountUsd > localBudget("ARENA_GLOBAL_BUDGET_USD", "ARENA_GLOBAL_BUDGET_CNY", 120))
+      throw new ArenaError("服务总费用额度已用完，请联系管理员。", 429, "GLOBAL_BUDGET");
+  }
   if (currency === "USD") version.reservedUsd = (version.reservedUsd ?? 0) + amount;
   else version.reservedCny += amount;
 }

@@ -100,10 +100,13 @@ for (const path of [root + '/data/arena.sqlite', root + '/data/billing.sqlite'])
 }
 const ledger = new DatabaseSync('file:' + root + '/data/billing.sqlite?immutable=1', { readOnly: true });
 let settings;
+let usageLimitsEnabled = true;
 try {
   settings = ledger.prepare('SELECT usd_limit_micros,request_limit,token_limit FROM billing_settings WHERE id=1').get();
   const audit = ledger.prepare('SELECT usd_limit_micros,request_limit,token_limit FROM billing_limit_audit ORDER BY revision DESC LIMIT 1').get();
   if (!settings || !audit || JSON.stringify(settings) !== JSON.stringify(audit)) fail('Existing audited billing limits are required.');
+  if (ledger.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='billing_usage_policy_audit'").get())
+    usageLimitsEnabled = ledger.prepare('SELECT enabled FROM billing_usage_policy_audit ORDER BY revision DESC LIMIT 1').get()?.enabled !== 0;
 } finally { ledger.close(); }
 // Parse configuration as data. Never source it or execute Node with its NODE_OPTIONS.
 const configuration = parseEnv(readFileSync(env, 'utf8'));
@@ -115,6 +118,7 @@ if (configuration.NODE_OPTIONS || configuration.LD_PRELOAD ||
   configuration.ARENA_BILLING_DATABASE_PATH !== '/srv/strategy-arena/data/billing.sqlite' ||
   configuration.ARENA_PUBLIC_ORIGIN !== 'https://arena.songyu00yo.fun' ||
   configuration.ARENA_PUBLIC_DEMO !== 'false' || configuration.ARENA_WORKER_ENABLED !== 'false' ||
+  (configuration.ARENA_USAGE_LIMITS_ENABLED !== 'false') !== usageLimitsEnabled ||
   !(configuration.DEEPSEEK_API_KEY || configuration.MODEL_API_KEY)?.trim() ||
   !configuration.OPENAI_API_KEY?.trim() ||
   (configuration.ARENA_ACCESS_CODE?.trim().length ?? 0) < 20 ||

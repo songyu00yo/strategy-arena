@@ -108,6 +108,25 @@ afterEach(() => {
 });
 
 describe("per-version selected provider and native currency", () => {
+  it("retains USD accounting across owners and rematches with spending quotas disabled", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    vi.stubEnv("ARENA_RUN_BUDGET_USD", "0.000001");
+    vi.stubEnv("ARENA_GLOBAL_BUDGET_USD", "0.000001");
+    for (const owner of ["friend-a", "friend-b"]) {
+      const arena = createArena(challenge, owner, "gpt-6.1-terra");
+      await advanceArena(arena.id, owner, arena.activeVersionId);
+      const rematch = newVersion(arena.id, owner, challenge, "补充条件后重比");
+      await advanceArena(arena.id, owner, rematch.activeVersionId);
+      for (const version of getArena(arena.id, owner).versions)
+        expect(version).toMatchObject({
+          costUsd: 0.02,
+          costCny: 0,
+          reservedUsd: 0,
+          reservedCny: 0,
+        });
+    }
+    expect(fixture.generate).toHaveBeenCalledTimes(4);
+  });
   it("keeps an explicitly selected model through all claims and inherited rematches", async () => {
     const arena = createArena(challenge, "owner", "gpt-6.1-sol");
     await advanceArena(arena.id, "owner", arena.activeVersionId);

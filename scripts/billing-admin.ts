@@ -1,5 +1,10 @@
 import { parseArgs } from "node:util";
-import { BillingError, changeBillingLimits, readBillingStatus } from "../src/lib/server/billing";
+import {
+  BillingError,
+  changeBillingLimits,
+  changeBillingUsagePolicy,
+  readBillingStatus,
+} from "../src/lib/server/billing";
 
 // Deliberately does not load .env files or import a runtime/model adapter.
 try {
@@ -11,6 +16,10 @@ try {
       "expected-usd-limit": { type: "string" },
       "expected-request-limit": { type: "string" },
       "expected-token-limit": { type: "string" },
+      "expected-policy-revision": { type: "string" },
+      "expected-limits-enabled": { type: "string" },
+      "usage-limits-enabled": { type: "string" },
+      "operation-id": { type: "string" },
       "usd-limit": { type: "string" },
       "request-limit": { type: "string" },
       "token-limit": { type: "string" },
@@ -30,7 +39,13 @@ set-limits --database ABSOLUTE_PATH --confirm-offline
   --expected-revision N --expected-usd-limit USD --expected-request-limit N --expected-token-limit N
   --usd-limit USD --request-limit N --token-limit N
   --stage-id ID --stage-usd-limit USD --stage-request-limit N --stage-token-limit N --reason TEXT
+set-usage-policy --database ABSOLUTE_PATH --confirm-offline
+  --expected-revision N --expected-usd-limit USD --expected-request-limit N --expected-token-limit N
+  --expected-policy-revision N --expected-limits-enabled true|false --usage-limits-enabled true|false
+  --operation-id ID --reason TEXT
 Stop paid workers before set-limits. Restart with ARENA_BILLING_* limits matching the new cumulative limits.
+Stop paid workers before set-usage-policy. Restart with ARENA_USAGE_LIMITS_ENABLED matching the audited policy.
+Disabling usage limits preserves all attempts and ceilings, and skips cumulative model/tool usage caps.
 Stage caps are incremental after the transaction baseline; ceilings: USD 10 / 300 requests / 5000000 tokens.
 Amounts are conservative usage estimates, not provider invoices.`);
   } else {
@@ -46,8 +61,20 @@ Amounts are conservative usage estimates, not provider invoices.`);
         throw new BillingError(`Invalid --${name}.`, "BILLING_INVALID_CONFIG");
       return Number(raw);
     };
-    if (positionals.length !== 1 || !["status", "set-limits"].includes(positionals[0]))
-      throw new BillingError("Use status or set-limits; see --help.", "BILLING_INVALID_CONFIG");
+    const boolean = (name: keyof typeof values) => {
+      const raw = required(name);
+      if (raw !== "true" && raw !== "false")
+        throw new BillingError(`Invalid --${name}; use true or false.`, "BILLING_INVALID_CONFIG");
+      return raw === "true";
+    };
+    if (
+      positionals.length !== 1 ||
+      !["status", "set-limits", "set-usage-policy"].includes(positionals[0])
+    )
+      throw new BillingError(
+        "Use status, set-limits or set-usage-policy; see --help.",
+        "BILLING_INVALID_CONFIG",
+      );
     const databasePath = required("database");
     if (positionals[0] === "status") {
       if (Object.keys(values).some((key) => !["database", "confirm-offline", "help"].includes(key)))
@@ -59,33 +86,56 @@ Amounts are conservative usage estimates, not provider invoices.`);
           "Stop paid workers and provide --confirm-offline.",
           "BILLING_INVALID_CONFIG",
         );
-      console.log(
-        JSON.stringify(
-          changeBillingLimits({
-            databasePath,
-            expected: {
-              revision: number("expected-revision"),
-              usdLimit: number("expected-usd-limit"),
-              requestLimit: number("expected-request-limit"),
-              tokenLimit: number("expected-token-limit"),
-            },
-            limits: {
-              usdLimit: number("usd-limit"),
-              requestLimit: number("request-limit"),
-              tokenLimit: number("token-limit"),
-            },
-            stage: {
-              id: required("stage-id"),
-              usdLimit: number("stage-usd-limit"),
-              requestLimit: number("stage-request-limit"),
-              tokenLimit: number("stage-token-limit"),
-            },
-            reason: required("reason"),
-          }),
-          null,
-          2,
-        ),
-      );
+      if (positionals[0] === "set-usage-policy") {
+        console.log(
+          JSON.stringify(
+            changeBillingUsagePolicy({
+              databasePath,
+              operationId: required("operation-id"),
+              expected: {
+                revision: number("expected-revision"),
+                usdLimit: number("expected-usd-limit"),
+                requestLimit: number("expected-request-limit"),
+                tokenLimit: number("expected-token-limit"),
+                usagePolicyRevision: number("expected-policy-revision"),
+                usageLimitsEnabled: boolean("expected-limits-enabled"),
+              },
+              usageLimitsEnabled: boolean("usage-limits-enabled"),
+              reason: required("reason"),
+            }),
+            null,
+            2,
+          ),
+        );
+      } else {
+        console.log(
+          JSON.stringify(
+            changeBillingLimits({
+              databasePath,
+              expected: {
+                revision: number("expected-revision"),
+                usdLimit: number("expected-usd-limit"),
+                requestLimit: number("expected-request-limit"),
+                tokenLimit: number("expected-token-limit"),
+              },
+              limits: {
+                usdLimit: number("usd-limit"),
+                requestLimit: number("request-limit"),
+                tokenLimit: number("token-limit"),
+              },
+              stage: {
+                id: required("stage-id"),
+                usdLimit: number("stage-usd-limit"),
+                requestLimit: number("stage-request-limit"),
+                tokenLimit: number("stage-token-limit"),
+              },
+              reason: required("reason"),
+            }),
+            null,
+            2,
+          ),
+        );
+      }
     }
   }
 } catch (error) {

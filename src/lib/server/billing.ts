@@ -7,6 +7,14 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import {
+  assertLedgerUsagePolicy,
+  BillingError,
+  readLedgerUsagePolicy,
+} from "./billing-usage-policy";
+import { usageLimitsEnabled } from "./usage-policy";
+
+export { BillingError } from "./billing-usage-policy";
 
 // All amounts are integer micro units of their native currency. This fixed,
 // deliberately conservative budget estimate is not a bank exchange rate.
@@ -15,15 +23,6 @@ export const BILLING_HARD_TOTAL_USD_MICROS = 200_000_000;
 export const BILLING_DEVELOPMENT_MAX_USD_MICROS = 120_000_000;
 const MAX_VALUE = 1_000_000_000_000;
 
-export class BillingError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-  ) {
-    super(message);
-    this.name = "BillingError";
-  }
-}
 export interface BillingOptions {
   databasePath: string;
   usdLimit?: number;
@@ -163,6 +162,7 @@ function configuredOptions(): BillingOptions {
  * unresolved attempt merely because its worker crashed before dispatch. */
 export function openBillingLedger(options: BillingOptions) {
   validatePath(options.databasePath);
+  const limitsEnabled = usageLimitsEnabled();
   const { usdMicros, requestLimit, tokenLimit } = validateLimits(options);
   mkdirSync(dirname(options.databasePath), { recursive: true, mode: 0o700 });
   const connection = new DatabaseSync(options.databasePath);
@@ -217,6 +217,7 @@ export function openBillingLedger(options: BillingOptions) {
           "BILLING_SETTINGS_MISMATCH",
         );
       migrateSettlementMetadata(connection);
+      assertLedgerUsagePolicy(connection, limitsEnabled);
       const batchId = configuredToolBatchId();
       if (batchId) ensureToolBudgetBatchOnConnection(connection, batchId);
     });
@@ -259,6 +260,7 @@ export function openBillingLedger(options: BillingOptions) {
             "Billing attempt already exists; dispatch refused.",
             "BILLING_DUPLICATE_ATTEMPT",
           );
+        assertLedgerUsagePolicy(connection, limitsEnabled);
         const totals = summary();
         if (
           totals.usdLimitMicros !== usdMicros ||
@@ -281,15 +283,17 @@ export function openBillingLedger(options: BillingOptions) {
           : 0;
         assertToolBatchModelBudget(connection, reservedUsdMicros);
         if (
-          (stage &&
+          limitsEnabled &&
+          ((stage &&
             (stage.usage.requests + 1 > stage.requestLimit ||
               stage.usage.tokens + input.maxTokens > stage.tokenLimit ||
               stage.usage.committedUsdMicros + stageToolAmount + reservedUsdMicros >
                 stage.usdLimitMicros)) ||
-          totals.requests + 1 > requestLimit ||
-          totals.tokens + input.maxTokens > tokenLimit ||
-          totals.committedUsdMicros + toolAmount + reservedUsdMicros > usdMicros ||
-          totals.committedUsdMicros + toolAmount + reservedUsdMicros > BILLING_HARD_TOTAL_USD_MICROS
+            totals.requests + 1 > requestLimit ||
+            totals.tokens + input.maxTokens > tokenLimit ||
+            totals.committedUsdMicros + toolAmount + reservedUsdMicros > usdMicros ||
+            totals.committedUsdMicros + toolAmount + reservedUsdMicros >
+              BILLING_HARD_TOTAL_USD_MICROS)
         )
           throw new BillingError(
             "Shared paid-request budget is exhausted.",
@@ -464,6 +468,7 @@ function readSettings(connection: DatabaseSync) {
 }
 function readStatus(connection: DatabaseSync) {
   const settings = readSettings(connection);
+  const policy = readLedgerUsagePolicy(connection);
   const totals = readTotals(connection);
   const hasAudit = connection
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='billing_limit_audit'")
@@ -475,6 +480,7 @@ function readStatus(connection: DatabaseSync) {
     : [];
   const latest = audit.at(-1);
   return {
+    ...policy,
     ...totals,
     usdLimitMicros: settings.usd_limit_micros,
     requestLimit: settings.request_limit,
@@ -483,7 +489,9 @@ function readStatus(connection: DatabaseSync) {
     developmentMaxUsdMicros: BILLING_DEVELOPMENT_MAX_USD_MICROS,
     finalReserveUsdMicros: 80_000_000,
     cnyPerUsdEstimate: BILLING_CNY_PER_USD,
-    remainingUsdMicros: Math.max(0, settings.usd_limit_micros - totals.committedUsdMicros),
+    remainingUsdMicros: policy.usageLimitsEnabled
+      ? Math.max(0, settings.usd_limit_micros - totals.committedUsdMicros)
+      : null,
     revision: latest?.revision ?? 0,
     activeStage: latest
       ? {
@@ -611,6 +619,117 @@ export function changeBillingLimits(input: BillingLimitChange) {
         "UPDATE billing_settings SET usd_limit_micros=?, request_limit=?, token_limit=? WHERE id=1",
       )
       .run(next.usdMicros, next.requestLimit, next.tokenLimit);
+    const after = readStatus(connection);
+    connection.exec("COMMIT");
+    return after;
+  } catch (error) {
+    if (connection.isTransaction) connection.exec("ROLLBACK");
+    throw error;
+  } finally {
+    connection.close();
+  }
+}
+
+export interface BillingUsagePolicyChange {
+  databasePath: string;
+  operationId: string;
+  expected: BillingLimitChange["expected"] & {
+    usagePolicyRevision: number;
+    usageLimitsEnabled: boolean;
+  };
+  usageLimitsEnabled: boolean;
+  reason: string;
+}
+
+/** Audits a policy switch without changing historical ceilings, baselines or attempts. */
+export function changeBillingUsagePolicy(input: BillingUsagePolicyChange) {
+  identifier(input.operationId, "operation ID");
+  if (
+    !input.expected ||
+    input.expected.usdLimit === undefined ||
+    input.expected.requestLimit === undefined ||
+    input.expected.tokenLimit === undefined
+  )
+    invalid("All administrative billing limits must be explicit.");
+  integer(input.expected.revision, "expected revision");
+  integer(input.expected.usagePolicyRevision, "expected usage policy revision");
+  const expectedLimits = validateLimits(input.expected);
+  if (
+    typeof input.expected.usageLimitsEnabled !== "boolean" ||
+    typeof input.usageLimitsEnabled !== "boolean"
+  )
+    invalid("Usage policy values must be explicit booleans.");
+  if (typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 1000)
+    invalid("Billing usage policy change requires a reason of at most 1000 characters.");
+  const expectedPolicy = {
+    usageLimitsEnabled: input.expected.usageLimitsEnabled,
+    usagePolicyRevision: input.expected.usagePolicyRevision,
+    billingRevision: input.expected.revision,
+    usdLimitMicros: expectedLimits.usdMicros,
+    requestLimit: expectedLimits.requestLimit,
+    tokenLimit: expectedLimits.tokenLimit,
+  };
+  const connection = existingLedger(input.databasePath, false);
+  try {
+    connection.exec("BEGIN IMMEDIATE");
+    const before = readStatus(connection);
+    if (
+      before.revision !== input.expected.revision ||
+      before.usdLimitMicros !== expectedLimits.usdMicros ||
+      before.requestLimit !== expectedLimits.requestLimit ||
+      before.tokenLimit !== expectedLimits.tokenLimit
+    )
+      throw new BillingError(
+        "Stale expected billing settings; inspect status again.",
+        "BILLING_STALE_SETTINGS",
+      );
+    const previous = before.usagePolicyAudit.find(
+      (entry) => entry.operation_id === input.operationId,
+    );
+    if (previous) {
+      if (
+        previous.previous_policy_json !== JSON.stringify(expectedPolicy) ||
+        previous.enabled !== Number(input.usageLimitsEnabled) ||
+        previous.reason !== input.reason.trim() ||
+        before.usagePolicyRevision !== previous.revision ||
+        before.usageLimitsEnabled !== input.usageLimitsEnabled
+      )
+        throw new BillingError(
+          "Usage policy operation conflicts or settings have drifted.",
+          "BILLING_STALE_SETTINGS",
+        );
+      connection.exec("COMMIT");
+      return before;
+    }
+    if (
+      before.usagePolicyRevision !== input.expected.usagePolicyRevision ||
+      before.usageLimitsEnabled !== input.expected.usageLimitsEnabled
+    )
+      throw new BillingError(
+        "Stale expected usage policy; inspect status again.",
+        "BILLING_STALE_SETTINGS",
+      );
+    if (before.usageLimitsEnabled === input.usageLimitsEnabled)
+      invalid("Usage policy change must change the current policy.");
+    connection.exec(
+      readFileSync(resolve(process.cwd(), "migrations/billing/004_usage_policy.sql"), "utf8"),
+    );
+    connection
+      .prepare(
+        `INSERT INTO billing_usage_policy_audit
+      (operation_id,changed_at,reason,previous_enabled,enabled,previous_policy_revision,billing_revision,previous_policy_json)
+      VALUES(?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        input.operationId,
+        new Date().toISOString(),
+        input.reason.trim(),
+        Number(before.usageLimitsEnabled),
+        Number(input.usageLimitsEnabled),
+        before.usagePolicyRevision,
+        before.revision,
+        JSON.stringify(expectedPolicy),
+      );
     const after = readStatus(connection);
     connection.exec("COMMIT");
     return after;

@@ -289,7 +289,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       if (visible) {
         enter();
         loop.wake();
-      } else if (intro?.playState === "running") intro.pause();
+      } else if (intro?.playState === "running") intro.finish();
       if (visible && windowActive && intro?.playState === "paused" && !motionPaused()) intro.play();
     });
     intersection.observe(host);
@@ -313,7 +313,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
           enter();
           if (intro?.playState === "paused") intro.play();
           loop.wake();
-        } else if (intro?.playState === "running") intro.pause();
+        } else if (intro?.playState === "running") intro.finish();
       }
     });
     const updateExpanded = () => {
@@ -372,7 +372,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     host.addEventListener("click", clicked, true);
     const windowBlur = () => {
       windowActive = false;
-      if (intro?.playState === "running") intro.pause();
+      if (intro?.playState === "running") intro.finish();
     };
     const windowFocus = () => {
       windowActive = true;

@@ -387,9 +387,8 @@ export default function Page() {
             <div className="goal-landing">
               <section className="goal-landing-center" aria-label="开始一次方案推演">
                 <div className="home-intro">
+                  <h1 className="sr-only">方案擂台：重要的选择，想清楚再出发</h1>
                   <p className="eyebrow">方案擂台 · 大学生的重大选择</p>
-                  <h1>重要的选择，想清楚再出发。</h1>
-                  <p>考研还是就业、如何选 offer？比较不同路线，找到适合你的第一步。</p>
                 </div>
                 <GoalFocusStage>
                   <div className="h-form">

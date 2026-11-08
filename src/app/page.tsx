@@ -42,7 +42,6 @@ import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
 import { ClickFx, Leaving } from "@/components/console/effects";
 import "@/components/focused-home.css";
-import "@/components/home-write.css";
 import "@/components/friend-feedback.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
@@ -388,10 +387,9 @@ export default function Page() {
             <div className="goal-landing">
               <section className="goal-landing-center" aria-label="开始一次方案推演">
                 <div className="home-intro">
-                  <h1 className="sr-only">方案擂台：重要的选择，想清楚再出发</h1>
-                  <p className="eyebrow">方案擂台 · 大学生的重大选择</p>
+                  <h1>你想解决什么问题？</h1>
                 </div>
-                <GoalFocusStage quiet>
+                <GoalFocusStage>
                   <div className="h-form">
                     {accessRequired && (
                       <form

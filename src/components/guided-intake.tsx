@@ -5,22 +5,12 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  FileImage,
-  FileSpreadsheet,
   FileText,
   LoaderCircle,
   Paperclip,
   Plus,
-  Upload,
   X,
 } from "lucide-react";
-
-const fileIcon = (name: string) => {
-  const extension = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["png", "jpg", "jpeg", "webp", "gif", "heic"].includes(extension)) return FileImage;
-  if (["xls", "xlsx", "csv", "tsv", "ods"].includes(extension)) return FileSpreadsheet;
-  return FileText;
-};
 import {
   ChallengeSchema,
   type ArenaSnapshot,
@@ -523,6 +513,20 @@ export function GuidedIntake({
     modelProviders?.find((option) => option.provider === routing.provider);
   const unavailable = !provider?.configured;
   const uncertain = draft?.status === "uncertain";
+  const [dropping, setDropping] = useState(false);
+  const dragDepth = useRef(0);
+  // A file dropped beside the composer must not make the browser leave the page.
+  useEffect(() => {
+    const keep = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+    };
+    window.addEventListener("dragover", keep);
+    window.addEventListener("drop", keep);
+    return () => {
+      window.removeEventListener("dragover", keep);
+      window.removeEventListener("drop", keep);
+    };
+  }, []);
   const analyzing = analysisPending || draft?.status === "analyzing";
   const reading = draft?.attachments.some((file) => file.state === "reading") ?? false;
   const blocked =
@@ -738,11 +742,40 @@ export function GuidedIntake({
     >
       <form
         className="gi-composer"
+        data-dropping={dropping || undefined}
         onSubmit={(event) => {
           event.preventDefault();
           analyze();
         }}
+        onDragEnter={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          dragDepth.current += 1;
+          if (!blocked && !uncertain) setDropping(true);
+        }}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = blocked || uncertain ? "none" : "copy";
+        }}
+        onDragLeave={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (!dragDepth.current) setDropping(false);
+        }}
+        onDrop={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          dragDepth.current = 0;
+          setDropping(false);
+          const files = [...event.dataTransfer.files];
+          if (files.length && !blocked && !uncertain) upload(files);
+        }}
       >
+        <div className="gi-drop-veil" aria-hidden="true">
+          <Paperclip size={22} />
+          <span>松开即可添加材料</span>
+        </div>
         <label htmlFor={`${id}-goal`}>你想解决什么问题？</label>
         <textarea
           ref={goalInput}
@@ -753,7 +786,13 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="说说你的选择、顾虑或其他想解决的问题。"
+          placeholder="说说你的选择和顾虑，也可以把文件拖进来或直接粘贴。"
+          onPaste={(event) => {
+            const files = [...event.clipboardData.files];
+            if (!files.length) return;
+            event.preventDefault();
+            if (!blocked && !uncertain) upload(files);
+          }}
           onChange={(event) => {
             setGoal(event.target.value);
             goalRef.current = event.target.value;
@@ -927,9 +966,6 @@ export function GuidedIntake({
         className="gi-materials-picker"
       >
         <div>
-          <span className="gi-drop-icon" aria-hidden="true">
-            <Upload size={18} />
-          </span>
           <p id={`${id}-materials-limits`}>
             支持 PDF、Word、表格、文本和图片。最多 5 个文件，单个不超过 10 MiB，总计不超过 30 MiB。
           </p>
@@ -947,14 +983,9 @@ export function GuidedIntake({
       <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
         <ul>
           {draft?.attachments.map((file) => (
-            <li key={file.id} data-state={file.state}>
+            <li key={file.id}>
               <div className="gi-file-heading">
-                <span className="gi-file-icon" aria-hidden="true">
-                  {(() => {
-                    const Icon = fileIcon(file.name);
-                    return <Icon size={16} />;
-                  })()}
-                </span>
+                <FileText size={17} />
                 <strong>{file.name}</strong>
                 <span>{(file.size / MIB).toFixed(1)} MiB</span>
                 <button

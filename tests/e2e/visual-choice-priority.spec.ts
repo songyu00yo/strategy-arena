@@ -9,7 +9,7 @@ for (const viewport of [
 ]) {
   test.describe(`decision priorities ${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport });
-    test("homepage offers three explicitly synthetic choices and keeps general input editable", async ({
+    test("homepage shows one question and the input, and reveals the tools once there is text", async ({
       page,
     }) => {
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -38,16 +38,12 @@ for (const viewport of [
         });
       });
       await page.goto("/");
-      await expect(page.getByText("方案擂台 · 大学生的重大选择", { exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "你想解决什么问题？" })).toBeVisible();
       const input = page.getByLabel("你想解决什么问题？", { exact: true });
       await expect(input).toBeEditable();
-      const picker = page.getByRole("group", { name: "选择一个合成场景" });
-      await expect(picker.getByRole("button")).toHaveCount(3);
-      for (const label of ["考研还是就业", "选 offer", "买二手车"]) {
-        await picker.getByRole("button", { name: label, exact: true }).click();
-        await expect(input).toHaveValue(/合成场景 · 虚构情境/);
-        await expect(input).toBeFocused();
-      }
+      // No suggestions and no tools before the visitor writes.
+      await expect(page.getByRole("group", { name: "选择一个合成场景" })).toBeHidden();
+      await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeHidden();
       await input.fill("我想比较一个自己提出的其他选择，可以继续自由输入。");
       await expect(input).toHaveValue("我想比较一个自己提出的其他选择，可以继续自由输入。");
       expect(unexpected).toEqual([]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import {
   createMotionLoop,
   createMotionScope,
@@ -29,14 +29,7 @@ const UNIT = Array.from({ length: 161 }, (_, i) => {
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
 
 /** A decorative field around the real form, with no duplicate inputs or text. */
-/** `quiet` keeps the input bare: no light field around it and no entrance animation. */
-export function GoalFocusStage({
-  children,
-  quiet = false,
-}: {
-  children: ReactNode;
-  quiet?: boolean;
-}) {
+export function GoalFocusStage({ children }: { children: ReactNode }) {
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -198,7 +191,6 @@ export function GoalFocusStage({
 
     const enter = () => {
       if (
-        quiet ||
         introStarted ||
         compact.matches ||
         preference.matches ||
@@ -230,7 +222,7 @@ export function GoalFocusStage({
       };
     };
     const loop = createMotionLoop((_, dt) => {
-      if (quiet || !field || !visible || !windowActive || preference.matches) return false;
+      if (!field || !visible || !windowActive || preference.matches) return false;
       age += dt;
       focused += ((input.current.focused ? 1 : 0) - focused) * Math.min(1, dt * 6);
       input.current.energy = Math.max(0, input.current.energy - dt * 0.65);
@@ -421,35 +413,10 @@ export function GoalFocusStage({
       host.removeEventListener("click", clicked, true);
       ctx.clearRect(0, 0, surface.width, surface.height);
     };
-  }, [quiet]);
-
-  // On a desktop pointer, a quiet stage hands the caret to the input as soon as it is editable,
-  // so the blinking cursor itself shows where to start. Touch screens keep the keyboard closed.
-  useEffect(() => {
-    const content = panel.current;
-    if (!quiet || !content || !matchMedia("(hover: hover) and (pointer: fine)").matches) return;
-    const place = () => {
-      const input = content.querySelector("textarea");
-      const idle = !document.activeElement || document.activeElement === document.body;
-      if (!input || input.disabled || !idle) return;
-      input.focus({ preventScroll: true });
-      watch.disconnect();
-    };
-    const watch = new MutationObserver(place);
-    watch.observe(content, { subtree: true, attributes: true, attributeFilter: ["disabled"] });
-    place();
-    const stop = () => watch.disconnect();
-    document.addEventListener("pointerdown", stop, { once: true, capture: true });
-    document.addEventListener("keydown", stop, { once: true, capture: true });
-    return () => {
-      watch.disconnect();
-      document.removeEventListener("pointerdown", stop, { capture: true });
-      document.removeEventListener("keydown", stop, { capture: true });
-    };
-  }, [quiet]);
+  }, []);
 
   return (
-    <div className="g-focus-stage" data-quiet={quiet || undefined} ref={root}>
+    <div className="g-focus-stage" ref={root}>
       <canvas className="g-focus-field" ref={canvas} aria-hidden="true" />
       <div className="g-focus-input-wrapper" ref={panel}>
         {children}

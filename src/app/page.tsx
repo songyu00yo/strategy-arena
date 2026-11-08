@@ -42,6 +42,7 @@ import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
 import { ClickFx, Leaving } from "@/components/console/effects";
 import "@/components/focused-home.css";
+import "@/components/home-glass.css";
 import "@/components/friend-feedback.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";

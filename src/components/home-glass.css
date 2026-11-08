@@ -1,0 +1,429 @@
+/*
+ * Home glass: one material for every surface reached from the home page.
+ * Scope: .console-shell.focus-home (home before a result exists) and the dialogs it opens.
+ * Motion uses transform and opacity only; backdrop-filter is limited to the composer,
+ * the model popover and dialogs.
+ */
+.console-shell.focus-home {
+  --g-ink: #0b0d10;
+  --g-ink-2: #2d3138;
+  --g-muted: #5f6570;
+  --g-faint: #8b919b;
+  --g-hair: rgb(11 13 16 / 0.08);
+  --g-hair-2: rgb(11 13 16 / 0.14);
+  --g-surface: rgb(255 255 255 / 0.74);
+  --g-surface-solid: rgb(255 255 255 / 0.94);
+  --g-surface-sunk: rgb(240 242 246 / 0.78);
+  --g-wash: rgb(11 13 16 / 0.035);
+  --g-blur: blur(26px) saturate(1.7);
+  --g-hi: inset 0 1px 0 rgb(255 255 255 / 0.95);
+  --g-blue: 64 119 245;
+  --g-pink: 235 53 138;
+  --g-amber: 209 139 13;
+  --g-accent: linear-gradient(
+    115deg,
+    rgb(var(--g-blue)),
+    rgb(var(--g-pink)) 52%,
+    rgb(var(--g-amber))
+  );
+  --g-accent-soft: linear-gradient(
+    115deg,
+    rgb(var(--g-blue) / 0.12),
+    rgb(var(--g-pink) / 0.08) 52%,
+    rgb(var(--g-amber) / 0.1)
+  );
+  --g-ok: #137042;
+  --g-warn: #8f5f00;
+  --g-warn-soft: rgb(255 244 224 / 0.9);
+  --g-bad: #b42a1a;
+  --g-bad-soft: rgb(253 236 233 / 0.92);
+  --g-shadow-1: 0 1px 2px rgb(16 24 40 / 0.05), 0 1px 1px rgb(16 24 40 / 0.03);
+  --g-shadow-2: 0 2px 4px rgb(16 24 40 / 0.04), 0 12px 32px rgb(38 53 79 / 0.1);
+  --g-shadow-3: 0 4px 12px rgb(16 24 40 / 0.05), 0 34px 90px rgb(38 53 79 / 0.17);
+  --g-r1: 8px;
+  --g-r2: 12px;
+  --g-r3: 16px;
+  --g-r4: 22px;
+  --g-pill: 999px;
+  --g-spring: cubic-bezier(0.2, 1.4, 0.3, 1);
+  --g-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --g-control-h: 40px;
+  --g-focus: 0 0 0 3px rgb(var(--g-blue) / 0.18);
+  /* A still colour field the glass can read against. It never repaints. */
+  background:
+    radial-gradient(70vw 60vh at 6% 4%, rgb(var(--g-blue) / 0.16), transparent 68%),
+    radial-gradient(60vw 60vh at 50% 62%, rgb(255 255 255 / 0.75), transparent 70%),
+    radial-gradient(55vw 55vh at 98% 18%, rgb(var(--g-pink) / 0.08), transparent 70%),
+    radial-gradient(60vw 55vh at 92% 100%, rgb(var(--g-amber) / 0.12), transparent 70%), #e9ecf1;
+}
+.console-shell.focus-home .goal-landing {
+  background: none;
+}
+
+/* ---------- Shared controls ---------- */
+.console-shell.focus-home :is(.primary-button, .secondary-button, .text-button, .icon-button) {
+  -webkit-tap-highlight-color: transparent;
+}
+.console-shell.focus-home .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--g-control-h);
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--g-pill);
+  background: linear-gradient(180deg, #30353e, #0b0d10 70%);
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.2),
+    0 1px 2px rgb(11 13 16 / 0.22),
+    0 10px 24px rgb(11 13 16 / 0.16);
+}
+.console-shell.focus-home .primary-button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.24),
+    0 2px 4px rgb(11 13 16 / 0.2),
+    0 16px 34px rgb(11 13 16 / 0.22);
+}
+.console-shell.focus-home .primary-button:not(:disabled):active {
+  transform: scale(0.97);
+}
+.console-shell.focus-home .primary-button:disabled,
+.console-shell.focus-home .guided-intake .primary-button:disabled {
+  opacity: 1;
+  background: rgb(11 13 16 / 0.07);
+  color: var(--g-faint);
+  box-shadow: inset 0 0 0 1px var(--g-hair);
+}
+.console-shell.focus-home .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--g-pill);
+  background: var(--g-surface-solid);
+  color: var(--g-ink);
+  font-weight: 550;
+  box-shadow:
+    var(--g-hi),
+    0 0 0 1px var(--g-hair-2),
+    var(--g-shadow-1);
+}
+.console-shell.focus-home .secondary-button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow:
+    var(--g-hi),
+    0 0 0 1px var(--g-hair-2),
+    var(--g-shadow-2);
+}
+.console-shell.focus-home .text-button {
+  border-radius: var(--g-r1);
+}
+.console-shell.focus-home .text-button:not(:disabled):hover {
+  transform: none;
+  background: var(--g-wash);
+  box-shadow: none;
+  color: var(--g-ink);
+}
+.console-shell.focus-home .icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--g-pill);
+  background: var(--g-wash);
+  color: var(--g-ink-2);
+  transition:
+    background 0.2s,
+    transform 0.25s var(--g-spring);
+}
+.console-shell.focus-home .icon-button:not(:disabled):hover {
+  background: rgb(11 13 16 / 0.08);
+  transform: rotate(90deg);
+}
+.console-shell.focus-home :is(button, a, input, textarea, select, [role="option"]):focus-visible {
+  outline: none;
+  box-shadow: var(--g-focus);
+}
+
+/* ---------- Header ---------- */
+.console-shell.focus-home .site-header {
+  top: 14px;
+  right: 20px;
+  left: 20px;
+}
+.console-shell.focus-home .wordmark {
+  gap: 10px;
+  color: var(--g-ink);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.console-shell.focus-home .brand-symbol {
+  gap: 2.5px;
+  height: 18px;
+}
+.console-shell.focus-home .brand-symbol i {
+  width: 4.5px;
+  border-radius: 2px;
+}
+.console-shell.focus-home .brand-symbol i:nth-child(1) {
+  height: 12px;
+  background: linear-gradient(rgb(var(--g-blue)), rgb(var(--g-blue) / 0.55));
+}
+.console-shell.focus-home .brand-symbol i:nth-child(2) {
+  height: 18px;
+  background: linear-gradient(#2d3138, #0b0d10);
+}
+.console-shell.focus-home .brand-symbol i:nth-child(3) {
+  height: 9px;
+  background: linear-gradient(rgb(var(--g-amber)), rgb(var(--g-amber) / 0.55));
+}
+.console-shell.focus-home .header-right {
+  gap: 6px;
+  padding: 3px;
+  border-radius: var(--g-pill);
+  background: rgb(255 255 255 / 0.5);
+  box-shadow:
+    var(--g-hi),
+    0 0 0 1px var(--g-hair);
+}
+.console-shell.focus-home .site-header .header-right .identity-history-trigger,
+.console-shell.focus-home .site-header .model-pill {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: var(--g-pill);
+  background: transparent;
+  color: var(--g-ink-2);
+  font-size: 11.5px;
+  box-shadow: none;
+}
+.console-shell.focus-home .site-header .header-right .identity-history-trigger:hover,
+.console-shell.focus-home .site-header .model-pill:hover {
+  transform: none;
+  background: #fff;
+  box-shadow: var(--g-shadow-1);
+}
+.console-shell.focus-home .site-header .connection-dot {
+  width: 7px;
+  height: 7px;
+  border-width: 1.5px;
+}
+.console-shell.focus-home .site-header .connection-dot.connected {
+  border-color: var(--g-ok);
+  background: var(--g-ok);
+  box-shadow: 0 0 0 3px rgb(19 112 66 / 0.14);
+}
+
+/* ---------- Composer ---------- */
+.console-shell.focus-home .gi-composer {
+  isolation: isolate;
+  border: 0;
+  border-radius: var(--g-r4);
+  background: var(--g-surface);
+  -webkit-backdrop-filter: var(--g-blur);
+  backdrop-filter: var(--g-blur);
+  box-shadow:
+    var(--g-hi),
+    0 0 0 1px rgb(255 255 255 / 0.6),
+    var(--g-shadow-3);
+  transition: box-shadow 0.5s var(--g-ease);
+}
+/* Gradient hairline: dim at rest, full colour while writing. Opacity only. */
+.console-shell.focus-home .gi-composer::before,
+.console-shell.focus-home .gi-composer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 1px;
+  border-radius: inherit;
+  background: var(--g-accent);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.28;
+  transition: opacity 0.6s var(--g-ease);
+}
+.console-shell.focus-home .gi-composer::after {
+  inset: -1px;
+  padding: 2px;
+  filter: blur(6px);
+  opacity: 0;
+}
+.console-shell.focus-home .gi-composer:focus-within::before {
+  opacity: 0.9;
+}
+.console-shell.focus-home .gi-composer:focus-within::after {
+  opacity: 0.45;
+  animation: g-breathe 3.6s ease-in-out infinite;
+}
+.console-shell.focus-home .gi-composer:focus-within {
+  border: 0;
+  box-shadow:
+    var(--g-hi),
+    0 0 0 1px rgb(255 255 255 / 0.6),
+    0 6px 16px rgb(16 24 40 / 0.06),
+    0 40px 110px rgb(64 80 140 / 0.22);
+}
+@keyframes g-breathe {
+  50% {
+    opacity: 0.18;
+  }
+}
+.console-shell.focus-home .gi-composer > label {
+  padding: 26px 30px 0;
+  color: var(--g-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.console-shell.focus-home .gi-goal {
+  min-height: 200px;
+  padding: 14px 30px 18px;
+  color: var(--g-ink);
+  font-size: clamp(24px, 2.6vw, 31px);
+  font-weight: 450;
+  letter-spacing: -0.02em;
+  line-height: 1.55;
+  caret-color: rgb(var(--g-blue));
+  resize: none;
+}
+.console-shell.focus-home .gi-goal::placeholder {
+  color: #a2a7b0;
+}
+.console-shell.focus-home .gi-goal:focus-visible {
+  box-shadow: none;
+}
+.console-shell.focus-home .gi-composer-footer {
+  padding: 0 14px 14px 16px;
+  border: 0;
+  background: transparent;
+}
+/* Materials and model share one segmented capsule. */
+.console-shell.focus-home .gi-tools {
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--g-pill);
+  background: var(--g-surface-sunk);
+  box-shadow: inset 0 0 0 1px var(--g-hair);
+}
+.console-shell.focus-home .gi-tool,
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"] {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--g-pill);
+  background: transparent;
+  color: var(--g-ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  transition:
+    background 0.22s,
+    color 0.22s,
+    box-shadow 0.22s,
+    transform 0.25s var(--g-spring);
+}
+.console-shell.focus-home .gi-tool:not(:disabled):hover,
+.console-shell.focus-home .gi-tool[aria-expanded="true"],
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"]:not(:disabled):hover,
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"][aria-expanded="true"] {
+  background: #fff;
+  color: var(--g-ink);
+  box-shadow:
+    var(--g-hi),
+    var(--g-shadow-1),
+    0 0 0 1px var(--g-hair);
+}
+.console-shell.focus-home .gi-tool:not(:disabled):active,
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"]:not(:disabled):active {
+  transform: scale(0.96);
+}
+.console-shell.focus-home .gi-tool svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.4s var(--g-spring);
+}
+.console-shell.focus-home .gi-tool:not(:disabled):hover svg {
+  transform: rotate(-12deg);
+}
+/* Model trigger: a small accent orb marks the active model. */
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"]::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--g-accent);
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9);
+}
+.console-shell.focus-home .guided-intake .gi-analyze {
+  min-height: 42px;
+  padding: 0 20px 0 16px;
+  font-size: 13.5px;
+}
+.console-shell.focus-home .gi-analyze svg {
+  transition: transform 0.4s var(--g-spring);
+}
+.console-shell.focus-home .gi-analyze:not(:disabled):hover svg {
+  transform: translateX(3px);
+}
+
+@media (max-width: 650px) {
+  .console-shell.focus-home {
+    --g-control-h: 38px;
+  }
+  .console-shell.focus-home .site-header {
+    right: 12px;
+    left: 12px;
+  }
+  .console-shell.focus-home .gi-composer {
+    border-radius: 18px;
+  }
+  .console-shell.focus-home .gi-composer > label {
+    padding: 20px 20px 0;
+  }
+  .console-shell.focus-home .gi-goal {
+    min-height: 168px;
+    padding: 12px 20px 14px;
+    font-size: 21px;
+  }
+  .console-shell.focus-home .gi-composer-footer {
+    padding: 0 10px 10px;
+  }
+  .console-shell.focus-home .gi-tool,
+  .console-shell.focus-home .gi-tools button[aria-haspopup="listbox"] {
+    padding: 0 10px;
+    font-size: 11px;
+  }
+  .console-shell.focus-home .guided-intake .gi-analyze {
+    padding: 0 14px 0 12px;
+    font-size: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-shell.focus-home .gi-composer::after {
+    animation: none;
+  }
+  .console-shell.focus-home .primary-button::after {
+    animation: none;
+    opacity: 0;
+  }
+  .console-shell.focus-home .icon-button:not(:disabled):hover,
+  .console-shell.focus-home .gi-tool:not(:disabled):hover svg {
+    transform: none;
+  }
+}

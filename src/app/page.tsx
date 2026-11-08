@@ -36,6 +36,7 @@ import type { StepContext } from "@/lib/step-context";
 import { GuidedIntake } from "@/components/guided-intake";
 import { RecordedExamples } from "@/components/recorded-examples";
 import { GoalFocusStage } from "@/components/goal-focus-stage";
+import { AccessGate } from "@/components/access-gate";
 import { IntakeContext } from "@/components/intake-context";
 import { DecisionReviewPanel } from "@/components/decision-review-panel";
 import { ArenaConsole } from "@/components/console/ArenaConsole";
@@ -154,7 +155,6 @@ export default function Page() {
   const locateFrame = useRef(0);
   const navigationEpoch = useRef(0);
   const versionPin = useRef<{ previous: string | null; epoch: number } | null>(null);
-  const [accessCode, setAccessCode] = useState("");
   const accessRequired = !!arena.health?.requiresAccessCode && !arena.health?.accessGranted;
   const selected = arena.snapshot?.versions.find((v) => v.id === versionId) ?? arena.active;
   const historical = !!selected && selected.id !== arena.snapshot?.activeVersionId;
@@ -360,8 +360,16 @@ export default function Page() {
           </button>
         </div>
       </header>
+      {!demo && (
+        <AccessGate
+          open={accessRequired}
+          busy={arena.busy}
+          error={accessRequired ? arena.error : ""}
+          onUnlock={arena.unlock}
+        />
+      )}
       <main id="main">
-        {arena.error && (
+        {arena.error && !accessRequired && (
           <Leaving className="global-error" role="alert" frames={ERROR_EXIT}>
             <span>{arena.error}</span>
             <div>
@@ -392,39 +400,6 @@ export default function Page() {
                 </div>
                 <GoalFocusStage>
                   <div className="h-form">
-                    {accessRequired && (
-                      <form
-                        className="access-panel"
-                        onSubmit={async (e) => {
-                          e.preventDefault();
-                          if (await arena.unlock(accessCode)) setAccessCode("");
-                        }}
-                      >
-                        <div>
-                          <span className="eyebrow">受邀预览</span>
-                          <h2>凭访问码入场</h2>
-                          <p>输入运行者提供的访问码后，就可以开始推演。</p>
-                        </div>
-                        <label className="sr-only" htmlFor="access-code">
-                          访问码
-                        </label>
-                        <div className="access-input-row">
-                          <input
-                            id="access-code"
-                            type="password"
-                            autoComplete="off"
-                            placeholder="输入访问码"
-                            value={accessCode}
-                            onChange={(e) => setAccessCode(e.target.value)}
-                            required
-                          />
-                          <button type="submit" className="primary-button" disabled={arena.busy}>
-                            {arena.busy ? "验证中…" : "验证访问码"}
-                            <ArrowRight size={15} />
-                          </button>
-                        </div>
-                      </form>
-                    )}
                     {arena.restoring && (
                       <div className="home-connection-state" role="status">
                         <LoaderCircle className="spin" size={16} />

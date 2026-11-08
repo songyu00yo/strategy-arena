@@ -17,6 +17,8 @@ import { RecordedChallenge } from "./recorded-challenge";
 import { supplementDraftKey, type SupplementDraft } from "./supplement-draft";
 import "./console/console.css";
 import "./recorded-example-viewer.css";
+import "./console/paper-console.css";
+import "./console/press.css";
 
 function RecordedExampleEntry({
   title,

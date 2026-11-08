@@ -63,6 +63,8 @@ export function ArenaConsole({
   slate,
   notices,
   conditions,
+  agent,
+  drafts,
   selectedAttack,
   historical,
   startFromBeginning = false,
@@ -80,6 +82,10 @@ export function ArenaConsole({
   slate: React.ReactNode;
   notices: React.ReactNode;
   conditions: React.ReactNode;
+  /** The agent's plan and action chain: its own band, so it never pushes the stage around. */
+  agent?: React.ReactNode;
+  /** Live and archived draft text: kept in the rail with its own scroll. */
+  drafts?: React.ReactNode;
   selectedAttack?: string;
   historical: boolean;
   startFromBeginning?: boolean;
@@ -411,6 +417,7 @@ export function ArenaConsole({
           </ResultRegion>
         )}
         <div className="c-conditions">{conditions}</div>
+        {agent && <div className="c-agent">{agent}</div>}
         <div className="c-notices">{notices}</div>
         <div className="c-track">
           <div className="c-time" role="group" aria-label="推演步骤">
@@ -564,6 +571,7 @@ export function ArenaConsole({
                 </button>
               </div>
             </section>
+            {drafts && <div className="c-drafts">{drafts}</div>}
             <section className="c-trace" aria-label="步骤记录">
               <h2>
                 步骤记录 <span>{logged.length}</span>

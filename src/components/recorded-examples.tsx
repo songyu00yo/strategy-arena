@@ -47,7 +47,7 @@ function ExampleGallery() {
             {
               duration: 760,
               delay: 120 + index * 85,
-              easing: "cubic-bezier(.16,1.08,.3,1)",
+              easing: "cubic-bezier(0.19, 1, 0.22, 1)",
               fill: "backwards",
             },
           );

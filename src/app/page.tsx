@@ -44,6 +44,8 @@ import "@/components/console/console.css";
 import { ClickFx, Leaving } from "@/components/console/effects";
 import "@/components/focused-home.css";
 import "@/components/friend-feedback.css";
+import "@/components/console/paper-console.css";
+import "@/components/console/press.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
 import type { OverlayMotionHandle } from "@/components/overlay-motion";
@@ -494,13 +496,23 @@ export default function Page() {
                 onAdjustConditions={
                   historical ? undefined : (trigger) => openConditions(selected, trigger)
                 }
+                agent={
+                  <AgentProgress
+                    part="plan"
+                    version={selected}
+                    drafts={arena.snapshot?.drafts ?? []}
+                    web={arena.snapshot?.model.tools}
+                  />
+                }
+                drafts={
+                  <AgentProgress
+                    part="drafts"
+                    version={selected}
+                    drafts={arena.snapshot?.drafts ?? []}
+                  />
+                }
                 conditions={
                   <>
-                    <AgentProgress
-                      version={selected}
-                      drafts={arena.snapshot?.drafts ?? []}
-                      web={arena.snapshot?.model.tools}
-                    />
                     <section className="arena-intro">
                       <div>
                         <div className="arena-conditions">

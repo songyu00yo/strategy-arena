@@ -1,0 +1,364 @@
+/* =====================================================================
+   Press language: every control answers like paper, ink and a seal.
+   Hover lifts or rules, press pushes into the page, release lets the ink settle
+   (the dab and ring come from ClickFx). One curve family; nothing springs past rest.
+   Loaded last so it decides how controls move.
+   ===================================================================== */
+.console-shell {
+  --press-in: cubic-bezier(0.3, 0, 0.2, 1);
+}
+.console-shell :is(button, a, select, summary, input, textarea) {
+  transition:
+    background-color 0.45s var(--reveal-ease),
+    color 0.45s var(--reveal-ease),
+    border-color 0.45s var(--reveal-ease),
+    box-shadow 0.55s var(--reveal-ease),
+    transform 0.55s var(--reveal-ease),
+    translate 0.55s var(--reveal-ease),
+    outline-offset 0.4s var(--reveal-ease);
+}
+/* Focus is a vermilion rule that settles around the control, as visible as hover. */
+.console-shell
+  :is(button, a, select, summary, [tabindex]:not(h1, h2, h3, section, main)):focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: 3px;
+}
+.console-shell :is(input, textarea, select):focus-visible {
+  outline: none;
+}
+.console-shell input[type="checkbox"],
+.console-shell input[type="radio"] {
+  accent-color: var(--ink);
+}
+
+/* ---------- 1. Primary: an ink plate that lifts off the page and is pressed back ---------- */
+.console-shell :is(.primary-button, .gi-analyze) {
+  border: 1.5px solid var(--ink);
+  border-radius: 3px;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 0 0 0 var(--vermilion);
+}
+@media (hover: hover) {
+  .console-shell :is(.primary-button, .gi-analyze):not(:disabled):hover {
+    background: var(--ink);
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 var(--vermilion);
+  }
+}
+.console-shell :is(.primary-button, .gi-analyze):not(:disabled):active {
+  transform: translate(1px, 1px);
+  box-shadow: 0 0 0 var(--vermilion);
+  transition-duration: 0.12s;
+  transition-timing-function: var(--press-in);
+}
+
+/* ---------- 2. Secondary: a paper tab, ink wiped across it from the left ---------- */
+.console-shell .secondary-button {
+  border: 1.5px solid var(--ink);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.console-shell .secondary-button::before {
+  background: var(--ink) !important;
+  transition: transform 0.6s var(--glide-ease) !important;
+}
+@media (hover: hover) {
+  .console-shell .secondary-button:not(:disabled):hover {
+    color: var(--paper);
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+}
+.console-shell .secondary-button:not(:disabled):active {
+  transform: translate(1px, 1px);
+  box-shadow: 0 0 0 var(--ink);
+  transition-duration: 0.12s;
+}
+
+/* ---------- 3. Text buttons: a pen rules a line beneath, the ink darkens ---------- */
+.console-shell .text-button {
+  overflow: visible;
+}
+.console-shell .text-button::before {
+  inset: auto 6px 0 6px !important;
+  height: 1.5px !important;
+  background: var(--vermilion) !important;
+  transform: scaleX(0);
+  transform-origin: left center !important;
+  transition: transform 0.7s var(--reveal-ease) !important;
+}
+@media (hover: hover) {
+  .console-shell .text-button:not(:disabled):hover {
+    background: transparent !important;
+    color: var(--ink) !important;
+    transform: none !important;
+    box-shadow: none !important;
+  }
+  .console-shell .text-button:not(:disabled):hover::before {
+    transform: scaleX(1);
+  }
+}
+.console-shell .text-button:not(:disabled):active {
+  transform: translateY(1px) !important;
+  transition-duration: 0.1s;
+}
+.console-shell .text-button:not(:disabled):active::before {
+  transform: scaleX(1);
+  height: 2.5px !important;
+}
+
+/* ---------- 4. Icons say what they do ---------- */
+@media (hover: hover) {
+  .console-shell button:not(:disabled):hover svg {
+    transform: none;
+  }
+  .console-shell :is(button, a):not(:disabled):hover svg.lucide-history {
+    rotate: -50deg;
+  }
+  .console-shell
+    :is(button, a):not(:disabled):hover
+    svg:is(.lucide-refresh-cw, .lucide-rotate-ccw) {
+    rotate: 180deg;
+  }
+  .console-shell :is(button, a):not(:disabled):hover svg:is(.lucide-plus, .lucide-x) {
+    rotate: 90deg;
+  }
+  .console-shell
+    :is(button, a):not(:disabled):hover
+    svg:is(.lucide-settings-2, .lucide-sliders-horizontal) {
+    rotate: 90deg;
+  }
+  .console-shell
+    :is(button, a):not(:disabled):hover
+    svg:is(.lucide-arrow-right, .lucide-chevron-right) {
+    transform: translateX(4px);
+  }
+  .console-shell :is(button, a):not(:disabled):hover svg.lucide-arrow-up-right {
+    transform: translate(2px, -2px);
+  }
+  .console-shell :is(button, a):not(:disabled):hover svg.lucide-chevron-down {
+    transform: translateY(2px);
+  }
+  .console-shell :is(button, a):not(:disabled):hover svg.lucide-square {
+    transform: scale(0.78);
+  }
+}
+.console-shell :is(button, a) svg.lucide-x {
+  transition:
+    rotate 0.7s var(--reveal-ease),
+    transform 0.7s var(--reveal-ease);
+}
+
+/* ---------- 5. Icon buttons: a small paper square, rotated icon, pressed flat ---------- */
+.console-shell .icon-button {
+  border: 1.5px solid rgb(21 19 15 / 0.5);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+}
+@media (hover: hover) {
+  .console-shell .icon-button:not(:disabled):hover {
+    border-color: var(--ink);
+    background: var(--paper);
+    color: var(--ink);
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 3px 0 var(--ink);
+  }
+}
+.console-shell .icon-button:not(:disabled):active {
+  transform: translate(1px, 1px);
+  box-shadow: 0 0 0 var(--ink);
+}
+
+/* ---------- 6. Model pill: a ticket stub ---------- */
+.console-shell .model-pill::before {
+  background: var(--ink) !important;
+  transition: transform 0.6s var(--glide-ease) !important;
+}
+@media (hover: hover) {
+  .console-shell .model-pill:not(:disabled):hover {
+    color: var(--paper) !important;
+    transform: translate(-1px, -1px) !important;
+    box-shadow: 3px 3px 0 var(--vermilion) !important;
+  }
+}
+
+/* ---------- 7. Stop: a vermilion seal waiting to be pressed ---------- */
+@media (hover: hover) {
+  .console-shell .stop-button:not(:disabled):hover {
+    color: var(--paper) !important;
+    transform: translate(-1px, -1px) !important;
+    box-shadow: 4px 4px 0 var(--ink) !important;
+  }
+}
+.console-shell .stop-button:not(:disabled):active {
+  transform: translate(1px, 1px) !important;
+  box-shadow: 0 0 0 var(--ink) !important;
+}
+
+/* ---------- 8. Player controls on the ink plate: paper wiped in ---------- */
+.console-shell .c-ctrl button::before {
+  background: var(--paper) !important;
+  transition: transform 0.55s var(--glide-ease) !important;
+}
+@media (hover: hover) {
+  .console-shell .c-ctrl button:not(:disabled):hover {
+    color: var(--ink);
+    transform: translateY(-1px);
+  }
+}
+.console-shell .c-ctrl button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+/* ---------- 9. Boards: picked up from the desk ---------- */
+@media (hover: hover) {
+  .console-shell .c-root .c-board:not(.dim):hover {
+    translate: -3px -3px;
+    box-shadow: 8px 8px 0 var(--ink);
+  }
+  .console-shell .c-root .c-board.dim:hover {
+    box-shadow: 4px 4px 0 rgb(21 19 15 / 0.6);
+  }
+  /* A claim is marked with a highlighter swept from the left. */
+  .console-shell .c-root .c-claim:not(:disabled):hover {
+    transform: none;
+    background: linear-gradient(rgb(154 106 28 / 0.18), rgb(154 106 28 / 0.18)) left / 100% 100%
+      no-repeat;
+    box-shadow: -3px 0 0 rgb(var(--route));
+  }
+}
+.console-shell .c-root .c-claim {
+  background: linear-gradient(rgb(154 106 28 / 0.18), rgb(154 106 28 / 0.18)) left / 0% 100%
+    no-repeat;
+  transition:
+    background-size 0.7s var(--reveal-ease),
+    box-shadow 0.5s var(--reveal-ease);
+}
+
+/* ---------- 10. Ledger rows: highlighter sweep, a vermilion rule when chosen ---------- */
+.console-shell .c-root .c-row {
+  position: relative;
+  background: linear-gradient(rgb(154 106 28 / 0.16), rgb(154 106 28 / 0.16)) left / 0% 100%
+    no-repeat;
+  transition:
+    background-size 0.75s var(--reveal-ease),
+    padding-left 0.6s var(--reveal-ease),
+    color 0.4s;
+}
+@media (hover: hover) {
+  .console-shell .c-root .c-row:hover,
+  .console-shell .c-root .c-row:hover em {
+    background-color: transparent;
+    color: var(--ink);
+  }
+  .console-shell .c-root .c-row:hover {
+    background-size: 100% 100%;
+    padding-left: 12px;
+  }
+}
+.console-shell .c-root .c-row::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 3px;
+  background: var(--vermilion);
+  transform: scaleY(0);
+  transition: transform 0.6s var(--reveal-ease);
+}
+.console-shell .c-root .c-row:is(.sel, .located)::before {
+  transform: scaleY(1);
+}
+.console-shell .c-chart .row {
+  transition: background-size 0.75s var(--reveal-ease);
+  background: linear-gradient(rgb(154 106 28 / 0.14), rgb(154 106 28 / 0.14)) left / 0% 100%
+    no-repeat;
+}
+@media (hover: hover) {
+  .console-shell .c-chart .row:hover {
+    background-size: 100% 100%;
+  }
+}
+
+/* ---------- 11. Disclosure: the chevron turns, the content is ruled in ---------- */
+.console-shell summary {
+  list-style: none;
+}
+.console-shell summary::-webkit-details-marker {
+  display: none;
+}
+.console-shell details > summary::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 8px 2px 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.6s var(--reveal-ease);
+}
+.console-shell details[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+/* ---------- 12. Fields: the line is ruled in when the pen comes near ---------- */
+.console-shell
+  :is(.field, .modal-body, dialog)
+  :is(input:not([type="checkbox"], [type="radio"]), textarea, select) {
+  border: 1.5px solid rgb(21 19 15 / 0.45);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  background-image: linear-gradient(var(--vermilion), var(--vermilion));
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 0% 2px;
+  transition:
+    border-color 0.5s var(--reveal-ease),
+    box-shadow 0.6s var(--reveal-ease),
+    transform 0.6s var(--reveal-ease),
+    background-size 0.8s var(--reveal-ease);
+}
+.console-shell
+  :is(.field, .modal-body, dialog)
+  :is(input:not([type="checkbox"], [type="radio"]), textarea, select):focus {
+  border-color: var(--ink);
+  background-size: 100% 2px;
+  box-shadow: 3px 3px 0 var(--ink);
+  transform: translate(-1px, -1px);
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-shell * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* The header's history link stays a quiet text link: no tab, no shadow. */
+.console-shell .site-header .identity-history-trigger {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink);
+  white-space: nowrap;
+  box-shadow: none;
+}
+.console-shell .site-header .identity-history-trigger::before {
+  inset: auto 6px 0 6px !important;
+  height: 1.5px !important;
+  background: var(--vermilion) !important;
+  transition: transform 0.7s var(--reveal-ease) !important;
+}
+@media (hover: hover) {
+  .console-shell .site-header .identity-history-trigger:not(:disabled):hover {
+    color: var(--ink);
+    transform: none;
+    box-shadow: none;
+  }
+}

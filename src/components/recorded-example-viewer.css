@@ -61,7 +61,7 @@
   padding: 1px 5px;
   border: 1px solid var(--c-line);
   border-radius: 0;
-  background: rgb(255 255 255 / 0.55);
+  background: rgb(251 248 241 / 0.55);
   color: var(--c-t1);
   font: inherit;
 }
@@ -173,7 +173,7 @@
   box-shadow: 0 10px 0 rgb(11 13 16 / 0.035);
   background: var(--card);
   transform-origin: 50% 70%;
-  animation: recorded-entry-in 800ms cubic-bezier(0.16, 1.06, 0.3, 1) both;
+  animation: recorded-entry-in 800ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
 .recorded-entry-goal {
   display: flex;

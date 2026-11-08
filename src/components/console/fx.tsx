@@ -38,57 +38,86 @@ export function Intro({
         ? `同一模型 ${version.modelSelection.modelId} 分成五个角色`
         : "早期记录：模型未记录",
   ].filter((line) => !line.startsWith("0 "));
-  const [count, setCount] = useState(0);
   const box = useRef<HTMLDivElement>(null);
+  const camera = useRef<HTMLDivElement>(null);
+  const leave = useRef<(fast: boolean) => void>(() => {});
+  const glyphs = Array.from(version.challenge.goal).length;
+  // The title settles, the rule is drawn, the credits roll, then the camera moves on.
+  const titleEnds = 380 + Math.min(900, glyphs * 34) + 460;
+  const creditsAt = titleEnds + 260;
+  const holdUntil = creditsAt + lines.length * 120 + 900;
   useEffect(() => {
     if (reducedMotion()) {
       onReveal();
       return onDone();
     }
     const scope = createMotionScope();
-    if (count < lines.length) {
-      scope.later(count === 0 ? 800 : 130, () => setCount(count + 1));
-      return () => scope.dispose();
-    }
-    scope.later(320, () => {
+    let gone = false;
+    leave.current = (fast) => {
+      if (gone) return;
+      gone = true;
       onReveal();
-      const open =
-        box.current &&
-        scope.animate(
-          box.current,
-          [{ clipPath: "inset(0 0 0 0)" }, { clipPath: "inset(50% 0 50% 0)" }],
-          { duration: 520, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
-        );
-      if (open) open.onfinish = onDone;
-      else onDone();
-    });
-    return () => scope.dispose();
-  }, [count, lines.length, onDone, onReveal, reducePreference]);
-  useEffect(() => {
-    const skip = () => {
-      onReveal();
-      onDone();
+      const el = box.current;
+      const cam = camera.current;
+      if (!el || !cam) return onDone();
+      el.dataset.leaving = "true";
+      const duration = fast ? 520 : 1100;
+      // The card is carried past the lens while the paper underneath develops into the workbench.
+      scope.animate(
+        cam,
+        [
+          { transform: "translateZ(0) scale(1)", opacity: 1 },
+          { transform: "translateZ(0) scale(1.09)", opacity: 0 },
+        ],
+        { duration, easing: "cubic-bezier(.65,0,.15,1)", fill: "forwards" },
+      );
+      const fade = scope.animate(el, [{ opacity: 1 }, { opacity: 0 }], {
+        duration,
+        delay: fast ? 60 : 180,
+        easing: "cubic-bezier(.65,0,.15,1)",
+        fill: "forwards",
+      });
+      fade.onfinish = onDone;
     };
+    scope.later(holdUntil, () => leave.current(false));
+    return () => scope.dispose();
+    // Runs once per opening: a refreshed record must not restart the titles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reducePreference]);
+  useEffect(() => {
+    const skip = () => leave.current(true);
     addEventListener("keydown", skip, { once: true });
     addEventListener("mousedown", skip, { once: true });
     return () => {
       removeEventListener("keydown", skip);
       removeEventListener("mousedown", skip);
     };
-  }, [onDone, onReveal]);
+  }, []);
   return (
     <div className="c-intro" ref={box} aria-hidden="true">
-      <Dust />
-      <p className="q">
-        <Chars text={version.challenge.goal} active />
+      <div className="ci-camera" ref={camera}>
+        <div className="ci-card">
+          <p className="ci-eyebrow">
+            <span>方案擂台</span>
+            <i />
+            <span>第 {String(version.number).padStart(2, "0")} 版</span>
+          </p>
+          <p className="q">
+            <Chars text={version.challenge.goal} active delay={380} />
+          </p>
+          <i className="ci-rule" style={{ animationDelay: `${titleEnds - 200}ms` }} />
+          <ul className="ci-credits">
+            {lines.map((line, i) => (
+              <li key={line} style={{ animationDelay: `${creditsAt + i * 120}ms` }}>
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <p className="ci-skip" style={{ animationDelay: "1200ms" }}>
+        按任意键跳过
       </p>
-      <ul>
-        {lines.slice(0, count).map((line) => (
-          <li key={line}>
-            <Decode text={line} active />
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
@@ -110,6 +139,14 @@ const CHAPTER: Record<Stage, string> = {
   verify: "核验",
   revise: "修订",
   judge: "裁决",
+};
+
+const ACT: Record<Stage, string> = {
+  propose: "第 一 幕",
+  attack: "第 二 幕",
+  verify: "第 三 幕",
+  revise: "第 四 幕",
+  judge: "终 幕",
 };
 
 /** The stage word lands huge, then flies up and becomes its label on the timeline. */
@@ -144,9 +181,11 @@ export function Chapter({ stage }: { stage: Stage }) {
   if (reducePreference) return null;
   return (
     <div className="c-chapter" aria-hidden="true">
+      <small className="cc-act">{ACT[stage]}</small>
       <b ref={word}>
         <Chars text={CHAPTER[stage]} active />
       </b>
+      <i className="cc-rule" />
     </div>
   );
 }
@@ -550,7 +589,12 @@ export function ChainDeck({
         },
         { translate: "0 0", rotate: "y 0deg", scale: "1", opacity: 1 },
       ],
-      { duration: 520, delay: lead + 40, easing: "cubic-bezier(.16,1.05,.3,1)", fill: "backwards" },
+      {
+        duration: 520,
+        delay: lead + 40,
+        easing: "cubic-bezier(0.19, 1, 0.22, 1)",
+        fill: "backwards",
+      },
     );
     return () => scope.dispose();
     // Only a new step brings a card in.

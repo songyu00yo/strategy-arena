@@ -1,62 +1,388 @@
+/* ===== Agent band: the plan and its action chain, ruled like a printed timetable =====
+   It keeps one height while the run goes on; the plan opens in place on request.
+   Live text lives in the side rail (.agent-drafts) with its own scroll. */
 .agent-progress {
-  margin: 16px 0;
-  border: 1px solid var(--c-line, #d7dce5);
-  border-radius: 12px;
-  padding: 16px;
-  background: var(--c-bg, #fff);
-  color: var(--c-t1, #202a3a);
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 18px;
+  margin: 0;
+  padding: 7px 0 6px;
+  border-top: 1.5px solid var(--ink);
+  border-bottom: 1px solid var(--c-line2);
+  color: var(--c-t1);
 }
-.agent-progress-heading {
+.ap-head {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  align-items: baseline;
+  gap: 2px 10px;
+  width: 168px;
 }
-.agent-progress-heading span,
-.agent-actions small {
-  font-size: 12px;
-  color: var(--c-t2, #556172);
+.ap-title,
+.ap-count {
+  flex-basis: 100%;
 }
+.ap-title {
+  position: relative;
+  font-family: var(--serif-cn);
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+.ap-title::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 2px;
+  margin-top: 3px;
+  background: var(--vermilion);
+  transform-origin: left center;
+  animation: ap-rule 1.1s var(--reveal-ease) both;
+}
+.ap-count {
+  font-size: 11px;
+  color: var(--c-t3);
+  font-variant-numeric: tabular-nums;
+}
+.ap-now {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--vermilion);
+}
+.ap-toggle {
+  justify-self: start;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--c-t2);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The chain: one ruled line, a node per action, ink where it has passed. */
 .agent-actions {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
   display: flex;
-  gap: 8px;
+  gap: 0;
+  margin: 0;
+  padding: 2px 4px 2px 18px;
   overflow-x: auto;
-  padding: 8px 0;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   list-style: none;
+  mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 26px), transparent);
+}
+.agent-actions::-webkit-scrollbar {
+  display: none;
 }
 .agent-actions li {
+  position: relative;
   flex: 0 0 auto;
   display: grid;
-  gap: 4px;
-  padding: 8px 12px;
-  border: 1px solid var(--c-line, #d7dce5);
-  border-radius: 8px;
+  grid-template-rows: 14px auto auto;
+  min-width: 78px;
+  padding-right: 10px;
+  color: var(--c-t3);
 }
-.agent-actions li[data-state="running"] {
-  border-color: #315fcc;
-  background: #edf3ff;
+/* The rule between nodes is drawn in ink up to the step that has been reached. */
+.agent-actions li::before,
+.agent-actions li::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 9px;
+  right: 0;
+  height: 1.5px;
+  background: rgb(21 19 15 / 0.16);
+}
+.agent-actions li::after {
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 1.1s var(--reveal-ease);
+}
+.agent-actions li[data-passed]::after {
+  transform: scaleX(1);
+}
+.agent-actions li:last-child::before,
+.agent-actions li:last-child::after {
+  display: none;
+}
+.agent-actions li > i {
+  position: relative;
+  z-index: 1;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid rgb(21 19 15 / 0.35);
+  border-radius: 50%;
+  background: var(--paper);
+  transition:
+    background-color 0.6s var(--reveal-ease),
+    border-color 0.6s var(--reveal-ease),
+    transform 0.9s var(--reveal-ease);
+}
+.agent-actions li > span {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.agent-actions li > small {
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--c-t3);
 }
 .agent-actions li[data-state="completed"] {
-  border-color: #578568;
+  color: var(--c-t1);
 }
-.agent-draft {
-  border-top: 1px solid var(--c-line, #d7dce5);
-  margin-top: 12px;
-  padding-top: 12px;
+.agent-actions li[data-state="completed"] > i {
+  border-color: var(--ink);
+  background: var(--ink);
 }
-.agent-draft p {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.agent-actions li[data-state="running"] {
+  color: var(--ink);
+}
+.agent-actions li[data-state="running"] > span {
+  font-weight: 800;
+}
+.agent-actions li[data-state="running"] > small {
+  color: var(--vermilion);
+}
+.agent-actions li[data-state="running"] > i {
+  border-color: var(--vermilion);
+  background: var(--paper);
+  transform: scale(1.15);
+}
+/* The running node breathes like a seal pressed and lifted, slowly. */
+.agent-actions li[data-state="running"] > i::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--vermilion);
+  animation: ap-press 2.4s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.agent-actions li[data-state="failed"],
+.agent-actions li[data-state="uncertain"] {
+  color: var(--vermilion);
+}
+.agent-actions li[data-state="failed"] > i,
+.agent-actions li[data-state="uncertain"] > i {
+  border-color: var(--vermilion);
+  border-style: dashed;
+}
+.agent-actions li[data-state="skipped"] > span {
+  text-decoration: line-through;
+  text-decoration-color: rgb(21 19 15 / 0.4);
+}
+
+/* The plan opens in place: rows glide, nothing jumps. */
+.ap-more {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.7s var(--reveal-ease),
+    opacity 0.45s ease;
+}
+.ap-more > div {
+  min-height: 0;
+  overflow: hidden;
+}
+.agent-progress[data-open] .ap-more {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.ap-more p,
+.ap-questions {
+  max-width: 76em;
+  margin: 8px 0 0;
+  font-size: 12.5px;
   line-height: 1.7;
-  margin: 8px 0;
+  color: var(--c-t1);
 }
-@media (max-width: 650px) {
-  .agent-progress {
-    padding: 12px;
+.ap-web {
+  color: var(--c-t3) !important;
+  font-size: 11.5px !important;
+}
+.ap-summary {
+  padding-left: 12px;
+  border-left: 2px solid var(--vermilion);
+  font-family: var(--serif-cn);
+  font-size: 13.5px !important;
+}
+.ap-questions b {
+  font-size: 11.5px;
+  color: var(--c-t2);
+}
+.ap-questions ul {
+  margin: 2px 0 2px;
+  padding-left: 1.3em;
+}
+
+/* ===== Live text in the rail: a sheet still under the pen ===== */
+.agent-drafts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  height: 100%;
+}
+.agent-draft.live {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--ink);
+  animation: ap-sheet 0.9s var(--reveal-ease) both;
+}
+.agent-draft.live > strong {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px 6px;
+  border-bottom: 1px dashed rgb(21 19 15 / 0.32);
+  font-family: var(--serif-cn);
+  font-size: 13.5px;
+  font-weight: 900;
+  color: var(--ink);
+}
+.agent-draft.live > strong em {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--vermilion);
+}
+.ap-draft-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 10px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(21 19 15 / 0.3) transparent;
+  /* Ruled like exercise paper. */
+  background-image: repeating-linear-gradient(transparent 0 21px, rgb(38 69 122 / 0.09) 21px 22px);
+  background-attachment: local;
+  background-position: 0 6px;
+}
+.ap-draft-body p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 22px;
+  color: var(--c-t1);
+  animation: ap-ink 0.9s var(--reveal-ease) both;
+}
+.ap-caret {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--vermilion);
+  animation: ap-caret 1.1s steps(1) infinite;
+}
+.agent-draft.archived {
+  flex: none;
+  padding: 6px 10px;
+  border: 1px dashed rgb(21 19 15 / 0.35);
+  border-radius: 4px;
+  background: rgb(251 248 241 / 0.7);
+  font-size: 12px;
+}
+.agent-draft.archived summary {
+  color: var(--vermilion);
+  cursor: pointer;
+}
+.agent-draft.archived p {
+  margin: 6px 0 0;
+  line-height: 1.6;
+}
+
+@keyframes ap-rule {
+  from {
+    transform: scaleX(0);
   }
-  .agent-draft > div {
-    max-height: 40dvh;
-    overflow-y: auto;
+}
+@keyframes ap-press {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.55);
+  }
+}
+@keyframes ap-sheet {
+  from {
+    opacity: 0;
+    transform: translate(10px, 14px) rotate(0.6deg);
+    box-shadow: 0 0 0 var(--ink);
+  }
+}
+@keyframes ap-ink {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateY(5px);
+  }
+}
+@keyframes ap-caret {
+  50% {
+    opacity: 0;
+  }
+}
+@media (max-width: 760px) {
+  .agent-progress {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ap-head {
+    width: auto;
+  }
+  .ap-title,
+  .ap-count {
+    flex-basis: auto;
+  }
+  .agent-actions {
+    grid-column: 1;
+    grid-row: 2;
+    margin-top: 6px;
+  }
+  .ap-more {
+    grid-row: 3;
+  }
+  .agent-draft.live {
+    height: auto;
+  }
+  .ap-draft-body {
+    max-height: 40vh;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-progress *,
+  .agent-draft,
+  .agent-draft * {
+    animation: none !important;
+    transition: none !important;
   }
 }

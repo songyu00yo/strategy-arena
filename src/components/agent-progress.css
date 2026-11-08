@@ -343,7 +343,6 @@
 @keyframes ap-ink {
   from {
     opacity: 0;
-    filter: blur(3px);
     transform: translateY(5px);
   }
 }

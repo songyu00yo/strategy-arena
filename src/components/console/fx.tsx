@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } f
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import { latestShownRevision, nameOf, outputOf, type Beat } from "./beats";
-import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
+import { Decode, reducedMotion, ROUTE_COLOR } from "./effects";
 import { STAGE_LABELS, type Stage } from "@/lib/contracts";
 import { verdictLabel } from "@/lib/verdict-label";
 
@@ -13,253 +13,42 @@ import { createMotionLoop, createMotionScope, useReducedMotion } from "./motion-
 const reduced = reducedMotion;
 
 /** Cold open: the question on black, what this game holds, then a shutter opens on the room. */
-export function Intro({
-  version,
-  events,
-  demo,
-  onReveal,
-  onDone,
-}: {
-  version: ArenaVersion;
-  events: ArenaEvent[];
-  demo: boolean;
-  onReveal: () => void;
-  onDone: () => void;
-}) {
-  const reducePreference = useReducedMotion();
-  const lines = [
-    `${version.strategies.length} 条路线`,
-    `${version.attacks.length} 次质疑`,
-    `${version.evidence.length} 项证据`,
-    `${events.length} 条步骤记录`,
-    demo
-      ? "预设演示，未调用模型"
-      : version.modelSelection
-        ? `同一模型 ${version.modelSelection.modelId} 分成五个角色`
-        : "早期记录：模型未记录",
-  ].filter((line) => !line.startsWith("0 "));
-  const box = useRef<HTMLDivElement>(null);
-  const camera = useRef<HTMLDivElement>(null);
-  const leave = useRef<(fast: boolean) => void>(() => {});
-  const glyphs = Array.from(version.challenge.goal).length;
-  // The title settles, the rule is drawn, the credits roll, then the camera moves on.
-  const titleEnds = 380 + Math.min(900, glyphs * 34) + 460;
-  const creditsAt = titleEnds + 260;
-  const holdUntil = creditsAt + lines.length * 120 + 900;
-  useEffect(() => {
-    if (reducedMotion()) {
-      onReveal();
-      return onDone();
-    }
-    const scope = createMotionScope();
-    let gone = false;
-    leave.current = (fast) => {
-      if (gone) return;
-      gone = true;
-      onReveal();
-      const el = box.current;
-      const cam = camera.current;
-      if (!el || !cam) return onDone();
-      el.dataset.leaving = "true";
-      const duration = fast ? 520 : 1100;
-      // The card is carried past the lens while the paper underneath develops into the workbench.
-      scope.animate(
-        cam,
-        [
-          { transform: "translateZ(0) scale(1)", opacity: 1 },
-          { transform: "translateZ(0) scale(1.09)", opacity: 0 },
-        ],
-        { duration, easing: "cubic-bezier(.65,0,.15,1)", fill: "forwards" },
-      );
-      const fade = scope.animate(el, [{ opacity: 1 }, { opacity: 0 }], {
-        duration,
-        delay: fast ? 60 : 180,
-        easing: "cubic-bezier(.65,0,.15,1)",
-        fill: "forwards",
-      });
-      fade.onfinish = onDone;
-    };
-    scope.later(holdUntil, () => leave.current(false));
-    return () => scope.dispose();
-    // Runs once per opening: a refreshed record must not restart the titles.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reducePreference]);
-  useEffect(() => {
-    const skip = () => leave.current(true);
-    addEventListener("keydown", skip, { once: true });
-    addEventListener("mousedown", skip, { once: true });
-    return () => {
-      removeEventListener("keydown", skip);
-      removeEventListener("mousedown", skip);
-    };
-  }, []);
-  return (
-    <div className="c-intro" ref={box} aria-hidden="true">
-      <div className="ci-camera" ref={camera}>
-        <div className="ci-card">
-          <p className="ci-eyebrow">
-            <span>方案擂台</span>
-            <i />
-            <span>第 {String(version.number).padStart(2, "0")} 版</span>
-          </p>
-          <p className="q">
-            <Chars text={version.challenge.goal} active delay={380} />
-          </p>
-          <i className="ci-rule" style={{ animationDelay: `${titleEnds - 200}ms` }} />
-          <ul className="ci-credits">
-            {lines.map((line, i) => (
-              <li key={line} style={{ animationDelay: `${creditsAt + i * 120}ms` }}>
-                {line}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-      <p className="ci-skip" style={{ animationDelay: "1200ms" }}>
-        按任意键跳过
-      </p>
-    </div>
-  );
-}
-
-const emberSets = new Map<string, string[]>();
-const EMBERS = (route: string | null) => {
-  const key = route ?? "none";
-  let set = emberSets.get(key);
-  if (!set) {
-    set = [ROUTE_COLOR[route ?? ""] ?? "255,255,255", "120,130,150", "255,175,60"];
-    emberSets.set(key, set);
-  }
-  return set;
-};
-
-const CHAPTER: Record<Stage, string> = {
-  propose: "提案",
-  attack: "质疑",
-  verify: "核验",
-  revise: "修订",
-  judge: "裁决",
-};
-
-const ACT: Record<Stage, string> = {
-  propose: "第 一 幕",
-  attack: "第 二 幕",
-  verify: "第 三 幕",
-  revise: "第 四 幕",
-  judge: "终 幕",
-};
-
-/** The stage word lands huge, then flies up and becomes its label on the timeline. */
-export function Chapter({ stage }: { stage: Stage }) {
-  const reducePreference = useReducedMotion();
-  const word = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const el = word.current;
-    if (!el || reduced()) return;
-    const scope = createMotionScope();
-    scope.later(360, () => {
-      const to = document.querySelector(".c-time .seg.here span")?.getBoundingClientRect();
-      const from = el.getBoundingClientRect();
-      if (!to) return;
-      const scale = Math.max(0.04, to.height / from.height);
-      scope.animate(
-        el,
-        [
-          { transform: "none", opacity: 1 },
-          {
-            transform: `translate(${to.left + to.width / 2 - (from.left + from.width / 2)}px,${
-              to.top + to.height / 2 - (from.top + from.height / 2)
-            }px) scale(${scale})`,
-            opacity: 0,
-          },
-        ],
-        { duration: 420, easing: "cubic-bezier(.7,0,.15,1)", fill: "forwards" },
-      );
-    });
-    return () => scope.dispose();
-  }, [reducePreference]);
-  if (reducePreference) return null;
-  return (
-    <div className="c-chapter" aria-hidden="true">
-      <small className="cc-act">{ACT[stage]}</small>
-      <b ref={word}>
-        <Chars text={CHAPTER[stage]} active />
-      </b>
-      <i className="cc-rule" />
-    </div>
-  );
-}
-
-/** The verdict lands: black bursts out of the chosen board, then folds into the verdict panel. */
+/** The verdict lands on the page, not over it: a vermilion seal is pressed onto the chosen board. */
 export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () => void }) {
   const reducePreference = useReducedMotion();
-  const box = useRef<HTMLDivElement>(null);
+  const seal = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = box.current;
-    if (!el || reducedMotion()) return onDone();
-    const pick = document
+    const el = seal.current;
+    const board = document
       .querySelector(`[data-board="${verdict.preferred ?? "B"}"]`)
       ?.getBoundingClientRect();
+    if (!el || !board || reducedMotion()) return onDone();
+    el.style.left = `${board.left + board.width * 0.62}px`;
+    el.style.top = `${board.top + Math.min(board.height * 0.42, 150)}px`;
     const scope = createMotionScope();
-    const x = pick ? pick.left + pick.width / 2 : innerWidth / 2;
-    const y = pick ? pick.top + pick.height / 2 : innerHeight / 2;
-    const entrance = scope.animate(
+    const press = scope.animate(
       el,
       [
-        { clipPath: `circle(0px at ${x}px ${y}px)` },
-        { clipPath: `circle(150vmax at ${x}px ${y}px)` },
+        { transform: "translate(-50%,-50%) rotate(-14deg) scale(2.2)", opacity: 0 },
+        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.55 },
+        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.85 },
+        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 0 },
       ],
-      { duration: 600, delay: 350, easing: "cubic-bezier(.7,0,.2,1)", fill: "both" },
+      { duration: 2600, delay: 200, easing: "cubic-bezier(.19,1,.22,1)", fill: "both" },
     );
-    let closing: Animation | undefined;
-    const close = () => {
-      if (closing) return;
-      const panel = document.querySelector(".c-result")?.getBoundingClientRect();
-      const inset = panel
-        ? `inset(${panel.top}px ${innerWidth - panel.right}px ${innerHeight - panel.bottom}px ${panel.left}px)`
-        : "inset(50%)";
-      const currentClip = getComputedStyle(el).clipPath;
-      const entered = entrance.playState === "finished";
-      const panelX = panel ? panel.left + panel.width / 2 : innerWidth / 2;
-      const panelY = panel ? panel.top + panel.height / 2 : innerHeight / 2;
-      const endClip = entered ? inset : `circle(0px at ${panelX}px ${panelY}px)`;
-      entrance.cancel();
-      closing = scope.animate(
-        el,
-        [
-          { clipPath: entered ? "inset(0px)" : currentClip, opacity: 1 },
-          { clipPath: endClip, opacity: 1, offset: 0.85 },
-          { clipPath: endClip, opacity: 0 },
-        ],
-        { duration: 800, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
-      );
-      closing.onfinish = onDone;
-    };
-    scope.later(2500, close);
-    addEventListener("keydown", close);
+    press.onfinish = onDone;
+    const skip = () => press.finish();
+    addEventListener("keydown", skip);
     return () => {
+      removeEventListener("keydown", skip);
       scope.dispose();
-      removeEventListener("keydown", close);
     };
-    // Runs once: a poll that refreshes the record must not restart the verdict's timing.
+    // Runs once: a poll that refreshes the record must not restart the seal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reducePreference]);
   return (
-    <div className="c-film" ref={box} aria-hidden="true">
-      <Dust embers={EMBERS(verdict.preferred)} />
-      <small>
-        <Chars text={verdictLabel(verdict)} active delay={520} />
-      </small>
-      <div className="head">
-        <Chars text={verdict.headline} active delay={650} />
-      </div>
-      <ul>
-        {verdict.conditions.slice(0, 2).map((line, i) => (
-          <li key={line}>
-            <Decode text={line} active delay={1000 + i * 150} />
-          </li>
-        ))}
-      </ul>
+    <div className="c-seal" ref={seal} aria-hidden="true">
+      <b>{verdictLabel(verdict)}</b>
     </div>
   );
 }

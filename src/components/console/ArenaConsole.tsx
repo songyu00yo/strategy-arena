@@ -21,7 +21,7 @@ import { attackMeta } from "@/components/status";
 import type { StepContext } from "@/lib/step-context";
 import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
-import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
+import { RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
 import { RouteStage } from "./RouteStage";
 import { StepCard } from "./StepCard";
@@ -147,6 +147,18 @@ export function ArenaConsole({
       // Nothing to remember it in.
     }
   }, []);
+  // The opening happens on the page itself, never over it: the bands are printed in from the
+  // top, then the boards are raised. Nothing covers the whole screen.
+  useEffect(() => {
+    if (!intro) return;
+    const quick = reducedMotion();
+    const raise = setTimeout(reveal, quick ? 0 : 520);
+    const settle = setTimeout(endIntro, quick ? 0 : 2000);
+    return () => {
+      clearTimeout(raise);
+      clearTimeout(settle);
+    };
+  }, [intro, reveal, endIntro]);
 
   const stage = current?.stage;
   // The first step of a stage waits for its word to land, so the two never collide.
@@ -343,7 +355,7 @@ export function ArenaConsole({
   return (
     <div
       data-motion-origin={seeking ? "interaction" : "story"}
-      className={`c-root ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
+      className={`c-root ${intro ? "opening" : ""} ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
     >
       <RecordWall
         version={version}
@@ -637,9 +649,6 @@ export function ArenaConsole({
           </section>
         </div>
       </div>
-      {playing && directed && !seeking && current && current.stage !== "judge" && (
-        <Chapter key={current.stage} stage={current.stage} />
-      )}
       {verdict && directed && !filmDone && current?.id === "judge" && (
         <VerdictFilm verdict={verdict} onDone={endFilm} />
       )}
@@ -677,9 +686,6 @@ export function ArenaConsole({
             onEvidence(attack);
           }}
         />
-      )}
-      {intro && (
-        <Intro version={version} events={events} demo={demo} onReveal={reveal} onDone={endIntro} />
       )}
     </div>
   );

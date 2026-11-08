@@ -40,7 +40,6 @@
 }
 .console-shell .modal.modal-side::backdrop {
   background: rgb(20 28 42 / 0.08);
-  backdrop-filter: none;
 }
 .modal-side .modal-heading {
   margin-bottom: 12px;

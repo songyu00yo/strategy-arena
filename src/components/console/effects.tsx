@@ -76,7 +76,8 @@ export class Sparks {
   fit(width: number, height: number) {
     this.width = width;
     this.height = height;
-    const ratio = Math.min(2, typeof devicePixelRatio === "number" ? devicePixelRatio : 1);
+    // Ink at 1x is soft enough; a full-screen 2x layer is what costs frames.
+    const ratio = 1;
     if (
       this.canvas.width === Math.round(width * ratio) &&
       this.canvas.height === Math.round(height * ratio)
@@ -305,14 +306,12 @@ export function Decode({
     if (!el || !active || reducedMotion() || !text) return;
     // Ink settles into the paper: out of focus, then sharp. The text itself never changes.
     const scope = createMotionScope(origin);
-    scope.animate(
-      el,
-      [
-        { opacity: 0, filter: "blur(5px)" },
-        { opacity: 1, filter: "blur(0px)" },
-      ],
-      { duration: 760, delay, easing: "cubic-bezier(.19,1,.22,1)", fill: "backwards" },
-    );
+    scope.animate(el, [{ opacity: 0 }, { opacity: 1 }], {
+      duration: 760,
+      delay,
+      easing: "cubic-bezier(.19,1,.22,1)",
+      fill: "backwards",
+    });
     return () => scope.dispose();
   }, [text, active, delay, origin, reducePreference]);
   return <span ref={ref}>{text}</span>;

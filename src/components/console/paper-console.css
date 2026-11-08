@@ -46,14 +46,6 @@
   background-image: var(--grain);
   color: var(--ink);
 }
-/* No glass and no glow anywhere on the paper. */
-.console-shell *,
-.console-shell *::before,
-.console-shell *::after {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  text-shadow: none !important;
-}
 .console-shell ::selection {
   background: rgb(200 51 31 / 0.2);
   color: var(--ink);
@@ -67,10 +59,8 @@
 .console-shell .c-track {
   position: relative;
   z-index: 2;
-  /* The same sheet as the page: the record wall must never print through the titles. */
+  /* Solid paper: the record wall must never print through the titles. */
   background-color: var(--paper-deep);
-  background-image: var(--grain);
-  background-attachment: fixed;
 }
 .console-shell .c-hud {
   gap: 6px;
@@ -192,8 +182,7 @@
   border-radius: 2px;
   background: rgb(251 248 241 / 0.6);
   box-shadow: none;
-  filter: grayscale(0.4);
-  opacity: 0.55;
+  opacity: 0.5;
 }
 .console-shell .c-cw .tb {
   border-bottom: 1px solid rgb(21 19 15 / 0.12);
@@ -209,7 +198,6 @@
   border-color: rgb(21 19 15 / 0.4);
   background: rgb(251 248 241 / 0.92);
   box-shadow: 3px 3px 0 rgb(21 19 15 / 0.25);
-  filter: none;
 }
 .console-shell .c-cw.far {
   box-shadow: none;
@@ -222,11 +210,10 @@
   border-radius: 4px;
   background: var(--paper);
   box-shadow: 4px 4px 0 var(--ink);
+  /* Only compositor properties glide; the shadow changes with the lift, not frame by frame. */
   transition:
-    box-shadow 0.8s var(--reveal-ease),
     translate 0.8s var(--reveal-ease),
-    opacity 0.8s var(--reveal-ease),
-    filter 0.8s var(--reveal-ease);
+    opacity 0.8s var(--reveal-ease);
 }
 /* The route's ink is a short band at the top-left, like a printed tab. */
 .console-shell .c-board::before {
@@ -244,8 +231,7 @@
   display: none;
 }
 .console-shell .c-board.dim {
-  opacity: 0.5;
-  filter: grayscale(0.6) blur(0.6px);
+  opacity: 0.55;
 }
 .console-shell .c-board.speaking,
 .console-shell .c-board.pick {
@@ -267,7 +253,6 @@
   box-shadow: none;
   font-family: var(--serif-cn);
   letter-spacing: 0.12em;
-  mix-blend-mode: multiply;
 }
 .console-shell .c-tear {
   background: var(--ink);
@@ -325,7 +310,7 @@
 .console-shell .c-drafts:empty {
   display: none;
 }
-.console-shell .c-rail:has(.agent-drafts) .c-trace {
+.console-shell .c-drafts:not(:empty) ~ .c-trace {
   flex: 0 1 auto;
   max-height: 30%;
 }
@@ -375,31 +360,6 @@
 .console-shell .c-result h2 {
   font-family: var(--serif-cn);
   letter-spacing: 0.02em;
-}
-
-/* ---------- Opening, chapters and the verdict film: printed title cards ---------- */
-.console-shell .c-intro,
-.console-shell .c-film {
-  background-color: var(--paper);
-  background-image: var(--grain);
-  color: var(--ink);
-}
-.console-shell .c-intro .q,
-.console-shell .c-film .head {
-  font-family: var(--serif-cn);
-  font-weight: 900;
-  letter-spacing: 0.03em;
-}
-.console-shell .c-film small {
-  color: var(--vermilion);
-  font-family: var(--serif-cn);
-  letter-spacing: 0.2em;
-}
-.console-shell .c-chapter b {
-  font-family: var(--serif-cn);
-  font-weight: 900;
-  color: var(--ink);
-  letter-spacing: 0.12em;
 }
 
 /* ---------- Press feedback ---------- */
@@ -575,320 +535,151 @@
 @keyframes paper-ink-in {
   from {
     opacity: 0;
-    filter: blur(4px);
-    transform: translateY(6px);
-  }
-}
-
-/* =====================================================================
-   Film titles. One curve family, nothing springs past rest.
-   ===================================================================== */
-/* Letters come into focus like wet ink settling, not flipping cards. */
-@keyframes c-char {
-  from {
-    opacity: 0;
-    filter: blur(7px);
-    transform: translateY(0.18em) scale(1.06);
-  }
-}
-.console-shell .c-char {
-  animation-duration: 0.95s;
-  animation-timing-function: var(--reveal-ease);
-}
-
-/* ---------- Opening titles ---------- */
-.console-shell .c-intro {
-  z-index: 60;
-  padding: 0;
-  align-items: stretch;
-  justify-content: center;
-  perspective: 1200px;
-  overflow: hidden;
-}
-/* A vignette of darker paper at the edges: the frame of the shot. */
-.console-shell .c-intro::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse 80% 70% at 50% 46%, transparent 55%, rgb(60 48 30 / 0.12));
-  pointer-events: none;
-}
-.ci-camera {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  padding: 0 clamp(20px, 10vw, 180px);
-  will-change: transform, opacity;
-}
-/* A slow push-in for the whole time the titles hold. */
-.ci-card {
-  width: min(100%, 1040px);
-  animation: ci-dolly 4.6s cubic-bezier(0.2, 0.6, 0.25, 1) both;
-}
-.ci-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 0 0 26px !important;
-  color: var(--c-t2);
-  font-family: var(--serif-cn);
-  font-size: 13px;
-  letter-spacing: 0.42em;
-  animation: ci-line 1.2s var(--reveal-ease) 0.1s both;
-}
-.ci-eyebrow i {
-  width: 34px;
-  height: 1px;
-  background: currentColor;
-}
-.console-shell .c-intro .q {
-  max-width: 21em;
-  margin: 0;
-  color: var(--ink);
-  font-family: var(--serif-cn);
-  font-size: clamp(30px, 4.2vw, 64px);
-  font-weight: 900;
-  line-height: 1.24;
-  letter-spacing: 0.04em;
-}
-.ci-rule {
-  display: block;
-  width: 64px;
-  height: 3px;
-  margin: 30px 0 26px;
-  background: var(--vermilion);
-  transform-origin: left center;
-  animation: ci-rule 1.3s var(--reveal-ease) both;
-}
-.ci-credits {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 26px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  color: var(--c-t2);
-  font-family: var(--serif-cn);
-  font-size: clamp(13px, 1.1vw, 16px);
-  letter-spacing: 0.08em;
-}
-.ci-credits li {
-  animation: ci-line 1.1s var(--reveal-ease) both;
-}
-.ci-credits li + li::before {
-  content: "";
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  margin: 0 22px 3px -15px;
-  border-radius: 50%;
-  background: rgb(21 19 15 / 0.35);
-}
-.ci-skip {
-  position: absolute;
-  right: 28px;
-  bottom: 22px;
-  margin: 0;
-  color: var(--c-t3);
-  font-size: 11.5px;
-  letter-spacing: 0.2em;
-  animation: ci-line 1s var(--reveal-ease) both;
-}
-@keyframes ci-dolly {
-  from {
-    transform: scale(0.965);
-  }
-  to {
-    transform: scale(1.012);
-  }
-}
-@keyframes ci-rule {
-  from {
-    transform: scaleX(0);
-  }
-}
-@keyframes ci-line {
-  from {
-    opacity: 0;
-    filter: blur(5px);
     transform: translateY(8px);
   }
 }
 
-/* While the titles are up, the workbench waits under the paper; as they leave, its bands are
-   printed one after another from the top. */
-.console-shell .c-hud > :is(.c-slate, .c-conditions, .c-agent, .c-notices, .c-track, .c-bottom) {
-  transition:
-    opacity 1s var(--reveal-ease),
-    transform 1.2s var(--reveal-ease),
-    filter 1s var(--reveal-ease);
+/* =====================================================================
+   Motion on the page itself. Nothing covers the whole screen; only transform
+   and opacity move, so the compositor does the work.
+   ===================================================================== */
+@keyframes c-char {
+  from {
+    opacity: 0;
+    transform: translateY(0.22em);
+  }
 }
-.console-shell .c-hud > .c-conditions {
-  transition-delay: 0.08s;
-}
-.console-shell .c-hud > .c-agent {
-  transition-delay: 0.16s;
-}
-.console-shell .c-hud > .c-notices,
-.console-shell .c-hud > .c-track {
-  transition-delay: 0.24s;
-}
-.console-shell .c-hud > .c-bottom {
-  transition-delay: 0.5s;
-}
-.console-shell
-  .c-root:has(> .c-intro:not([data-leaving]))
-  .c-hud
-  > :is(.c-slate, .c-conditions, .c-agent, .c-notices, .c-track, .c-bottom) {
-  opacity: 0;
-  filter: blur(4px);
-  transform: translateY(-10px);
-  transition: none;
-}
-.console-shell .c-root:has(> .c-intro:not([data-leaving])) .c-hud > .c-bottom {
-  transform: translateY(18px);
+.console-shell .c-char {
+  animation-duration: 0.8s;
+  animation-timing-function: var(--reveal-ease);
 }
 
-/* ---------- Chapter cards: the act and its word, printed over a paper veil ---------- */
-.console-shell .c-chapter {
-  flex-direction: column;
-  gap: 14px;
-  color: var(--ink);
-  mix-blend-mode: normal;
+/* ---------- Opening: the sheet is printed band by band, top to bottom ---------- */
+.console-shell
+  .c-root.opening
+  .c-hud
+  > :is(.c-slate, .c-conditions, .c-agent, .c-notices, .c-track) {
+  animation: band-in 1.1s var(--reveal-ease) both;
 }
-.console-shell .c-chapter::before {
+.console-shell .c-root.opening .c-hud > .c-conditions {
+  animation-delay: 0.08s;
+}
+.console-shell .c-root.opening .c-hud > .c-agent {
+  animation-delay: 0.16s;
+}
+.console-shell .c-root.opening .c-hud > :is(.c-notices, .c-track) {
+  animation-delay: 0.24s;
+}
+.console-shell .c-root.opening .c-hud > .c-bottom {
+  animation: band-up 1.2s var(--reveal-ease) 0.55s both;
+}
+.console-shell .c-root.opening .c-rail {
+  animation: band-side 1.2s var(--reveal-ease) 0.4s both;
+}
+/* The title is underlined once by a vermilion rule that then lifts away. */
+.console-shell .c-slate h1 {
+  position: relative;
+}
+.console-shell .c-root.opening .c-slate h1::after {
   content: "";
   position: absolute;
-  z-index: -1;
-  inset: 0;
-  background-color: rgb(239 234 224 / 0.9);
-  background-image: var(--grain);
-  animation: cc-veil 1.25s cubic-bezier(0.65, 0, 0.15, 1) both;
-}
-.console-shell .c-chapter b {
-  font-size: min(19vh, 15vw);
-  letter-spacing: 0.14em;
-}
-.cc-act {
-  color: var(--vermilion);
-  font-family: var(--serif-cn);
-  font-size: clamp(13px, 1.2vw, 17px);
-  font-weight: 700;
-  letter-spacing: 0.5em;
-  animation: cc-act 1.25s var(--reveal-ease) both;
-}
-.cc-rule {
-  width: 72px;
-  height: 3px;
+  left: 0;
+  bottom: -3px;
+  width: 42px;
+  height: 2px;
   background: var(--vermilion);
-  transform-origin: center;
-  animation: cc-rule 1.25s var(--reveal-ease) both;
+  transform-origin: left center;
+  animation: rule-draw 1.6s var(--reveal-ease) 0.3s both;
 }
-@keyframes cc-veil {
-  0% {
+@keyframes band-in {
+  from {
     opacity: 0;
-  }
-  18%,
-  44% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
+    transform: translateY(-12px);
   }
 }
-@keyframes cc-act {
-  0% {
+@keyframes band-up {
+  from {
     opacity: 0;
-    filter: blur(4px);
-    transform: translateY(10px);
-  }
-  22%,
-  40% {
-    opacity: 1;
-    filter: blur(0);
-    transform: none;
-  }
-  70%,
-  100% {
-    opacity: 0;
-    transform: translateY(-14px);
+    transform: translateY(18px);
   }
 }
-@keyframes cc-rule {
+@keyframes band-side {
+  from {
+    opacity: 0;
+    transform: translateX(22px);
+  }
+}
+@keyframes rule-draw {
   0% {
     transform: scaleX(0);
+    opacity: 1;
   }
-  30%,
-  42% {
+  60% {
     transform: scaleX(1);
     opacity: 1;
   }
-  70%,
   100% {
-    transform: scaleX(0.2);
+    transform: scaleX(1);
     opacity: 0;
   }
 }
 
-/* ---------- Verdict film: an ink plate and the decision in Song ---------- */
-.console-shell .c-film {
-  background-color: var(--ink);
-  background-image: none;
-  color: var(--paper);
+/* ---------- A new stage arrives on the timeline, not over the page ---------- */
+.console-shell .c-time .seg {
+  position: relative;
 }
-.console-shell .c-film small {
+.console-shell .c-time .seg.here > span {
   display: inline-block;
-  align-self: flex-start;
-  padding: 2px 14px;
-  border: 3px double var(--vermilion);
-  border-radius: 4px;
-  color: var(--vermilion);
-  background: rgb(251 248 241 / 0.04);
-  transform: rotate(-3deg);
-  animation: verdict-stamp 0.9s cubic-bezier(0.5, 0, 0.15, 1) 0.45s both;
+  animation: stage-arrive 0.9s var(--reveal-ease) both;
 }
-.console-shell .c-film .head {
-  color: var(--paper);
+.console-shell .c-time .seg.here::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 2px;
+  background: var(--vermilion);
+  transform-origin: left center;
+  animation: stage-rule 1.2s var(--reveal-ease) both;
 }
-.console-shell .c-film ul {
-  color: rgb(251 248 241 / 0.7);
-  font-family: var(--serif-cn);
+@keyframes stage-arrive {
+  from {
+    opacity: 0.2;
+    transform: translateY(6px);
+  }
 }
-@keyframes verdict-stamp {
-  0% {
-    opacity: 0;
-    transform: rotate(-9deg) scale(2.4);
-    filter: blur(6px);
+@keyframes stage-rule {
+  from {
+    transform: scaleX(0);
   }
-  62% {
-    opacity: 1;
-    transform: rotate(-3deg) scale(1);
-    filter: blur(0);
-  }
-  100% {
-    opacity: 1;
-    transform: rotate(-3deg) scale(1);
-  }
+}
+
+/* ---------- Verdict: a seal pressed onto the chosen board ---------- */
+.c-seal {
+  position: fixed;
+  z-index: 30;
+  padding: 4px 18px;
+  border: 4px double var(--vermilion, #c8331f);
+  border-radius: 6px;
+  background: rgb(251 248 241 / 0.88);
+  color: var(--vermilion, #c8331f);
+  font-family: "Songti SC", "STSong", "Noto Serif SC", serif;
+  font-size: clamp(22px, 2.2vw, 36px);
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform, opacity;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .console-shell .c-intro *,
-  .console-shell .c-chapter *,
-  .console-shell .c-chapter::before,
-  .console-shell .c-film * {
+  .console-shell .c-root.opening *,
+  .console-shell .c-time .seg.here > span,
+  .console-shell .c-time .seg.here::after {
     animation: none !important;
   }
-}
-
-/* The header steps aside while the titles run. */
-.console-shell .site-header {
-  transition: opacity 0.9s var(--reveal-ease);
-}
-.console-shell:has(.c-intro:not([data-leaving])) .site-header {
-  opacity: 0;
-  pointer-events: none;
 }
 
 /* ---------- Result plate details ---------- */

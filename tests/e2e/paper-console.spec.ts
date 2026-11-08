@@ -142,3 +142,42 @@ test("agent progress stays readable on a phone viewport", async ({ page }) => {
   await page.waitForTimeout(2600);
   await page.screenshot({ path: "test-results/paper-console-390.png", fullPage: true });
 });
+
+test("the opening and stage changes never cover the whole page", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const snapshot = fixtureSnapshot();
+  advanceFixture(snapshot);
+  snapshot.versions[0].status = "running";
+  await page.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/health")
+      return route.fulfill({ json: { status: "ok", model: snapshot.model, accessGranted: true } });
+    if (url.pathname.endsWith("/events"))
+      return route.fulfill({ contentType: "text/event-stream", body: "" });
+    if (url.pathname.endsWith("/advance")) return new Promise<void>(() => {});
+    if (url.pathname === `/api/arenas/${snapshot.id}`) return route.fulfill({ json: snapshot });
+    return route.fulfill({ status: 404, json: { error: "explicit fixture boundary" } });
+  });
+  await page.goto(`/?arena=${snapshot.id}`);
+  await expect(page.locator(".c-board").first()).toBeVisible();
+  for (let i = 0; i < 20; i++) {
+    const covering = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("body *")]
+        .filter((node) => {
+          const style = getComputedStyle(node);
+          if (
+            style.position !== "fixed" ||
+            (style.pointerEvents === "none" && Number(style.opacity) === 0)
+          )
+            return false;
+          if (node.matches("canvas, .c-wall, .c-wall *, dialog, .c-fx")) return false;
+          if (Number(style.opacity) < 0.05 || style.visibility === "hidden") return false;
+          const box = node.getBoundingClientRect();
+          return box.width * box.height > innerWidth * innerHeight * 0.6;
+        })
+        .map((node) => node.className),
+    );
+    expect(covering, "full-screen layer during playback").toEqual([]);
+    await page.waitForTimeout(200);
+  }
+});

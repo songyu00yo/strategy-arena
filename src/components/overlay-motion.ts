@@ -199,8 +199,8 @@ export function useOverlayMotion<T extends HTMLElement>(
           animations.current.push(
             section.animate(
               [
-                { opacity: 0, transform: "translateY(10px)", filter: "blur(3px)" },
-                { opacity: 1, transform: "none", filter: "blur(0px)" },
+                { opacity: 0, transform: "translateY(10px)" },
+                { opacity: 1, transform: "none" },
               ],
               {
                 duration: 720,

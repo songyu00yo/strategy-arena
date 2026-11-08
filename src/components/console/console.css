@@ -589,7 +589,6 @@
 }
 .c-board.dim {
   opacity: 0.42;
-  filter: blur(1.6px);
 }
 .c-board {
   max-height: 55%;
@@ -604,7 +603,6 @@
   border: 1px solid var(--c-line2);
   border-top: 3px solid var(--c-line2);
   background: var(--c-glass);
-  backdrop-filter: blur(9px);
   box-shadow: 0 10px 34px rgb(11 13 16 / 0.12);
   transition:
     border-color 0.2s,
@@ -794,7 +792,6 @@
   flex-direction: column;
   border: 1px solid var(--c-t0);
   background: rgb(251 248 241 / 0.86);
-  backdrop-filter: blur(16px);
   box-shadow: 0 24px 70px rgb(11 13 16 / 0.32);
 }
 .c-float-card .tb {
@@ -906,7 +903,6 @@
   padding: 3px 8px;
   border: 1px solid var(--c-line2);
   background: var(--c-glass);
-  backdrop-filter: blur(9px);
 }
 .c-root .c-trace h2,
 .c-root .c-list h2 {
@@ -987,13 +983,11 @@
   overflow-wrap: anywhere;
   border: 1px solid var(--c-line2);
   background: var(--c-glass);
-  backdrop-filter: blur(9px);
   scrollbar-width: none;
 }
 .c-verdict:not(.ready) {
   border-style: dashed;
   background: none;
-  backdrop-filter: none;
 }
 .c-verdict.ready {
   border-color: var(--c-t0);
@@ -1034,7 +1028,6 @@
   padding: 4px 8px;
   border: 1px solid var(--c-line2);
   background: var(--c-glass);
-  backdrop-filter: blur(9px);
 }
 .c-list .rows {
   flex: 1;
@@ -1361,7 +1354,6 @@
 }
 /* Replay on the daylight page: each route lights its own board and threads. */
 .c-root.theater .c-board {
-  backdrop-filter: none;
   background: rgb(251 248 241 / 0.94);
 }
 .c-root.theater .c-board.speaking,
@@ -1375,12 +1367,10 @@
   opacity: 0.74;
 }
 .c-root.theater .c-thread {
-  filter: drop-shadow(0 0 3px rgb(var(--route) / 0.6));
 }
 .c-root.theater .c-thread.on {
   stroke-width: 2.4;
   stroke: rgb(var(--route));
-  filter: drop-shadow(0 0 3px rgb(var(--route) / 0.7));
 }
 .c-root.theater .c-time .ticks .cur {
   box-shadow: 0 0 10px 1px rgb(11 13 16 / 0.3);
@@ -1630,7 +1620,6 @@
 }
 .c-root .changed.fresh {
   font-weight: 700;
-  text-shadow: 0 0 14px rgb(19 112 66 / 0.55);
 }
 .c-hud > * {
   animation: c-drop 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards;
@@ -2066,7 +2055,6 @@
   --depth: 0px;
   --glass: 0.8;
   background: rgb(255 255 255 / var(--glass));
-  backdrop-filter: blur(7px);
   transition:
     transform 0.6s cubic-bezier(0.2, 0.9, 0.3, 1),
     background 0.5s,
@@ -2086,7 +2074,6 @@
 }
 .c-root.theater .c-board {
   background: rgb(255 255 255 / var(--glass));
-  backdrop-filter: blur(7px);
 }
 .c-root .c-board.speaking,
 .c-root .c-board.target {
@@ -2129,7 +2116,6 @@
 .c-root .c-thread.on,
 .c-root.theater .c-thread.on {
   stroke-width: 2.4;
-  filter: drop-shadow(0 0 3px rgb(var(--route) / 0.65));
 }
 .c-root .c-thread.on:not(.is-supported, .is-refuted, .is-unresolved) {
   stroke: rgb(var(--route));
@@ -2173,7 +2159,6 @@
   height: min(136px, calc(100% - 8px));
   min-height: 0;
   background: rgb(251 248 241 / 0.84);
-  backdrop-filter: blur(4px);
   transform: translateX(calc(var(--d) * -1 * var(--s) - var(--g) * 9px - 14px * min(var(--d), 1)))
     translateZ(calc(var(--d) * -30px)) rotateY(calc(min(var(--d), 1) * 20deg));
   opacity: calc(1 - var(--d) * 0.022);
@@ -2207,7 +2192,6 @@
   min-height: min(136px, calc(100% - 8px));
   max-height: calc(100% - 8px);
   background: rgb(251 248 241 / 0.97);
-  backdrop-filter: none;
 }
 .c-float-card .body {
   overflow-y: auto;
@@ -2220,11 +2204,9 @@
 .c-root .c-verdict,
 .c-root .c-list {
   background: rgb(251 248 241 / 0.9);
-  backdrop-filter: blur(8px);
 }
 .c-root .c-verdict:not(.ready) {
   background: rgb(251 248 241 / 0.72);
-  backdrop-filter: blur(8px);
 }
 .c-trace {
   background: rgb(251 248 241 / 0.82);
@@ -2639,7 +2621,6 @@
 .c-root .c-thread.lit {
   stroke-width: 2.4;
   stroke: rgb(var(--route));
-  filter: drop-shadow(0 0 4px rgb(var(--route) / 0.7));
 }
 .c-root .c-claim.lit {
   background: rgb(var(--route) / 0.14);
@@ -2732,7 +2713,6 @@
 }
 /* ------ Performance: glass is faked with opacity. Live blur over moving layers is what dropped frames. ------ */
 .console-shell * {
-  backdrop-filter: none !important;
 }
 .c-thread,
 .c-root .c-thread,

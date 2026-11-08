@@ -5,12 +5,22 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  FileImage,
+  FileSpreadsheet,
   FileText,
   LoaderCircle,
   Paperclip,
   Plus,
+  Upload,
   X,
 } from "lucide-react";
+
+const fileIcon = (name: string) => {
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["png", "jpg", "jpeg", "webp", "gif", "heic"].includes(extension)) return FileImage;
+  if (["xls", "xlsx", "csv", "tsv", "ods"].includes(extension)) return FileSpreadsheet;
+  return FileText;
+};
 import {
   ChallengeSchema,
   type ArenaSnapshot,
@@ -917,6 +927,9 @@ export function GuidedIntake({
         className="gi-materials-picker"
       >
         <div>
+          <span className="gi-drop-icon" aria-hidden="true">
+            <Upload size={18} />
+          </span>
           <p id={`${id}-materials-limits`}>
             支持 PDF、Word、表格、文本和图片。最多 5 个文件，单个不超过 10 MiB，总计不超过 30 MiB。
           </p>
@@ -934,9 +947,14 @@ export function GuidedIntake({
       <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
         <ul>
           {draft?.attachments.map((file) => (
-            <li key={file.id}>
+            <li key={file.id} data-state={file.state}>
               <div className="gi-file-heading">
-                <FileText size={17} />
+                <span className="gi-file-icon" aria-hidden="true">
+                  {(() => {
+                    const Icon = fileIcon(file.name);
+                    return <Icon size={16} />;
+                  })()}
+                </span>
                 <strong>{file.name}</strong>
                 <span>{(file.size / MIB).toFixed(1)} MiB</span>
                 <button

@@ -340,6 +340,9 @@ export function ModelSelector({
                 onClick={() => choose(model.id)}
                 onFocus={() => setActiveIndex(index)}
               >
+                <span className={styles.glyph} data-provider={model.provider} aria-hidden="true">
+                  {model.label.split(" ").pop()?.charAt(0)}
+                </span>
                 <span>
                   <strong>{model.label}</strong>
                   <small id={`${id}-${model.id}-note`}>
@@ -364,6 +367,9 @@ export function ModelSelector({
               onClick={() => choose("auto")}
               onFocus={() => setActiveIndex(MODEL_CATALOG.length)}
             >
+              <span className={styles.glyph} data-provider="auto" aria-hidden="true">
+                自
+              </span>
               <span>
                 <strong>自动选择</strong>
                 <small>保留当前版本的选择规则</small>

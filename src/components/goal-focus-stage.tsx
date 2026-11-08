@@ -44,6 +44,8 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     const preference = matchMedia("(prefers-reduced-motion: reduce)");
     const compact = matchMedia("(max-width: 650px)");
     const scope = createMotionScope();
+    // The entrance never freezes half-faded: a paused story clock must not hide the input.
+    const introScope = createMotionScope("interaction");
     let field: Field | null = null;
     let visible = true;
     let windowActive = document.hasFocus();
@@ -198,7 +200,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       )
         return;
       introStarted = true;
-      intro = scope.animate(
+      intro = introScope.animate(
         content,
         [
           {
@@ -289,7 +291,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       if (visible) {
         enter();
         loop.wake();
-      } else if (intro?.playState === "running") intro.pause();
+      } else if (intro?.playState === "running") intro.finish();
       if (visible && windowActive && intro?.playState === "paused" && !motionPaused()) intro.play();
     });
     intersection.observe(host);
@@ -313,7 +315,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
           enter();
           if (intro?.playState === "paused") intro.play();
           loop.wake();
-        } else if (intro?.playState === "running") intro.pause();
+        } else if (intro?.playState === "running") intro.finish();
       }
     });
     const updateExpanded = () => {
@@ -372,7 +374,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     host.addEventListener("click", clicked, true);
     const windowBlur = () => {
       windowActive = false;
-      if (intro?.playState === "running") intro.pause();
+      if (intro?.playState === "running") intro.finish();
     };
     const windowFocus = () => {
       windowActive = true;
@@ -399,6 +401,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       unsubscribe();
       loop.dispose();
       scope.dispose();
+      introScope.dispose();
       preference.removeEventListener("change", preferenceChanged);
       compact.removeEventListener("change", viewportChanged);
       window.removeEventListener("blur", windowBlur);

@@ -201,3 +201,62 @@
 .option[aria-disabled="true"] {
   cursor: default;
 }
+
+/* Switching models: the new name rolls up into place with a light passing over it,
+   and the check mark springs in. Transform and opacity only. */
+.trigger {
+  position: relative;
+  overflow: hidden;
+}
+.label {
+  display: inline-block;
+  animation: label-in 0.62s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.label::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(64 119 245 / 0.16) 45%,
+    rgb(235 53 138 / 0.14) 55%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+  animation: label-sheen 0.9s 0.08s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  pointer-events: none;
+}
+@keyframes label-in {
+  from {
+    opacity: 0;
+    transform: translateY(105%);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes label-sheen {
+  to {
+    transform: translateX(100%);
+  }
+}
+.option.selected > svg {
+  animation: check-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.3) rotate(-30deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .label::after {
+    display: none;
+  }
+}

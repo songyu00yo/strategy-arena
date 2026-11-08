@@ -114,3 +114,179 @@
     font-size: 12px;
   }
 }
+
+/* ===== One sentence and the composer; the tools wait for words. ===== */
+.focus-home .gi-composer > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.focus-home .gi-goal {
+  padding-top: 30px;
+}
+.focus-home .gi-scenarios {
+  display: none;
+}
+.console-shell .h-form .access-input-row .primary-button {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The bar keeps its place so nothing jumps; only its contents arrive. */
+.focus-home .gi-composer-footer {
+  position: relative;
+  border-top-color: transparent;
+  background: transparent;
+}
+.focus-home .gi-composer-footer::before,
+.focus-home .gi-composer-footer::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  height: 1px;
+  pointer-events: none;
+}
+/* A hairline draws out from the centre... */
+.focus-home .gi-composer-footer::before {
+  right: 22px;
+  left: 22px;
+  background: #eceef2;
+  transform: scaleX(0);
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* ...and a short streak of the three route colours runs along it once. */
+.focus-home .gi-composer-footer::after {
+  left: 0;
+  width: 34%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(64 119 245 / 0.9),
+    rgb(235 53 138 / 0.85),
+    rgb(209 139 13 / 0.85),
+    transparent
+  );
+  opacity: 0;
+  transform: translateX(-100%);
+}
+.focus-home .gi-tools > *,
+.focus-home .guided-intake .gi-analyze {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(16px) scale(0.92);
+  transition:
+    opacity 0.28s ease,
+    transform 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    visibility 0s linear 0.4s;
+}
+.focus-home .gi-analyze svg {
+  opacity: 0;
+  transform: translateX(-10px);
+  transition:
+    opacity 0.2s,
+    transform 0.3s;
+}
+
+.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-composer-footer::before,
+.focus-home .guided-intake[data-expanded="true"] .gi-composer-footer::before {
+  transform: scaleX(1);
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-composer-footer::after,
+.focus-home .guided-intake[data-expanded="true"] .gi-composer-footer::after {
+  animation: home-streak 1.15s 0.12s cubic-bezier(0.25, 0.7, 0.2, 1) both;
+}
+.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) :is(.gi-tools > *, .gi-analyze),
+.focus-home .guided-intake[data-expanded="true"] :is(.gi-tools > *, .gi-analyze) {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity 0.5s ease,
+    transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1),
+    visibility 0s;
+}
+.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-tools > :nth-child(1),
+.focus-home .guided-intake[data-expanded="true"] .gi-tools > :nth-child(1) {
+  transition-delay: 0.05s;
+}
+.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-tools > :nth-child(2),
+.focus-home .guided-intake[data-expanded="true"] .gi-tools > :nth-child(2) {
+  transition-delay: 0.12s;
+}
+.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-analyze,
+.focus-home .guided-intake[data-expanded="true"] .gi-analyze {
+  transition-delay: 0.2s;
+}
+.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-analyze svg,
+.focus-home .guided-intake[data-expanded="true"] .gi-analyze svg {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.3s 0.45s,
+    transform 0.6s 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes home-streak {
+  0% {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(300%);
+  }
+}
+
+/* Drag a file over the composer: a veil says it will be taken. */
+.gi-drop-veil {
+  position: absolute;
+  inset: 6px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1.5px dashed rgb(64 119 245 / 0.55);
+  border-radius: 10px;
+  background: rgb(246 249 255 / 0.94);
+  color: #3157c9;
+  font-size: 15px;
+  font-weight: 600;
+  opacity: 0;
+  transform: scale(0.985);
+  pointer-events: none;
+  transition:
+    opacity 0.2s ease,
+    transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.gi-composer[data-dropping] .gi-drop-veil {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .focus-home .gi-tools > *,
+  .focus-home .guided-intake .gi-analyze,
+  .focus-home .gi-analyze svg {
+    transform: none !important;
+    transition-delay: 0s !important;
+  }
+  .focus-home .gi-composer-footer::after {
+    display: none;
+  }
+}
+/* A closed sources panel must not leave a strip under the card. */
+.focus-home .gi-sources {
+  margin-top: 0;
+}
+.focus-home .gi-sources > div {
+  padding-top: 10px;
+}

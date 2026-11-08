@@ -300,7 +300,7 @@ export default function Page() {
     parentVersion && selected ? challengeChanges(parentVersion.challenge, selected.challenge) : [];
   return (
     <div className={`site-shell console-shell ${arena.snapshot ? "" : "home focus-home"}`}>
-      <ClickFx />
+      {arena.snapshot && <ClickFx />}
       <a href="#main" className="skip-link">
         跳转到主要内容
       </a>
@@ -387,9 +387,7 @@ export default function Page() {
             <div className="goal-landing">
               <section className="goal-landing-center" aria-label="开始一次方案推演">
                 <div className="home-intro">
-                  <p className="eyebrow">方案擂台 · 大学生的重大选择</p>
-                  <h1>重要的选择，想清楚再出发。</h1>
-                  <p>考研还是就业、如何选 offer？比较不同路线，找到适合你的第一步。</p>
+                  <h1>你想解决什么问题？</h1>
                 </div>
                 <GoalFocusStage>
                   <div className="h-form">

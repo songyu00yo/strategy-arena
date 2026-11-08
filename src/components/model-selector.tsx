@@ -308,7 +308,10 @@ export function ModelSelector({
           }
         }}
       >
-        <span>{label}</span>
+        {/* Keyed by the model: each switch remounts the label so it rolls in afresh. */}
+        <span key={label} className={styles.label}>
+          {label}
+        </span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
       <div ref={panel} popover="manual" className={styles.popover} inert={!expanded}>

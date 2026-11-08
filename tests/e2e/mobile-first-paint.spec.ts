@@ -224,7 +224,8 @@ for (const viewport of [
       expect(samples[2].elapsed).toBeGreaterThanOrEqual(1900);
       for (const sample of samples) {
         expect(sample.inputVisible).toBe(true);
-        expect(sample.buttonVisible).toBe(true);
+        // The primary action waits for text on the home page.
+        expect(sample.buttonVisible).toBe(false);
         expect(sample.inputDisabled).toBe(true);
         expect(sample.buttonDisabled).toBe(true);
         expect(sample.inputTop).toBeGreaterThanOrEqual(0);

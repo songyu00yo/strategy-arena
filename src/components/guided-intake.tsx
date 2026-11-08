@@ -513,6 +513,20 @@ export function GuidedIntake({
     modelProviders?.find((option) => option.provider === routing.provider);
   const unavailable = !provider?.configured;
   const uncertain = draft?.status === "uncertain";
+  const [dropping, setDropping] = useState(false);
+  const dragDepth = useRef(0);
+  // A file dropped beside the composer must not make the browser leave the page.
+  useEffect(() => {
+    const keep = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+    };
+    window.addEventListener("dragover", keep);
+    window.addEventListener("drop", keep);
+    return () => {
+      window.removeEventListener("dragover", keep);
+      window.removeEventListener("drop", keep);
+    };
+  }, []);
   const analyzing = analysisPending || draft?.status === "analyzing";
   const reading = draft?.attachments.some((file) => file.state === "reading") ?? false;
   const blocked =
@@ -728,11 +742,40 @@ export function GuidedIntake({
     >
       <form
         className="gi-composer"
+        data-dropping={dropping || undefined}
         onSubmit={(event) => {
           event.preventDefault();
           analyze();
         }}
+        onDragEnter={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          dragDepth.current += 1;
+          if (!blocked && !uncertain) setDropping(true);
+        }}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = blocked || uncertain ? "none" : "copy";
+        }}
+        onDragLeave={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (!dragDepth.current) setDropping(false);
+        }}
+        onDrop={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          dragDepth.current = 0;
+          setDropping(false);
+          const files = [...event.dataTransfer.files];
+          if (files.length && !blocked && !uncertain) upload(files);
+        }}
       >
+        <div className="gi-drop-veil" aria-hidden="true">
+          <Paperclip size={22} />
+          <span>松开即可添加材料</span>
+        </div>
         <label htmlFor={`${id}-goal`}>你想解决什么问题？</label>
         <textarea
           ref={goalInput}
@@ -743,7 +786,13 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="说说你的选择、顾虑或其他想解决的问题。"
+          placeholder="说说你的选择和顾虑，也可以把文件拖进来或直接粘贴。"
+          onPaste={(event) => {
+            const files = [...event.clipboardData.files];
+            if (!files.length) return;
+            event.preventDefault();
+            if (!blocked && !uncertain) upload(files);
+          }}
           onChange={(event) => {
             setGoal(event.target.value);
             goalRef.current = event.target.value;

@@ -138,12 +138,38 @@ for (const viewport of [
 test("agent progress stays readable on a phone viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await serve(page, runningSnapshot(), LONG_DRAFT);
-  await expect(page.locator(".agent-progress")).toBeVisible();
   await page.waitForTimeout(2600);
+  for (const panelSelector of [".agent-progress", ".agent-drafts"]) {
+    const panel = page.locator(panelSelector);
+    await expect(panel).toBeVisible();
+    const panelBox = (await panel.boundingBox())!;
+    for (const selector of [".c-stage3", ".c-track", ".c-metrics", ".c-bottom"]) {
+      const other = page.locator(selector).first();
+      await expect(other).toBeVisible();
+      const otherBox = (await other.boundingBox())!;
+      expect(overlaps(panelBox, otherBox), `${selector} overlaps ${panelSelector}`).toBe(false);
+    }
+  }
+  // Hit-test real rendered panels and content after bringing each into the viewport.
+  for (const selector of [".agent-progress", ".agent-draft.live", ".c-metrics", ".c-board"]) {
+    const target = page.locator(selector).first();
+    await target.scrollIntoViewIfNeeded();
+    await expect(target).toBeInViewport();
+    const ownsVisibleCentre = await target.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const left = Math.max(0, box.left);
+      const right = Math.min(innerWidth, box.right);
+      const top = Math.max(0, box.top);
+      const bottom = Math.min(innerHeight, box.bottom);
+      const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+      return !!hit && element.contains(hit);
+    });
+    expect(ownsVisibleCentre, `${selector} is covered at its visible centre`).toBe(true);
+  }
   await page.screenshot({ path: "test-results/paper-console-390.png", fullPage: true });
 });
 
-test("the opening and stage changes never cover the whole page", async ({ page }) => {
+test("the opening never covers the whole page", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const snapshot = fixtureSnapshot();
   advanceFixture(snapshot);

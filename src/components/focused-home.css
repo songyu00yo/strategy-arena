@@ -100,6 +100,7 @@
 }
 .console-shell.focus-home .gi-composer > label {
   padding: 0 0 22px;
+  text-align: center;
   color: var(--w-muted);
   font-size: 19px;
   font-weight: 500;
@@ -114,6 +115,7 @@
   font-weight: 560;
   line-height: 1.3;
   letter-spacing: -0.04em;
+  text-align: center;
   caret-color: var(--w-ink);
   resize: none;
   scrollbar-width: none;
@@ -135,6 +137,8 @@
   padding: 0;
   border: 0;
   border-radius: 0;
+  justify-content: center;
+  gap: 10px;
   background: transparent;
   opacity: 0.3;
   transform: translateY(10px);
@@ -153,13 +157,13 @@
 }
 .console-shell.focus-home .gi-tool,
 .console-shell.focus-home .gi-tools button[aria-haspopup="listbox"] {
-  min-height: 38px;
-  padding: 0 12px;
+  min-height: 34px;
+  padding: 0 11px;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: var(--w-ink-2);
-  font-size: 13px;
+  font-size: 12.5px;
   box-shadow: none;
 }
 .console-shell.focus-home .gi-tool:not(:disabled):hover,
@@ -175,13 +179,13 @@
   border-left: 0;
 }
 .console-shell.focus-home .primary-button {
-  min-height: 46px;
-  padding: 0 24px 0 20px;
+  min-height: 40px;
+  padding: 0 20px 0 16px;
   border: 0;
   border-radius: 999px;
   background: var(--w-ink);
   color: #fff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   box-shadow: none;
 }
@@ -210,7 +214,9 @@
 .gi-scenarios {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   align-items: baseline;
+  text-align: center;
   gap: 4px 14px;
   padding: 30px 0 0;
   color: var(--w-faint, #a6aab0);
@@ -225,6 +231,7 @@
 .gi-scenarios > div {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 4px 14px;
   margin: 0;
 }
@@ -251,21 +258,28 @@
   cursor: default;
 }
 .gi-scenarios small {
+  flex-basis: 100%;
   font-size: 11.5px;
 }
 .goal-landing .h-examples-link {
   position: fixed;
   z-index: 20;
-  right: 0;
   bottom: 92px;
-  left: 0;
-  width: min(904px, calc(100vw - 48px));
-  margin: 0 auto;
-  padding: 0;
-  justify-content: flex-end;
+  left: 50%;
+  width: max-content;
+  margin: 0;
+  padding: 2px 4px;
+  transform: translateX(-50%);
   color: var(--w-faint, #a6aab0);
   font-size: 12px;
   background: none;
+}
+/* While the guided flow is open the page scrolls; the link returns to the flow below it. */
+.goal-landing:has(.guided-intake[data-expanded="true"]) .h-examples-link {
+  position: static;
+  display: flex;
+  margin: 0 auto 48px;
+  transform: none;
 }
 .goal-landing .h-examples-link:hover {
   color: var(--w-ink, #0b0d10);
@@ -375,12 +389,11 @@
     display: none;
   }
   .console-shell.focus-home .primary-button {
-    min-height: 44px;
-    padding: 0 18px 0 16px;
+    min-height: 40px;
+    padding: 0 16px 0 14px;
   }
   .goal-landing .h-examples-link {
     bottom: 82px;
-    width: calc(100vw - 32px);
   }
   .console-shell.focus-home .h-form .access-panel {
     flex-direction: column;

@@ -301,7 +301,7 @@ export default function Page() {
     parentVersion && selected ? challengeChanges(parentVersion.challenge, selected.challenge) : [];
   return (
     <div className={`site-shell console-shell ${arena.snapshot ? "" : "home focus-home"}`}>
-      <ClickFx />
+      {arena.snapshot && <ClickFx />}
       <a href="#main" className="skip-link">
         跳转到主要内容
       </a>

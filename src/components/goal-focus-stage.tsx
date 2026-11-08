@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import {
   createMotionLoop,
   createMotionScope,
@@ -420,6 +420,31 @@ export function GoalFocusStage({
       host.removeEventListener("input", typed);
       host.removeEventListener("click", clicked, true);
       ctx.clearRect(0, 0, surface.width, surface.height);
+    };
+  }, [quiet]);
+
+  // On a desktop pointer, a quiet stage hands the caret to the input as soon as it is editable,
+  // so the blinking cursor itself shows where to start. Touch screens keep the keyboard closed.
+  useEffect(() => {
+    const content = panel.current;
+    if (!quiet || !content || !matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+    const place = () => {
+      const input = content.querySelector("textarea");
+      const idle = !document.activeElement || document.activeElement === document.body;
+      if (!input || input.disabled || !idle) return;
+      input.focus({ preventScroll: true });
+      watch.disconnect();
+    };
+    const watch = new MutationObserver(place);
+    watch.observe(content, { subtree: true, attributes: true, attributeFilter: ["disabled"] });
+    place();
+    const stop = () => watch.disconnect();
+    document.addEventListener("pointerdown", stop, { once: true, capture: true });
+    document.addEventListener("keydown", stop, { once: true, capture: true });
+    return () => {
+      watch.disconnect();
+      document.removeEventListener("pointerdown", stop, { capture: true });
+      document.removeEventListener("keydown", stop, { capture: true });
     };
   }, [quiet]);
 

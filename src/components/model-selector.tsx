@@ -123,7 +123,7 @@ export function ModelSelector({
       if (!wasVisible) el.showPopover();
       el.inert = !open;
       const source = button.getBoundingClientRect();
-      const width = Math.min(348, innerWidth - 24);
+      const width = Math.min(compact ? 232 : 348, innerWidth - 24);
       const below = innerHeight - source.bottom - 9 - 12;
       const above = source.top - 9 - 12;
       const useBelow = below >= Math.min(380, el.scrollHeight) || below >= above;
@@ -141,18 +141,28 @@ export function ModelSelector({
       const start = currentBox ? transformFrom(currentBox) : transformFrom(source);
       if (reducedMotion()) return finish(open);
       const animation = el.animate(
-        open
-          ? [
-              { transform: start, opacity },
-              { transform: "translate(0,0) scale(1.012,1.015)", opacity: 1, offset: 0.74 },
-              { transform: "none", opacity: 1 },
-            ]
-          : [
-              { transform: start, opacity },
-              { transform: transformFrom(source), opacity: 0 },
-            ],
+        compact
+          ? open
+            ? [
+                { transform: "translateY(6px)", opacity: wasVisible ? opacity : 0 },
+                { transform: "none", opacity: 1 },
+              ]
+            : [
+                { transform: "none", opacity },
+                { transform: "translateY(4px)", opacity: 0 },
+              ]
+          : open
+            ? [
+                { transform: start, opacity },
+                { transform: "translate(0,0) scale(1.012,1.015)", opacity: 1, offset: 0.74 },
+                { transform: "none", opacity: 1 },
+              ]
+            : [
+                { transform: start, opacity },
+                { transform: transformFrom(source), opacity: 0 },
+              ],
         {
-          duration: open ? 560 : 420,
+          duration: compact ? (open ? 200 : 150) : open ? 560 : 420,
           easing: open ? "cubic-bezier(.16,1,.3,1)" : "cubic-bezier(.4,0,.2,1)",
           fill: "both",
         },
@@ -162,7 +172,7 @@ export function ModelSelector({
         if (flight.current === animation) finish(open);
       };
     },
-    [finish, stop],
+    [compact, finish, stop],
   );
 
   useLayoutEffect(() => {
@@ -340,9 +350,6 @@ export function ModelSelector({
                 onClick={() => choose(model.id)}
                 onFocus={() => setActiveIndex(index)}
               >
-                <span className={styles.glyph} data-provider={model.provider} aria-hidden="true">
-                  {model.label.split(" ").pop()?.charAt(0)}
-                </span>
                 <span>
                   <strong>{model.label}</strong>
                   <small id={`${id}-${model.id}-note`}>
@@ -367,9 +374,6 @@ export function ModelSelector({
               onClick={() => choose("auto")}
               onFocus={() => setActiveIndex(MODEL_CATALOG.length)}
             >
-              <span className={styles.glyph} data-provider="auto" aria-hidden="true">
-                自
-              </span>
               <span>
                 <strong>自动选择</strong>
                 <small>保留当前版本的选择规则</small>

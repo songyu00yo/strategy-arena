@@ -110,33 +110,10 @@
 .option > span {
   min-width: 0;
 }
-.option > span:not(.glyph) {
+.option > span {
   flex: 1;
 }
-.glyph {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  background: #0b0d10;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.18),
-    0 2px 6px rgb(11 13 16 / 0.18);
-}
-.glyph[data-provider="deepseek"] {
-  background: #3d6fe0;
-}
-.glyph[data-provider="auto"] {
-  background: #fff;
-  color: #0b0d10;
-  box-shadow: inset 0 0 0 1.5px #0b0d10;
-}
+
 .option strong {
   display: block;
   font-size: 13px;
@@ -236,4 +213,54 @@
 
 .option[aria-disabled="true"] {
   cursor: default;
+}
+
+/* Compact (home composer): a small menu of names only. */
+.compact .popover {
+  padding: 5px;
+  border-radius: 14px;
+}
+.compact .heading {
+  padding: 7px 9px 6px;
+  color: var(--w-muted, #70757d);
+  font-size: 11px;
+  font-weight: 500;
+}
+.compact .heading > span,
+.compact .option small {
+  display: none;
+}
+.compact .option {
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 9px;
+  gap: 8px;
+}
+.compact .option strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.compact .option.selected {
+  background: rgb(11 13 16 / 0.05);
+  box-shadow: none;
+}
+.compact .option.selected strong {
+  font-weight: 650;
+}
+.compact .option.selected > svg {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--w-ink, #0b0d10);
+}
+.compact .detail,
+.compact .unavailable {
+  margin: 6px 9px 2px;
+}
+.compact .reasonToggle {
+  width: calc(100% - 18px);
+  margin: 4px 9px 0;
+  padding: 8px 0 4px;
 }

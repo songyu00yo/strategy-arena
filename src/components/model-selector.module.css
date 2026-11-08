@@ -202,35 +202,42 @@
   cursor: default;
 }
 
-/* Switching models: the new name rolls up into place with a light passing over it,
-   and the check mark springs in. Transform and opacity only. */
+/* Switching models: the new name rises out of a mask on one expo-out curve while a soft
+   three-colour light passes across the pill; the check mark draws in. No overshoot. */
 .trigger {
   position: relative;
   overflow: hidden;
 }
 .label {
   display: inline-block;
-  animation: label-in 0.62s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation: label-in 0.85s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.label::after {
-  content: "";
+/* The same three-colour hairline as the composer draws under the new name, then fades. */
+.glint {
   position: absolute;
-  inset: 0;
+  left: 9px;
+  right: 30px;
+  bottom: 5px;
+  height: 1.5px;
+  border-radius: 1px;
   background: linear-gradient(
-    100deg,
-    transparent 30%,
-    rgb(64 119 245 / 0.16) 45%,
-    rgb(235 53 138 / 0.14) 55%,
-    transparent 70%
+    90deg,
+    rgb(64 119 245 / 0.85),
+    rgb(235 53 138 / 0.8),
+    rgb(209 139 13 / 0.8)
   );
-  transform: translateX(-100%);
-  animation: label-sheen 0.9s 0.08s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transform: scaleX(0);
+  transform-origin: left center;
   pointer-events: none;
+  animation: label-sheen 1.2s 0.1s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 @keyframes label-in {
   from {
     opacity: 0;
     transform: translateY(105%);
+  }
+  35% {
+    opacity: 1;
   }
   to {
     opacity: 1;
@@ -238,17 +245,57 @@
   }
 }
 @keyframes label-sheen {
-  to {
-    transform: translateX(100%);
+  0% {
+    opacity: 1;
+    transform: scaleX(0);
+  }
+  55% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(1);
   }
 }
 .option.selected > svg {
-  animation: check-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation: check-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 @keyframes check-in {
   from {
     opacity: 0;
-    transform: scale(0.3) rotate(-30deg);
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Opening the menu: options settle in one after another beneath the panel's arrival. */
+.popover:popover-open .option,
+.popover:popover-open .heading {
+  animation: option-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.popover:popover-open .option:nth-child(1) {
+  animation-delay: 0.04s;
+}
+.popover:popover-open .option:nth-child(2) {
+  animation-delay: 0.07s;
+}
+.popover:popover-open .option:nth-child(3) {
+  animation-delay: 0.1s;
+}
+.popover:popover-open .option:nth-child(4) {
+  animation-delay: 0.13s;
+}
+.popover:popover-open .option:nth-child(n + 5) {
+  animation-delay: 0.16s;
+}
+@keyframes option-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -256,7 +303,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .label::after {
+  .glint {
     display: none;
   }
 }

@@ -137,23 +137,25 @@ export function ModelSelector({
       });
       const target = el.getBoundingClientRect();
       const transformFrom = (box: DOMRect) =>
-        `translate(${box.left - target.left}px,${box.top - target.top}px) scale(${box.width / target.width},${box.height / target.height})`;
+        `translate(${box.left - target.left}px,${useBelow ? box.top - target.top : box.bottom - target.bottom}px) scale(${box.width / target.width},${box.height / target.height})`;
       const start = currentBox ? transformFrom(currentBox) : transformFrom(source);
       if (reducedMotion()) return finish(open);
+      // Unfolds from the trigger's corner on one expo-out curve: no stretching, no overshoot.
+      el.style.transformOrigin = useBelow ? "left top" : "left bottom";
+      const rest = `translateY(${useBelow ? -10 : 10}px) scale(0.94)`;
       const animation = el.animate(
         open
           ? [
-              { transform: start, opacity },
-              { transform: "translate(0,0) scale(1.012,1.015)", opacity: 1, offset: 0.74 },
+              { transform: currentBox ? start : rest, opacity },
               { transform: "none", opacity: 1 },
             ]
           : [
-              { transform: start, opacity },
-              { transform: transformFrom(source), opacity: 0 },
+              { transform: currentBox ? start : "none", opacity },
+              { transform: rest, opacity: 0 },
             ],
         {
-          duration: open ? 560 : 420,
-          easing: open ? "cubic-bezier(.16,1,.3,1)" : "cubic-bezier(.4,0,.2,1)",
+          duration: open ? 480 : 220,
+          easing: open ? "cubic-bezier(.16,1,.3,1)" : "cubic-bezier(.4,0,1,1)",
           fill: "both",
         },
       );
@@ -308,7 +310,11 @@ export function ModelSelector({
           }
         }}
       >
-        <span>{label}</span>
+        {/* Keyed by the model: each switch remounts the label and its glint so both replay. */}
+        <span key={`glint-${label}`} className={styles.glint} aria-hidden="true" />
+        <span key={label} className={styles.label}>
+          {label}
+        </span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
       <div ref={panel} popover="manual" className={styles.popover} inert={!expanded}>

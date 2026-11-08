@@ -14,6 +14,7 @@ import {
 } from "../src/lib/contracts";
 import {
   assertCanonicalCostReference,
+  CostPlanValidationError,
   costPlanTotal,
   normalizeCostPlan,
 } from "../src/lib/server/resource-totals";
@@ -25,6 +26,7 @@ import {
 } from "../src/lib/server/tools";
 import { restoreStrictNulls, toStrictToolSchema } from "../src/lib/server/strict-schema";
 import { z } from "zod";
+import { PROMPT_VERSION, SYSTEM } from "../prompts/protocol";
 
 const item = (id: string, label: string, amount: number | null): CostPlan["items"][number] => ({
   id,
@@ -75,6 +77,7 @@ const verdict = (): Verdict => ({
 describe("single necessary-expense list and server execution gate", () => {
   it.each([
     "将完整费用清单累计总额与1000元预算比较，并预留交付后复检与缓冲。",
+    "核对完整费用清单累计总额与1000元预算，并核实实际现金流及工时。",
     "完整费用清单累计总额超过1000元预算则退出。",
     "完整费用清单累计总额核实且不超过1000元预算后才付款。",
     "完整费用清单累计总额≤1000元才可正式执行。",
@@ -87,12 +90,30 @@ describe("single necessary-expense list and server execution gate", () => {
     expect(() => assertCanonicalCostReference(text, null)).toThrow("当前上限未知");
   });
 
+  it("accepts the recorded prefixed budget comparison through cost-plan normalization", () => {
+    const candidate = route({
+      complete: true,
+      items: [item("living", "生活费", 12000), item("entry", "入职交通和材料费", 500)],
+    });
+    candidate.estimatedCost = 12500;
+    candidate.steps = [
+      "核对完整费用清单累计总额与18000元预算，并核实实际现金流及工时；工资不抵扣支出上限。",
+    ];
+    expect(normalizeCostPlan(candidate, undefined, 18000).estimatedCost).toBe(12500);
+    expect(() => normalizeCostPlan(candidate, undefined, 17500)).toThrow("当前用户预算");
+    expect(() => normalizeCostPlan(candidate, undefined, null)).toThrow("当前上限未知");
+  });
+
   it.each([
     "完整费用清单累计总额=1000元才付款。",
     "完整费用清单累计总额算出总额1000元才付款。",
     "完整费用清单累计总额不超过1000元，同时租金+押金合计500元才签约。",
     "完整费用清单累计总额≤1000元+500元才付款。",
     "完整费用清单累计总额与1000元预算比较，另核对场地费＋设备费合计500元才付款。",
+    "核对完整费用清单累计总额与1000元预算，同时租金+押金合计500元才签约。",
+    "核对完整费用清单累计总额与1000元+500元才付款。",
+    "核对完整费用清单累计总额与1000元预算，另设总费用500元才执行。",
+    "核对完整费用清单累计总额与1000元预算且生活费和入职费合计500元才执行。",
   ])("does not exempt another formula merely because a valid reference is present: %s", (text) => {
     expect(() => assertCanonicalCostReference(text, 1000)).toThrow("费用正文格式");
   });
@@ -371,6 +392,399 @@ describe("single necessary-expense list and server execution gate", () => {
 describe("quote attribution and comparison assumptions", () => {
   const quote = "方案报价600元，包含项目未知";
   const userItem = { id: "price", label: "报价", amount: 600, basis: "user" as const, quote };
+  it.each(["可用本机 Node.js 24 环境", "可以使用现有设备", "计划采用开源框架", "软件免费"])(
+    "keeps non-price resource text from becoming a factual zero charge and identifies its repair: %s",
+    (source) => {
+      const candidate = route({
+        complete: true,
+        items: [
+          {
+            id: "node-runtime",
+            label: "运行环境",
+            amount: 0,
+            basis: "user",
+            quote: source,
+          },
+        ],
+      });
+      const original = structuredClone(candidate);
+      let message = "";
+      try {
+        normalizeCostPlan(candidate, source);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toContain("费用事实不能补造报价或把其他项目金额移用");
+      expect(message).toContain("costPlan.items[0]");
+      expect(message).toContain("id=node-runtime");
+      expect(message).toContain('basis=unknown、amount=null、quote=""');
+      expect(message).toContain("estimatedCost=null");
+      expect(message).toContain('basis=assumption、quote=""');
+      expect(message).toContain("假设与核实条件");
+      // Runtime repair feedback is bounded to 500 characters, including the failing item and action.
+      expect(message.length).toBeLessThanOrEqual(500);
+      expect(candidate).toEqual(original);
+    },
+  );
+  it("identifies a later invalid source item and preserves the literal-quote error", () => {
+    const candidate = route({
+      complete: false,
+      items: [
+        item("preflight", "前置核验", null),
+        {
+          id: "node-runtime",
+          label: "运行环境",
+          amount: 0,
+          basis: "user",
+          quote: "可用本机 Node.js 24 环境",
+        },
+      ],
+    });
+    expect(() => normalizeCostPlan(candidate, "其它用户材料")).toThrow(
+      "费用事实必须逐字引用当前用户原文",
+    );
+    expect(() => normalizeCostPlan(candidate, "其它用户材料")).toThrow(
+      "costPlan.items[1]（id=node-runtime）",
+    );
+  });
+  it("accepts an actual same-item zero-yuan quotation while retaining amount matching", () => {
+    const source = "本机运行环境费用0元";
+    const candidate = route({
+      complete: true,
+      items: [
+        {
+          id: "node-runtime",
+          label: "运行环境",
+          amount: 0,
+          basis: "user",
+          quote: source,
+        },
+      ],
+    });
+    expect(normalizeCostPlan(candidate, source)).toMatchObject({
+      estimatedCost: 0,
+      costPlan: { items: [{ amount: 0, basis: "user", quote: source }] },
+    });
+    expect(() => normalizeCostPlan(candidate, "本机运行环境费用1元")).toThrow("逐字引用");
+    expect(() =>
+      normalizeCostPlan(
+        {
+          ...candidate,
+          costPlan: {
+            complete: true,
+            items: [{ ...candidate.costPlan!.items[0], quote: "本机运行环境费用1元" }],
+          },
+        },
+        "本机运行环境费用1元",
+      ),
+    ).toThrow("其他项目金额");
+  });
+  it("reports the recorded missing-item quote and prose gate together before its only repair", () => {
+    const source = "未来24周生活费每月2000元，6个月12000元";
+    const candidate = route({
+      complete: false,
+      items: [
+        {
+          id: "living",
+          label: "生活费",
+          amount: 12000,
+          basis: "user",
+          quote: "每月2000元，6个月12000元",
+        },
+      ],
+    });
+    candidate.steps = [
+      "先确认书面offer当前有效",
+      "核实完整费用清单累计总额及是否遗漏必要支出；不以工资抵扣支出，确认累计总额不超过18000元后再作不可撤回承诺。",
+    ];
+    const original = structuredClone(candidate);
+    let failure: unknown;
+    try {
+      normalizeCostPlan(candidate, source, 18000);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(CostPlanValidationError);
+    expect((failure as CostPlanValidationError).errors).toHaveLength(2);
+    expect((failure as Error).message).toContain("costPlan.items[0]（id=living）");
+    expect((failure as Error).message).toContain("steps[1] 费用正文格式");
+    expect(candidate).toEqual(original);
+    const quoteOnlyFixed = structuredClone(candidate);
+    quoteOnlyFixed.costPlan!.items[0].quote = source;
+    expect(() => normalizeCostPlan(quoteOnlyFixed, source, 18000)).toThrow("费用正文格式");
+    const proseOnlyFixed = structuredClone(candidate);
+    proseOnlyFixed.steps[1] = "完整费用清单累计总额已核实且不超过18000元后才可正式执行。";
+    expect(() => normalizeCostPlan(proseOnlyFixed, source, 18000)).toThrow("其他项目金额");
+    proseOnlyFixed.costPlan!.items[0].quote = source;
+    expect(() => normalizeCostPlan(proseOnlyFixed, source, 18000)).not.toThrow();
+  });
+  it("accepts the recorded same-item monthly and six-month total quotation without changing its source", () => {
+    const source = "未来24周生活费每月2000元，6个月12000元";
+    const candidate = route({
+      complete: false,
+      items: [{ id: "living", label: "6个月生活费", amount: 12000, basis: "user", quote: source }],
+    });
+    const original = structuredClone(candidate);
+    const normalized = normalizeCostPlan(candidate, `现有存款18000元，${source}。`);
+    expect(normalized.costPlan?.items[0]).toEqual({
+      id: "living",
+      label: "未来24周生活费（6个月）",
+      amount: 12000,
+      basis: "user",
+      quote: source,
+    });
+    expect(normalized.estimatedCost).toBeNull();
+    expect(
+      normalizeStrategyResources(
+        candidate,
+        ChallengeSchema.parse({
+          goal: "比较学习与就业路线",
+          materials: `现有存款18000元，${source}。`,
+          budget: 18000,
+        }),
+      ).costPlan,
+    ).toEqual(normalized.costPlan);
+    expect(normalizeCostPlan(normalized, `现有存款18000元，${source}。`)).toEqual(normalized);
+    expect(candidate).toEqual(original);
+  });
+  it.each([
+    ["6个月每月生活费2000元总12000元", 12000],
+    ["每月生活费3500元，6个月21000元", 21000],
+  ])("accepts the exact recorded offer expense quotation %s", (source, amount) => {
+    const candidate = route({
+      complete: true,
+      items: [{ id: "living", label: "模型简称不作证据", amount, basis: "user", quote: source }],
+    });
+    candidate.estimatedCost = amount;
+    const original = structuredClone(candidate);
+    const normalized = normalizeStrategyResources(
+      candidate,
+      ChallengeSchema.parse({
+        goal: "比较应届生就业路线",
+        materials: source,
+        budget: 26000,
+      }),
+    );
+    expect(normalized.costPlan?.items[0]).toMatchObject({
+      amount,
+      basis: "user",
+      quote: source,
+      label: "生活费（6个月）",
+    });
+    expect(normalized.estimatedCost).toBe(amount);
+    expect(normalized.costPlan?.complete).toBe(true);
+    expect(candidate).toEqual(original);
+  });
+  it("keeps the explicitly complete recorded offer expenses known without adding an unknown buffer", () => {
+    const source = "每月生活费3500元，6个月21000元，搬迁费2000元，总支出23000元";
+    const candidate = route({
+      complete: true,
+      items: [
+        {
+          id: "living",
+          label: "异地生活费",
+          amount: 21000,
+          basis: "user",
+          quote: "每月生活费3500元，6个月21000元",
+        },
+        { id: "move", label: "搬迁费", amount: 2000, basis: "user", quote: "搬迁费2000元" },
+      ],
+    });
+    candidate.estimatedCost = 23000;
+    const normalized = normalizeStrategyResources(
+      candidate,
+      ChallengeSchema.parse({
+        goal: "比较应届生就业路线",
+        materials: source,
+        budget: 26000,
+      }),
+    );
+    expect(normalized.costPlan).toMatchObject({
+      complete: true,
+      items: [{ amount: 21000 }, { amount: 2000 }],
+    });
+    expect(normalized.costPlan?.items).toHaveLength(2);
+    expect(normalized.estimatedCost).toBe(23000);
+    expect(normalized.resources).toContain("合计23000元");
+  });
+  it.each([
+    ["候选A", 24000, 28000, "eligible"],
+    ["候选B", 28500, 32500, "violates"],
+  ] as const)(
+    "keeps %s's explicitly fixed synthetic total calculable independently of real inspection",
+    (name, price, total, status) => {
+      const source = `${name}固定售价${price}元，合格机构静态检测费500元，过户500元，保险2000元，首轮必要保养1000元。全部必要费用明确列齐，总计${total}元。车况尚未经现实检查。`;
+      const candidate = route({
+        complete: true,
+        items: [
+          {
+            id: "price",
+            label: "车价",
+            amount: price,
+            basis: "user",
+            quote: `${name}固定售价${price}元`,
+          },
+          {
+            id: "inspect",
+            label: "检测",
+            amount: 500,
+            basis: "user",
+            quote: "合格机构静态检测费500元",
+          },
+          { id: "transfer", label: "过户", amount: 500, basis: "user", quote: "过户500元" },
+          { id: "insurance", label: "保险", amount: 2000, basis: "user", quote: "保险2000元" },
+          {
+            id: "maintenance",
+            label: "保养",
+            amount: 1000,
+            basis: "user",
+            quote: "首轮必要保养1000元",
+          },
+        ],
+      });
+      candidate.estimatedCost = total;
+      const normalized = normalizeStrategyResources(
+        candidate,
+        ChallengeSchema.parse({
+          goal: "在预算内比较合成购车路线",
+          materials: source,
+          budget: 30000,
+        }),
+      );
+      expect(normalized.costPlan?.complete).toBe(true);
+      expect(normalized.costPlan?.items).toHaveLength(5);
+      expect(normalized.estimatedCost).toBe(total);
+      const input = task(normalized);
+      input.challenge = ChallengeSchema.parse({
+        ...input.challenge,
+        materials: source,
+        budget: 30000,
+      });
+      const decision = verdict();
+      decision.comparisons[0] = {
+        strategyId: "A",
+        status: "eligible",
+        reason: "题设费用已列齐，现实车况仍需核实",
+        basis: "user",
+        quote: `${name}固定售价${price}元`,
+      };
+      expect(validateVerdict(decision, input).comparisons[0].status).toBe(status);
+    },
+  );
+  it.each([
+    ["6个月每月生活费2000元总13000元", 13000],
+    ["6个月每月生活费2000元总12000元", 2000],
+    ["每月生活费3500元，6个月21000元", 3500],
+    ["每月生活费3500元，6个月生活费以外21000元", 21000],
+    ["6个月每月生活费2000元搬迁费总12000元", 12000],
+    ["每月2000元，6个月12000元", 12000],
+    ["6个月每月2000元总12000元", 12000],
+    ["每月生活费3500元，6个月21000元，搬迁费2000元", 21000],
+    ["每月生活费3500元，0个月0元", 0],
+  ])("rejects mismatched or mixed recurring expense quotation %s", (source, amount) => {
+    const candidate = route({
+      complete: false,
+      items: [{ id: "living", label: "生活费", amount, basis: "user", quote: source }],
+    });
+    expect(() => normalizeCostPlan(candidate, source)).toThrow("其他项目金额");
+  });
+  it.each([
+    ["6个月每月生活费2000元总12000元", "生活费2000元", 12000, 2000],
+    ["每月生活费3500元，6个月21000元", "生活费3500元", 21000, 3500],
+  ] as const)(
+    "rejects counting both the total and monthly charge in %s",
+    (source, monthly, total, amount) => {
+      const items: CostPlan["items"] = [
+        { id: "total", label: "总生活费", amount: total, basis: "user", quote: source },
+        { id: "monthly", label: "月生活费", amount, basis: "user", quote: monthly },
+      ];
+      expect(() => normalizeCostPlan(route({ complete: false, items }), source)).toThrow(
+        "同一原文报价",
+      );
+      expect(() =>
+        normalizeCostPlan(route({ complete: false, items: [...items].reverse() }), source),
+      ).toThrow("同一原文报价");
+    },
+  );
+  it("scopes time accounting to the user's activities and preserves explicitly known case expenses", () => {
+    expect(PROMPT_VERSION).toBe("1.4.3");
+    expect(SYSTEM).toContain("用户只限定工作与求职工时，就不能擅自把生活或搬迁工时加入该上限");
+    expect(SYSTEM).toContain("试跑、准备与后续执行只有属于该用户范围时才计入同一额度");
+    expect(SYSTEM).toContain("总小时数必须与周数乘以每周小时数一致");
+    expect(SYSTEM).toContain("不得凭空添加未知缓冲或其他未要求的费用，把已知总额改成全未知");
+    expect(SYSTEM).toContain(
+      "costPlan.complete 表示该范围完整，与是否超预算、是否已真实验车分别判断",
+    );
+    expect(SYSTEM).toContain("超过预算的已知总额仍应保留并判为违反限制");
+  });
+  it.each([
+    ["生活费每月2000元，6个月13000元", 13000],
+    ["生活费每月2000元，6个月12000元", 2000],
+    ["生活费每月2000元，6个月12000元", 10000],
+    ["生活费每月2000元，6个月车款12000元", 12000],
+    ["维修费2000元，二手车12000元", 12000],
+    ["生活费每月2000元，0个月0元", 0],
+  ])("rejects an unbound or wrong recurring quote %s for amount %s", (source, amount) => {
+    const candidate = route({
+      complete: false,
+      items: [{ id: "living", label: "生活费", amount, basis: "user", quote: source }],
+    });
+    expect(() => normalizeCostPlan(candidate, source)).toThrow("其他项目金额");
+  });
+  it.each([false, true])(
+    "does not count the monthly charge again beside its explicit total (reverse=%s)",
+    (reverse) => {
+      const source = "未来24周生活费每月2000元，6个月12000元";
+      const items: CostPlan["items"] = [
+        { id: "total", label: "生活费总额", amount: 12000, basis: "user", quote: source },
+        {
+          id: "monthly",
+          label: "月生活费",
+          amount: 2000,
+          basis: "user",
+          quote: "生活费每月2000元",
+        },
+      ];
+      expect(() =>
+        normalizeCostPlan(
+          route({ complete: false, items: reverse ? items.reverse() : items }),
+          source,
+        ),
+      ).toThrow("同一原文报价");
+    },
+  );
+  it("accepts the explicit unknown or conditional-assumption correction without inventing user prices", () => {
+    const unknown = route({
+      complete: false,
+      items: [
+        {
+          id: "node-runtime",
+          label: "运行环境费用待核实",
+          basis: "unknown",
+          amount: null,
+          quote: "",
+        },
+      ],
+    });
+    expect(normalizeCostPlan(unknown, "可用本机 Node.js 24 环境").estimatedCost).toBeNull();
+    const assumed = route({
+      complete: true,
+      items: [
+        {
+          id: "node-runtime",
+          label: "既有环境零额假设",
+          basis: "assumption",
+          amount: 0,
+          quote: "",
+        },
+      ],
+    });
+    assumed.steps = ["假设既有环境不另收费，执行前核实授权、运行和服务范围"];
+    expect(normalizeCostPlan(assumed, "可用本机 Node.js 24 环境")).toMatchObject({
+      estimatedCost: 0,
+      costPlan: { items: [{ basis: "assumption", quote: "" }] },
+    });
+  });
   it("rejects nested quotes of one charge without merging independent equal-price items", () => {
     const quoted = (id: string, label: string, quote: string): CostPlan["items"][number] => ({
       id,

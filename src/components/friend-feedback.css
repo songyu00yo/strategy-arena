@@ -50,7 +50,7 @@
 .version-feedback-source {
   padding: 14px;
   border: 1px solid #d4d9e1;
-  background: #fff;
+  background: var(--paper, #fff);
   color: #313844;
   font-size: 12px;
   line-height: 1.7;

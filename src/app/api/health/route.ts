@@ -7,6 +7,7 @@ export function GET(request: Request) {
   try {
     return json({
       status: "ok",
+      identityBootstrap: true,
       ...releaseInfo(),
       model: modelInfo(),
       ...accessState(request),

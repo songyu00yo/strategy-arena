@@ -212,7 +212,10 @@ export function RecordedChallenge({
         <div className="recorded-challenge-source">
           <div className="recorded-challenge-source-row">
             <span
-              title={target.context?.title ?? `路线 ${target.strategy?.id} · ${target.claimId}`}
+              title={
+                target.context?.title ??
+                `路线 ${target.strategy?.id} · ${claim?.text ?? "这条判断"}`
+              }
             >
               V{version.number} ·{" "}
               {target.context
@@ -298,7 +301,7 @@ export function RecordedChallenge({
           )}
         </div>
         <p className="recorded-challenge-notice">确认后新建真实推演并计费，原记录保留。</p>
-        {(blocked || error) && (
+        {(error || (!health && !healthError && quote ? "" : blocked)) && (
           <p className="recorded-challenge-error" role="alert">
             {error || blocked}
           </p>

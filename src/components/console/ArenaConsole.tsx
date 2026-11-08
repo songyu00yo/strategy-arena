@@ -1,4 +1,5 @@
 "use client";
+import { readableClaimText } from "@/components/claim-label";
 import {
   useCallback,
   useEffect,
@@ -20,7 +21,7 @@ import { attackMeta } from "@/components/status";
 import type { StepContext } from "@/lib/step-context";
 import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
-import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
+import { RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
 import { RouteStage } from "./RouteStage";
 import { StepCard } from "./StepCard";
@@ -62,6 +63,8 @@ export function ArenaConsole({
   slate,
   notices,
   conditions,
+  agent,
+  drafts,
   selectedAttack,
   historical,
   startFromBeginning = false,
@@ -79,6 +82,10 @@ export function ArenaConsole({
   slate: React.ReactNode;
   notices: React.ReactNode;
   conditions: React.ReactNode;
+  /** The agent's plan and action chain: its own band, so it never pushes the stage around. */
+  agent?: React.ReactNode;
+  /** Live and archived draft text: kept in the rail with its own scroll. */
+  drafts?: React.ReactNode;
   selectedAttack?: string;
   historical: boolean;
   startFromBeginning?: boolean;
@@ -140,6 +147,18 @@ export function ArenaConsole({
       // Nothing to remember it in.
     }
   }, []);
+  // The opening happens on the page itself, never over it: the bands are printed in from the
+  // top, then the boards are raised. Nothing covers the whole screen.
+  useEffect(() => {
+    if (!intro) return;
+    const quick = reducedMotion();
+    const raise = setTimeout(reveal, quick ? 0 : 520);
+    const settle = setTimeout(endIntro, quick ? 0 : 2000);
+    return () => {
+      clearTimeout(raise);
+      clearTimeout(settle);
+    };
+  }, [intro, reveal, endIntro]);
 
   const stage = current?.stage;
   // The first step of a stage waits for its word to land, so the two never collide.
@@ -336,7 +355,7 @@ export function ArenaConsole({
   return (
     <div
       data-motion-origin={seeking ? "interaction" : "story"}
-      className={`c-root ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
+      className={`c-root ${intro ? "opening" : ""} ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
     >
       <RecordWall
         version={version}
@@ -347,7 +366,70 @@ export function ArenaConsole({
       />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
+        {verdict && (
+          <ResultRegion open={atResult} expanded={wholeResult}>
+            <section
+              className={`c-result ${wholeResult ? "whole" : ""}`}
+              aria-label="结论"
+              id="verdict"
+            >
+              <div className="lead">
+                <div className="tag">
+                  <b
+                    className={verdict.preferred ? "pick" : "none"}
+                    style={
+                      verdict.preferred
+                        ? ({
+                            "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
+                          } as CSSProperties)
+                        : undefined
+                    }
+                  >
+                    {verdictLabel(verdict)}
+                  </b>
+                  <span>{OUTCOME[verdict.outcome]}</span>
+                </div>
+                <h2>{readableClaimText(version, verdict.headline)}</h2>
+                <p>{readableClaimText(version, verdict.rationale)}</p>
+              </div>
+              <div className="act">
+                <div className="first">
+                  <small>现在该做的第一步</small>
+                  <strong>{readableClaimText(version, verdict.nextActions[0])}</strong>
+                </div>
+                <dl>
+                  <div>
+                    <dt>前提</dt>
+                    <dd>{readableClaimText(version, listOf(verdict.conditions)) || "未给出"}</dd>
+                  </div>
+                  <div>
+                    <dt>仍需确认</dt>
+                    <dd>{readableClaimText(version, listOf(verdict.uncertainties)) || "未列出"}</dd>
+                  </div>
+                  <div>
+                    <dt>退出条件</dt>
+                    <dd>{readableClaimText(version, verdict.exitCondition)}</dd>
+                  </div>
+                </dl>
+                {verdict.nextActions.length > 1 && (
+                  <p className="more">
+                    接着做：{readableClaimText(version, listOf(verdict.nextActions.slice(1)))}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  aria-expanded={wholeResult}
+                  aria-controls="verdict"
+                  onClick={() => setWholeResult((w) => !w)}
+                >
+                  {wholeResult ? "收起结论" : "看完整结论"}
+                </button>
+              </div>
+            </section>
+          </ResultRegion>
+        )}
         <div className="c-conditions">{conditions}</div>
+        {agent && <div className="c-agent">{agent}</div>}
         <div className="c-notices">{notices}</div>
         <div className="c-track">
           <div className="c-time" role="group" aria-label="推演步骤">
@@ -399,66 +481,7 @@ export function ArenaConsole({
             ))}
           </dl>
         </div>
-        {verdict && (
-          <ResultRegion open={atResult} expanded={wholeResult}>
-            <section
-              className={`c-result ${wholeResult ? "whole" : ""}`}
-              aria-label="结论"
-              id="verdict"
-            >
-              <div className="lead">
-                <div className="tag">
-                  <b
-                    className={verdict.preferred ? "pick" : "none"}
-                    style={
-                      verdict.preferred
-                        ? ({
-                            "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
-                          } as CSSProperties)
-                        : undefined
-                    }
-                  >
-                    {verdictLabel(verdict)}
-                  </b>
-                  <span>{OUTCOME[verdict.outcome]}</span>
-                </div>
-                <h2>{verdict.headline}</h2>
-                <p>{verdict.rationale}</p>
-              </div>
-              <div className="act">
-                <div className="first">
-                  <small>现在该做的第一步</small>
-                  <strong>{verdict.nextActions[0]}</strong>
-                </div>
-                <dl>
-                  <div>
-                    <dt>前提</dt>
-                    <dd>{listOf(verdict.conditions) || "未给出"}</dd>
-                  </div>
-                  <div>
-                    <dt>仍需确认</dt>
-                    <dd>{listOf(verdict.uncertainties) || "未列出"}</dd>
-                  </div>
-                  <div>
-                    <dt>退出条件</dt>
-                    <dd>{verdict.exitCondition}</dd>
-                  </div>
-                </dl>
-                {verdict.nextActions.length > 1 && (
-                  <p className="more">接着做：{listOf(verdict.nextActions.slice(1))}</p>
-                )}
-                <button
-                  type="button"
-                  aria-expanded={wholeResult}
-                  aria-controls="verdict"
-                  onClick={() => setWholeResult((w) => !w)}
-                >
-                  {wholeResult ? "收起结论" : "看完整结论"}
-                </button>
-              </div>
-            </section>
-          </ResultRegion>
-        )}
+
         <main className="c-main">
           <RouteStage
             version={version}
@@ -560,6 +583,7 @@ export function ArenaConsole({
                 </button>
               </div>
             </section>
+            {drafts && <div className="c-drafts">{drafts}</div>}
             <section className="c-trace" aria-label="步骤记录">
               <h2>
                 步骤记录 <span>{logged.length}</span>
@@ -617,7 +641,7 @@ export function ArenaConsole({
                     <em className={`is-${state}`}>
                       {a.from}→{a.targetStrategyId} {attackMeta[state].label}
                     </em>
-                    <span>{a.reason}</span>
+                    <span>{readableClaimText(version, a.reason)}</span>
                   </button>
                 );
               })}
@@ -625,9 +649,6 @@ export function ArenaConsole({
           </section>
         </div>
       </div>
-      {playing && directed && !seeking && current && current.stage !== "judge" && (
-        <Chapter key={current.stage} stage={current.stage} />
-      )}
       {verdict && directed && !filmDone && current?.id === "judge" && (
         <VerdictFilm verdict={verdict} onDone={endFilm} />
       )}
@@ -665,9 +686,6 @@ export function ArenaConsole({
             onEvidence(attack);
           }}
         />
-      )}
-      {intro && (
-        <Intro version={version} events={events} demo={demo} onReveal={reveal} onDone={endIntro} />
       )}
     </div>
   );

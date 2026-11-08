@@ -1,4 +1,5 @@
 "use client";
+import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useLayoutEffect, useRef, type CSSProperties } from "react";
 import { X } from "lucide-react";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
@@ -7,7 +8,7 @@ import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
 import { readMotionOrigin } from "../motion-origin";
 import "./step-card-motion.css";
-import { nameOf, type Beat } from "./beats";
+import { latestShownRevision, nameOf, type Beat } from "./beats";
 import { stepContext, type StepContext } from "@/lib/step-context";
 
 type Point = { x: number; y: number };
@@ -181,13 +182,16 @@ type Row = { label: string; text: string; tone?: string };
 
 /** Everything recorded about one step, in the order a reader would question it. */
 function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
-  const clean = (rows: Row[]) => rows.filter((row) => row.text);
+  const clean = (rows: Row[]) =>
+    rows
+      .filter((row) => row.text)
+      .map((row) => ({ ...row, text: readableClaimText(version, row.text) }));
   if (beat.attack) {
     const a = beat.attack;
     const checked = known.some((b) => b.id === `v:${a.id}`);
-    const reply = known
-      .find((b) => b.id === `r:${a.targetStrategyId}`)
-      ?.revision?.responses.find((r) => r.attackId === a.id);
+    const reply = latestShownRevision(known, a.targetStrategyId)?.revision?.responses.find(
+      (r) => r.attackId === a.id,
+    );
     const evidence = version.evidence
       .filter((e) => e.attackId === a.id)
       .map((e) =>
@@ -226,7 +230,10 @@ function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
     return clean([
       { label: "核心思路", text: s.thesis },
       { label: "预计投入", text: `${s.estimatedHours ?? "?"} 小时，¥${s.estimatedCost ?? "?"}` },
-      { label: "关键判断", text: s.claims.map((c) => `${c.id}：${c.text}`).join("\n") },
+      {
+        label: "关键判断",
+        text: s.claims.map((c) => `${claimLabel(version, s.id, c.id)} · ${c.text}`).join("\n"),
+      },
       { label: "步骤", text: s.steps.map((step, i) => `${i + 1}. ${step}`).join("\n") },
       { label: "第一步", text: s.firstAction },
       { label: "什么情况下放弃", text: s.failureCondition },
@@ -247,7 +254,9 @@ function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
       },
       {
         label: "修订后的判断",
-        text: r.strategy.claims.map((c) => `${c.id}：${c.text}`).join("\n"),
+        text: r.strategy.claims
+          .map((c) => `${claimLabel(version, r.strategyId, c.id)} · ${c.text}`)
+          .join("\n"),
       },
     ]);
   }

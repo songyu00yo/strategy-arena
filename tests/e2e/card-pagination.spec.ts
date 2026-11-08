@@ -3,6 +3,13 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { RecordedExamplePayload } from "../../src/lib/recorded-examples";
 
+type CapturedTransition = {
+  text: string;
+  ariaHidden: string | null;
+  inert: boolean;
+  running: boolean;
+};
+
 test("real career recording: card pages crossfade without replacing visible text or jumping in height", async ({
   page,
   baseURL,
@@ -49,6 +56,45 @@ test("real career recording: card pages crossfade without replacing visible text
   await expect(card.getByRole("heading", { name: title11, exact: true })).toBeVisible();
   await expect(card.locator(".c-pull-face")).toHaveCount(0);
 
+  // Observe in the page before clicking so the short-lived outgoing layer cannot disappear
+  // between Playwright's click completion and its next assertion.
+  const transitionProbe = await window.evaluateHandle((node) => {
+    let resolve!: (value: CapturedTransition | null) => void;
+    const observed = new Promise<CapturedTransition | null>((done) => {
+      resolve = done;
+    });
+    const observer = new MutationObserver(() => {
+      const retiring = node.querySelector<HTMLElement>(".c-step-leaving");
+      if (!retiring) return;
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve({
+        text: retiring.textContent ?? "",
+        ariaHidden: retiring.getAttribute("aria-hidden"),
+        inert: retiring.inert,
+        running: node
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === "running"),
+      });
+    });
+    const timer = setTimeout(() => {
+      observer.disconnect();
+      resolve(null);
+    }, 5000);
+    observer.observe(node, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "aria-hidden", "inert"],
+    });
+    return {
+      observed,
+      stop() {
+        observer.disconnect();
+        clearTimeout(timer);
+      },
+    };
+  });
   // Sample the reading viewport before and throughout a real button click, rather than
   // accepting only the final dimensions after a potentially abrupt replacement.
   const samples = window.evaluate(async (node) => {
@@ -59,17 +105,24 @@ test("real career recording: card pages crossfade without replacing visible text
     }
     return heights;
   });
-  await card.getByRole("button", { name: "下一步", exact: true }).click();
+  let captured: CapturedTransition;
+  try {
+    await card.getByRole("button", { name: "下一步", exact: true }).click();
+    captured = await transitionProbe.evaluate(async (probe) => {
+      const value = await probe.observed;
+      if (!value) throw new Error("No retiring page transition was observed within 5 seconds");
+      return value;
+    });
+  } finally {
+    await transitionProbe.evaluate((probe) => probe.stop());
+    await transitionProbe.dispose();
+  }
   const retiring = card.locator(".c-step-leaving");
-  await expect(retiring).toContainText(title11);
-  await expect(retiring).toHaveAttribute("aria-hidden", "true");
-  await expect(retiring).toHaveJSProperty("inert", true);
+  expect(captured.text).toContain(title11);
+  expect(captured.ariaHidden).toBe("true");
+  expect(captured.inert).toBe(true);
   await expect(card.getByRole("heading", { name: title12, exact: true })).toHaveCount(1);
-  expect(
-    await window.evaluate((node) =>
-      node.getAnimations({ subtree: true }).some((animation) => animation.playState === "running"),
-    ),
-  ).toBe(true);
+  expect(captured.running).toBe(true);
   const heights = await samples;
   const span = Math.max(...heights) - Math.min(...heights);
   const largestFrameChange = Math.max(

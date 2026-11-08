@@ -1,0 +1,248 @@
+/* The admission ticket: printed paper, ink rules, one vermilion stamp. */
+.access-gate {
+  --ink: #15130f;
+  --paper: #fbf8f1;
+  --vermilion: #c8331f;
+  --serif-cn: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
+  position: fixed;
+  inset: 0;
+  /* Under the header (z 30): the brand and the public real-example entry stay usable. */
+  z-index: 29;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background-color: rgb(238 233 222 / 0.9);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.08 0 0 0 0 0.07 0 0 0 0 0.05 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.access-gate[data-leaving] {
+  pointer-events: none;
+}
+.access-gate-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  width: min(100%, 580px);
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: var(--paper);
+  box-shadow: 8px 8px 0 var(--ink);
+  color: var(--ink);
+  text-align: left;
+  will-change: transform, opacity;
+}
+/* Stub: printed vertically, torn off along the perforation. */
+.access-gate-stub {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 24px 0 18px;
+  border-right: 1.5px dashed rgb(21 19 15 / 0.45);
+}
+.access-gate-stub::before,
+.access-gate-stub::after {
+  content: "";
+  position: absolute;
+  right: -10px;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  background: #eee9de;
+}
+.access-gate-stub::before {
+  top: -10px;
+  clip-path: inset(50% 0 0 0);
+}
+.access-gate-stub::after {
+  bottom: -10px;
+  clip-path: inset(0 0 50% 0);
+}
+.access-gate-stub strong {
+  font-family: var(--serif-cn);
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  writing-mode: vertical-rl;
+}
+.access-gate-stub small {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  writing-mode: vertical-rl;
+  color: rgb(21 19 15 / 0.6);
+}
+.access-gate-mark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 18px;
+}
+.access-gate-mark i {
+  width: 5px;
+  background: var(--ink);
+}
+.access-gate-mark i:nth-child(1) {
+  height: 11px;
+}
+.access-gate-mark i:nth-child(2) {
+  height: 18px;
+}
+.access-gate-mark i:nth-child(3) {
+  height: 14px;
+  background: var(--vermilion);
+}
+.access-gate-main {
+  padding: 28px 30px 20px;
+}
+.access-gate-eyebrow {
+  display: block;
+  color: rgb(21 19 15 / 0.6);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+}
+.access-gate-card h2 {
+  margin: 10px 0 8px;
+  font-family: var(--serif-cn);
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  line-height: 1.15;
+}
+.access-gate-main > p {
+  margin: 0 0 22px;
+  color: rgb(21 19 15 / 0.7);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+.access-gate-field {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  border-bottom: 1.5px solid var(--ink);
+  transition: border-color 0.3s ease;
+}
+.access-gate-field[data-invalid] {
+  border-bottom-color: var(--vermilion);
+}
+.access-gate-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 17px;
+  letter-spacing: 0.12em;
+}
+.access-gate-field input::placeholder {
+  color: rgb(21 19 15 / 0.38);
+  letter-spacing: 0.04em;
+}
+.access-gate-field input:focus {
+  outline: none;
+}
+.access-gate-submit {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 9px 14px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform 0.4s cubic-bezier(0.19, 1, 0.22, 1),
+    box-shadow 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.access-gate-submit svg {
+  color: #ff8a73;
+  transition: transform 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.access-gate-submit:hover:not(:disabled) {
+  transform: translate(-2px, -2px);
+  box-shadow: 2px 2px 0 var(--vermilion);
+}
+.access-gate-submit:hover:not(:disabled) svg:not(.spin) {
+  transform: translateX(3px);
+}
+.access-gate-submit:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+.access-gate-submit:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+.access-gate-error {
+  min-height: 1.6em;
+  margin: 10px 0 0;
+  color: var(--vermilion);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+/* The stamp waits off the paper until the code is accepted. */
+.access-gate-stamp {
+  position: absolute;
+  right: 26px;
+  top: 20px;
+  display: grid;
+  place-items: center;
+  width: 78px;
+  height: 78px;
+  border: 3px double var(--vermilion);
+  border-radius: 50%;
+  color: var(--vermilion);
+  font-family: var(--serif-cn);
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transform: rotate(-10deg);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+@media (max-width: 520px) {
+  .access-gate-card {
+    grid-template-columns: 1fr;
+  }
+  .access-gate-stub {
+    flex-direction: row;
+    padding: 14px 20px;
+    border-right: 0;
+    border-bottom: 1.5px dashed rgb(21 19 15 / 0.45);
+  }
+  .access-gate-stub::before,
+  .access-gate-stub::after {
+    display: none;
+  }
+  .access-gate-stub strong,
+  .access-gate-stub small {
+    writing-mode: horizontal-tb;
+  }
+  .access-gate-stub strong {
+    font-size: 20px;
+  }
+  .access-gate-main {
+    padding: 22px 20px 16px;
+  }
+  .access-gate-card h2 {
+    font-size: 28px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .access-gate-submit,
+  .access-gate-submit svg {
+    transition: none;
+  }
+}

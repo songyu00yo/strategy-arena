@@ -48,7 +48,9 @@ export function stepContext(version: ArenaVersion, stepId: string): StepContext 
         ]),
       );
   } else if (kind === "r:") {
-    const revision = version.revisions.find((entry) => entry.strategyId === key);
+    const revision = version.revisions.findLast(
+      (entry) => entry.revisionId === key || entry.strategyId === key,
+    );
     if (!revision) return null;
     title = `策略修订 · ${revision.strategy.title}`;
     lines = [

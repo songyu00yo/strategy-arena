@@ -221,6 +221,53 @@ describe("five model structured generation and shared billing", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(tooMany.options).toHaveLength(4);
   });
+  it("returns bounded repair diagnostics only when a structured caller explicitly opts in", async () => {
+    const rejected = JSON.stringify({ summary: "长".repeat(614) });
+    const fetch = vi.fn().mockResolvedValue(response("openai", rejected));
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      generateStructured({
+        ...request,
+        schema: z.object({ summary: z.string().max(500) }),
+        allowRepair: true,
+      }),
+    ).rejects.toMatchObject({
+      uncertain: false,
+      usage: { inputTokens: 100 },
+      repair: {
+        feedback: expect.stringContaining("summary"),
+        rejectedOutput: rejected,
+      },
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(billing.settleBilling).toHaveBeenCalledTimes(1);
+    expect(billing.holdBilling).not.toHaveBeenCalled();
+  });
+  it("includes supplied repair feedback and rejected output in the structured reservation estimate", () => {
+    const original = estimateStructuredCall(request);
+    const repaired = estimateStructuredCall({
+      ...request,
+      allowRepair: true,
+      input: {
+        ...request.input,
+        repairFeedback: "summary最多500字符",
+        rejectedOutput: "长".repeat(614),
+      },
+    });
+    expect(repaired.tokens).toBeGreaterThan(original.tokens);
+    expect(repaired.amount).toBeGreaterThan(original.amount);
+  });
+  it("never offers a format repair when an opted-in request has an unknown network result", async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error("synthetic lost connection"));
+    vi.stubGlobal("fetch", fetch);
+    await expect(generateStructured({ ...request, allowRepair: true })).rejects.toMatchObject({
+      uncertain: true,
+      repair: undefined,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(billing.holdBilling).toHaveBeenCalledTimes(1);
+    expect(billing.settleBilling).not.toHaveBeenCalled();
+  });
   it("accepts one redundant trailing brace without another paid attempt and retains normalization provenance", async () => {
     const original = '{"answer":"仅修正语法，不证明内容正确"}}';
     const fetch = vi.fn().mockResolvedValue(response("openai", original));

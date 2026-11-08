@@ -86,6 +86,8 @@ test("explicit UI fixture: choose a concrete model, inspect its reason and prese
     select(body.challenge, draft.modelMode, false),
   );
   await page.goto("/");
+  // Tools appear once there is text; one character does not start a draft.
+  await page.getByLabel("你想解决什么问题？", { exact: true }).fill("测");
   await page.getByRole("button", { name: /^选择模型，当前/ }).click();
   await expect(page.getByRole("option", { name: "GPT 6.1 Terra", exact: true })).toHaveAttribute(
     "aria-selected",

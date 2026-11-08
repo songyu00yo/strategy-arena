@@ -19,6 +19,9 @@ export function developmentConfig(role, directory = root, inherited = process.en
       MODEL_API_KEY: "",
       DEEPSEEK_API_KEY: "",
       OPENAI_API_KEY: "",
+      TAVILY_API_KEY: "",
+      ARENA_ACCEPTANCE_BATCH_ID: "",
+      ARENA_TOOL_BATCH_ID: "",
       ARENA_BILLING_DATABASE_PATH: "",
       ARENA_DATABASE_PATH: join(resolve(directory), "work", "dev", `${role}.sqlite`),
       ARENA_SESSION_SECRET: "", // The isolated database creates its own development secret.

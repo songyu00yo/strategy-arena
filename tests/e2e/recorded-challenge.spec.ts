@@ -69,7 +69,7 @@ test("explicit UI fixture: editing a recorded challenge is free and only confirm
   const trigger = page
     .getByRole("region", { name: "路线 A", exact: true })
     .getByRole("button")
-    .filter({ hasText: claim.id });
+    .filter({ hasText: claim.text });
   await expect(trigger).toBeEnabled();
   await expect(trigger).toContainText("挑战");
   await trigger.click();
@@ -183,7 +183,7 @@ test("explicit UI fixture: a challenge in a live discussion calls interventions 
   const trigger = page
     .getByRole("region", { name: "路线 A", exact: true })
     .getByRole("button")
-    .filter({ hasText: target.id });
+    .filter({ hasText: target.text });
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "质疑这条判断", exact: true });
   const critique = "测试：请复核准备和等待时间。";

@@ -53,7 +53,8 @@ function decodeText(bytes: Buffer) {
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
     fail("invalid_format", "文件内容不是受支持的文字格式。");
   }
-  if (text.length > MAX_TEXT) fail("extraction_limit", "提取的文字超过 20 万字，请拆分材料后上传。");
+  if (text.length > MAX_TEXT)
+    fail("extraction_limit", "提取的文字超过 20 万字，请拆分材料后上传。");
   return text;
 }
 

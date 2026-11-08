@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   Paperclip,
   Plus,
+  RotateCcw,
   X,
 } from "lucide-react";
 import {
@@ -49,6 +50,22 @@ const EMPTY: Challenge = {
   budget: null,
   timeHours: null,
 };
+// These inputs describe fictional situations. Selecting one only fills the editable goal.
+const CHOICE_SCENARIOS = [
+  {
+    label: "考研还是就业",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我是一名大三学生，在全力考研、直接就业和先工作再读研之间犹豫。家里能支持一年生活费，九月前要定方向。我更看重长期发展，希望比较每条路线的代价、仍需核实的信息和第一步。",
+  },
+  {
+    label: "选 offer",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我即将大学毕业，有两份 offer：本地岗位月薪八千元，外地岗位月薪一万二千元。我更看重成长机会，也在意生活成本和离家距离。两周内要答复，房租、试用期条款和岗位培养安排还没有核实。请帮我比较并列出决定前要确认的事。",
+  },
+  {
+    label: "买二手车",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我刚毕业，需要通勤，正在比较买二手车、继续公共交通和暂时租车。购车总预算五万元，希望每月养车支出可控。候选车辆的事故记录、车况、保险和维修费用都还没核实。请比较各路线的成本、风险和决定前的第一步。",
+  },
+];
+
 const ACCEPT = ".pdf,.docx,.xlsx,.csv,.txt,.md,.png,.jpg,.jpeg,.webp";
 
 export function parseIntakePages(input: string, pageCount: number): number[] {
@@ -198,11 +215,13 @@ export function GuidedIntake({
   modelProviders,
   pending,
   disabled = false,
+  restoreReady = true,
   onCreated,
 }: {
   modelProviders?: ModelOption[];
   pending: boolean;
   disabled?: boolean;
+  restoreReady?: boolean;
   onCreated: (snapshot: ArenaSnapshot) => void;
 }) {
   const id = useId();
@@ -361,6 +380,7 @@ export function GuidedIntake({
   );
 
   useEffect(() => {
+    if (!restoreReady) return;
     alive.current = true;
     const epoch = ++generation.current;
     let saved: string | null = null;
@@ -409,7 +429,7 @@ export function GuidedIntake({
       alive.current = false;
       activeControllers.forEach((controller) => controller.abort());
     };
-  }, [apply, request, recoverSummary, resetSummary]);
+  }, [apply, request, recoverSummary, resetSummary, restoreReady]);
 
   // Polling only reads an explicitly started analysis; it never starts another model call.
   useEffect(() => {
@@ -494,6 +514,20 @@ export function GuidedIntake({
     modelProviders?.find((option) => option.provider === routing.provider);
   const unavailable = !provider?.configured;
   const uncertain = draft?.status === "uncertain";
+  const [dropping, setDropping] = useState(false);
+  const dragDepth = useRef(0);
+  // A file dropped beside the composer must not make the browser leave the page.
+  useEffect(() => {
+    const keep = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+    };
+    window.addEventListener("dragover", keep);
+    window.addEventListener("drop", keep);
+    return () => {
+      window.removeEventListener("dragover", keep);
+      window.removeEventListener("drop", keep);
+    };
+  }, []);
   const analyzing = analysisPending || draft?.status === "analyzing";
   const reading = draft?.attachments.some((file) => file.state === "reading") ?? false;
   const blocked =
@@ -709,11 +743,40 @@ export function GuidedIntake({
     >
       <form
         className="gi-composer"
+        data-dropping={dropping || undefined}
         onSubmit={(event) => {
           event.preventDefault();
           analyze();
         }}
+        onDragEnter={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          dragDepth.current += 1;
+          if (!blocked && !uncertain) setDropping(true);
+        }}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = blocked || uncertain ? "none" : "copy";
+        }}
+        onDragLeave={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (!dragDepth.current) setDropping(false);
+        }}
+        onDrop={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          dragDepth.current = 0;
+          setDropping(false);
+          const files = [...event.dataTransfer.files];
+          if (files.length && !blocked && !uncertain) upload(files);
+        }}
       >
+        <div className="gi-drop-veil" aria-hidden="true">
+          <Paperclip size={22} />
+          <span>松开即可添加材料</span>
+        </div>
         <label htmlFor={`${id}-goal`}>你想解决什么问题？</label>
         <textarea
           ref={goalInput}
@@ -724,12 +787,23 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="说说你的目标。"
+          placeholder="说说你的选择和顾虑，也可以把文件拖进来或直接粘贴。"
+          onPaste={(event) => {
+            const files = [...event.clipboardData.files];
+            if (!files.length) return;
+            event.preventDefault();
+            if (!blocked && !uncertain) upload(files);
+          }}
           onChange={(event) => {
             setGoal(event.target.value);
             goalRef.current = event.target.value;
           }}
-          onBlur={() => {
+          onBlur={(event) => {
+            if (
+              event.relatedTarget instanceof Element &&
+              event.relatedTarget.closest(".gi-scenarios")
+            )
+              return;
             setTimeout(() => {
               if (
                 !alive.current ||
@@ -817,6 +891,18 @@ export function GuidedIntake({
                 });
               }}
             />
+            {draft && !uncertain && (
+              <button
+                type="button"
+                className="gi-tool gi-reset"
+                aria-label="准备新问题"
+                title="准备新问题"
+                disabled={busy || analyzing || reading}
+                onClick={reset}
+              >
+                <RotateCcw size={16} />
+              </button>
+            )}
           </div>
           <button
             className="primary-button gi-analyze"
@@ -858,6 +944,29 @@ export function GuidedIntake({
           }}
         />
       </form>
+
+      {!draft && (
+        <div className="gi-scenarios" aria-label="合成场景试填">
+          <span>试填合成场景</span>
+          <div role="group" aria-label="选择一个合成场景">
+            {CHOICE_SCENARIOS.map((scenario) => (
+              <button
+                type="button"
+                key={scenario.label}
+                disabled={blocked || uncertain}
+                onClick={() => {
+                  setGoal(scenario.goal);
+                  goalRef.current = scenario.goal;
+                  goalInput.current?.focus();
+                }}
+              >
+                {scenario.label}
+              </button>
+            ))}
+          </div>
+          <small>虚构问题，仅填入输入框。你也可以输入任何其他选择。</small>
+        </div>
+      )}
 
       {unavailable && !pending && !restoring && (
         <p className="gi-config" role="status">
@@ -1010,7 +1119,7 @@ export function GuidedIntake({
                 请等待管理员核对调用状态和费用，不要重试本次请求。
               </p>
               <p>
-                你仍可查看目标和材料。切换模型不能解除暂停；准备新问题会另建草稿，原来的调用记录和预留额度仍会保留，新请求也受共享预算限制。
+                你仍可查看目标和材料。切换模型不能解除暂停。准备新问题会另建草稿，原来的调用记录和预留额度仍会保留，新请求的状态和费用会单独记录。
               </p>
               {(error || draft?.error) && <p>原始提示：{error || draft?.error}</p>}
             </div>

@@ -269,7 +269,8 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
     return route.fulfill({ json: draft });
   });
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeDisabled();
+  // The home tools stay hidden until the visitor writes something.
+  await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeHidden();
   await expect(page.getByRole("textbox", { name: "必须满足的限制", exact: true })).toBeHidden();
   await page
     .getByLabel("你想解决什么问题？", { exact: true })

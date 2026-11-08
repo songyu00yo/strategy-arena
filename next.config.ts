@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  // The dev-only route indicator sat on top of the home page's corner; production never shows it.
+  devIndicators: false,
   serverExternalPackages: [
     "node:sqlite",
     "pdfjs-dist",

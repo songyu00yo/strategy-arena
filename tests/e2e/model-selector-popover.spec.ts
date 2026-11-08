@@ -35,6 +35,8 @@ test("explicit UI fixture: floating picker keeps form geometry, arrows only focu
 }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto("/");
+  // Tools appear once there is text; one character does not start a draft.
+  await page.getByLabel("你想解决什么问题？", { exact: true }).fill("测");
   const trigger = page.getByRole("button", { name: /^选择模型，当前/ });
   await expect(trigger).toBeEnabled();
   // Resize the goal as a real user can, forcing a menu above the source with limited height.

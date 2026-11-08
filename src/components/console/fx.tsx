@@ -1,9 +1,10 @@
 "use client";
+import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
-import { nameOf, outputOf, type Beat } from "./beats";
-import { Chars, Decode, Dust, reducedMotion, ROUTE_COLOR } from "./effects";
+import { latestShownRevision, nameOf, outputOf, type Beat } from "./beats";
+import { Decode, reducedMotion, ROUTE_COLOR } from "./effects";
 import { STAGE_LABELS, type Stage } from "@/lib/contracts";
 import { verdictLabel } from "@/lib/verdict-label";
 
@@ -12,214 +13,42 @@ import { createMotionLoop, createMotionScope, useReducedMotion } from "./motion-
 const reduced = reducedMotion;
 
 /** Cold open: the question on black, what this game holds, then a shutter opens on the room. */
-export function Intro({
-  version,
-  events,
-  demo,
-  onReveal,
-  onDone,
-}: {
-  version: ArenaVersion;
-  events: ArenaEvent[];
-  demo: boolean;
-  onReveal: () => void;
-  onDone: () => void;
-}) {
-  const reducePreference = useReducedMotion();
-  const lines = [
-    `${version.strategies.length} 条路线`,
-    `${version.attacks.length} 次质疑`,
-    `${version.evidence.length} 项证据`,
-    `${events.length} 条步骤记录`,
-    demo
-      ? "预设演示，未调用模型"
-      : version.modelSelection
-        ? `同一模型 ${version.modelSelection.modelId} 分成五个角色`
-        : "早期记录：模型未记录",
-  ].filter((line) => !line.startsWith("0 "));
-  const [count, setCount] = useState(0);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (reducedMotion()) {
-      onReveal();
-      return onDone();
-    }
-    const scope = createMotionScope();
-    if (count < lines.length) {
-      scope.later(count === 0 ? 800 : 130, () => setCount(count + 1));
-      return () => scope.dispose();
-    }
-    scope.later(320, () => {
-      onReveal();
-      const open =
-        box.current &&
-        scope.animate(
-          box.current,
-          [{ clipPath: "inset(0 0 0 0)" }, { clipPath: "inset(50% 0 50% 0)" }],
-          { duration: 520, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
-        );
-      if (open) open.onfinish = onDone;
-      else onDone();
-    });
-    return () => scope.dispose();
-  }, [count, lines.length, onDone, onReveal, reducePreference]);
-  useEffect(() => {
-    const skip = () => {
-      onReveal();
-      onDone();
-    };
-    addEventListener("keydown", skip, { once: true });
-    addEventListener("mousedown", skip, { once: true });
-    return () => {
-      removeEventListener("keydown", skip);
-      removeEventListener("mousedown", skip);
-    };
-  }, [onDone, onReveal]);
-  return (
-    <div className="c-intro" ref={box} aria-hidden="true">
-      <Dust />
-      <p className="q">
-        <Chars text={version.challenge.goal} active />
-      </p>
-      <ul>
-        {lines.slice(0, count).map((line) => (
-          <li key={line}>
-            <Decode text={line} active />
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-const emberSets = new Map<string, string[]>();
-const EMBERS = (route: string | null) => {
-  const key = route ?? "none";
-  let set = emberSets.get(key);
-  if (!set) {
-    set = [ROUTE_COLOR[route ?? ""] ?? "255,255,255", "120,130,150", "255,175,60"];
-    emberSets.set(key, set);
-  }
-  return set;
-};
-
-const CHAPTER: Record<Stage, string> = {
-  propose: "提案",
-  attack: "质疑",
-  verify: "核验",
-  revise: "修订",
-  judge: "裁决",
-};
-
-/** The stage word lands huge, then flies up and becomes its label on the timeline. */
-export function Chapter({ stage }: { stage: Stage }) {
-  const reducePreference = useReducedMotion();
-  const word = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const el = word.current;
-    if (!el || reduced()) return;
-    const scope = createMotionScope();
-    scope.later(360, () => {
-      const to = document.querySelector(".c-time .seg.here span")?.getBoundingClientRect();
-      const from = el.getBoundingClientRect();
-      if (!to) return;
-      const scale = Math.max(0.04, to.height / from.height);
-      scope.animate(
-        el,
-        [
-          { transform: "none", opacity: 1 },
-          {
-            transform: `translate(${to.left + to.width / 2 - (from.left + from.width / 2)}px,${
-              to.top + to.height / 2 - (from.top + from.height / 2)
-            }px) scale(${scale})`,
-            opacity: 0,
-          },
-        ],
-        { duration: 420, easing: "cubic-bezier(.7,0,.15,1)", fill: "forwards" },
-      );
-    });
-    return () => scope.dispose();
-  }, [reducePreference]);
-  if (reducePreference) return null;
-  return (
-    <div className="c-chapter" aria-hidden="true">
-      <b ref={word}>
-        <Chars text={CHAPTER[stage]} active />
-      </b>
-    </div>
-  );
-}
-
-/** The verdict lands: black bursts out of the chosen board, then folds into the verdict panel. */
+/** The verdict lands on the page, not over it: a vermilion seal is pressed onto the chosen board. */
 export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () => void }) {
   const reducePreference = useReducedMotion();
-  const box = useRef<HTMLDivElement>(null);
+  const seal = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = box.current;
-    if (!el || reducedMotion()) return onDone();
-    const pick = document
+    const el = seal.current;
+    const board = document
       .querySelector(`[data-board="${verdict.preferred ?? "B"}"]`)
       ?.getBoundingClientRect();
+    if (!el || !board || reducedMotion()) return onDone();
+    el.style.left = `${board.left + board.width * 0.62}px`;
+    el.style.top = `${board.top + Math.min(board.height * 0.42, 150)}px`;
     const scope = createMotionScope();
-    const x = pick ? pick.left + pick.width / 2 : innerWidth / 2;
-    const y = pick ? pick.top + pick.height / 2 : innerHeight / 2;
-    const entrance = scope.animate(
+    const press = scope.animate(
       el,
       [
-        { clipPath: `circle(0px at ${x}px ${y}px)` },
-        { clipPath: `circle(150vmax at ${x}px ${y}px)` },
+        { transform: "translate(-50%,-50%) rotate(-14deg) scale(2.2)", opacity: 0 },
+        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.55 },
+        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.85 },
+        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 0 },
       ],
-      { duration: 600, delay: 350, easing: "cubic-bezier(.7,0,.2,1)", fill: "both" },
+      { duration: 2600, delay: 200, easing: "cubic-bezier(.19,1,.22,1)", fill: "both" },
     );
-    let closing: Animation | undefined;
-    const close = () => {
-      if (closing) return;
-      const panel = document.querySelector(".c-result")?.getBoundingClientRect();
-      const inset = panel
-        ? `inset(${panel.top}px ${innerWidth - panel.right}px ${innerHeight - panel.bottom}px ${panel.left}px)`
-        : "inset(50%)";
-      const currentClip = getComputedStyle(el).clipPath;
-      const entered = entrance.playState === "finished";
-      const panelX = panel ? panel.left + panel.width / 2 : innerWidth / 2;
-      const panelY = panel ? panel.top + panel.height / 2 : innerHeight / 2;
-      const endClip = entered ? inset : `circle(0px at ${panelX}px ${panelY}px)`;
-      entrance.cancel();
-      closing = scope.animate(
-        el,
-        [
-          { clipPath: entered ? "inset(0px)" : currentClip, opacity: 1 },
-          { clipPath: endClip, opacity: 1, offset: 0.85 },
-          { clipPath: endClip, opacity: 0 },
-        ],
-        { duration: 800, easing: "cubic-bezier(.76,0,.24,1)", fill: "forwards" },
-      );
-      closing.onfinish = onDone;
-    };
-    scope.later(2500, close);
-    addEventListener("keydown", close);
+    press.onfinish = onDone;
+    const skip = () => press.finish();
+    addEventListener("keydown", skip);
     return () => {
+      removeEventListener("keydown", skip);
       scope.dispose();
-      removeEventListener("keydown", close);
     };
-    // Runs once: a poll that refreshes the record must not restart the verdict's timing.
+    // Runs once: a poll that refreshes the record must not restart the seal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reducePreference]);
   return (
-    <div className="c-film" ref={box} aria-hidden="true">
-      <Dust embers={EMBERS(verdict.preferred)} />
-      <small>
-        <Chars text={verdictLabel(verdict)} active delay={520} />
-      </small>
-      <div className="head">
-        <Chars text={verdict.headline} active delay={650} />
-      </div>
-      <ul>
-        {verdict.conditions.slice(0, 2).map((line, i) => (
-          <li key={line}>
-            <Decode text={line} active delay={1000 + i * 150} />
-          </li>
-        ))}
-      </ul>
+    <div className="c-seal" ref={seal} aria-hidden="true">
+      <b>{verdictLabel(verdict)}</b>
     </div>
   );
 }
@@ -239,7 +68,12 @@ function linesOf(version: ArenaVersion, beat: Beat): string[] {
   let lines: string[] = [];
   if (beat.strategy) {
     const s = beat.strategy;
-    lines = [s.thesis, ...s.steps, ...s.claims.map((c) => `${c.id}：${c.text}`), s.firstAction];
+    lines = [
+      s.thesis,
+      ...s.steps,
+      ...s.claims.map((c) => `${claimLabel(version, s.id, c.id)} · ${c.text}`),
+      s.firstAction,
+    ];
   } else if (beat.stage === "attack" && beat.attack) {
     const a = beat.attack;
     lines = [`原话：${a.claimQuote}`, `质疑：${a.reason}`, a.impact, `核验：${a.verification}`];
@@ -276,7 +110,7 @@ function linesOf(version: ArenaVersion, beat: Beat): string[] {
       ...v.nextActions.map((c) => `下一步：${c}`),
     ];
   }
-  return lines;
+  return lines.map((line) => readableClaimText(version, line));
 }
 
 /** The wall shows only what has happened so far: real proposals, challenges, checks and revisions. */
@@ -304,7 +138,7 @@ function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[])
         row: WALL_ROW[event.stage],
         title: "模型结构化输出",
         meta: event.actor ?? "",
-        lines: JSON.stringify(output, null, 1).split("\n"),
+        lines: readableClaimText(version, JSON.stringify(output, null, 1)).split("\n"),
       });
   }
   return records.slice(-WALL_LIMIT);
@@ -479,8 +313,14 @@ export function RecordWall({
 }
 
 /** The record behind the step in front, so the card carries substance and not only a caption. */
-function detailsOf(beat: Beat): string[] {
-  if (beat.strategy) return beat.strategy.claims.slice(0, 3).map((c) => `${c.id}：${c.text}`);
+function detailsOf(version: ArenaVersion, beat: Beat): string[] {
+  if (beat.strategy)
+    return beat.strategy.claims
+      .slice(0, 3)
+      .map(
+        (c) =>
+          `${claimLabel(version, beat.strategy!.id, c.id)} · ${readableClaimText(version, c.text)}`,
+      );
   if (beat.revision)
     return [
       ...(beat.changes ?? []).map((c) => `改动：${c}`),
@@ -538,7 +378,12 @@ export function ChainDeck({
         },
         { translate: "0 0", rotate: "y 0deg", scale: "1", opacity: 1 },
       ],
-      { duration: 520, delay: lead + 40, easing: "cubic-bezier(.16,1.05,.3,1)", fill: "backwards" },
+      {
+        duration: 520,
+        delay: lead + 40,
+        easing: "cubic-bezier(0.19, 1, 0.22, 1)",
+        fill: "backwards",
+      },
     );
     return () => scope.dispose();
     // Only a new step brings a card in.
@@ -555,9 +400,9 @@ export function ChainDeck({
   const checked = !!attack && (reviewing || seenIds.has(`v:${attack.id}`));
   const response =
     attack &&
-    known
-      .find((b) => b.id === `r:${attack.targetStrategyId}`)
-      ?.revision?.responses.find((r) => r.attackId === attack.id);
+    latestShownRevision(known, attack.targetStrategyId)?.revision?.responses.find(
+      (r) => r.attackId === attack.id,
+    );
   const evidence = attack ? version.evidence.filter((e) => e.attackId === attack.id) : [];
   const rows: [string, string][] = attack
     ? [
@@ -705,7 +550,7 @@ export function ChainDeck({
                 <p>{beat.plain}</p>
                 {isFront && (
                   <ul>
-                    {detailsOf(beat).map((line) => (
+                    {detailsOf(version, beat).map((line) => (
                       <li key={line}>{line}</li>
                     ))}
                   </ul>

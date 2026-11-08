@@ -47,7 +47,11 @@
 }
 @media (max-width: 650px) {
   .g-focus-stage {
-    padding: 42px 14px;
+    padding: 12px 14px;
+  }
+  .g-focus-input-wrapper {
+    opacity: 1;
+    transform: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -36,6 +36,7 @@ export interface MaterialChunk {
 }
 export function chunkMaterials(materials: string, sources: MaterialSource[] = []): MaterialChunk[] {
   const chunks: MaterialChunk[] = [];
+  const materialHash = createHash("sha256").update(materials).digest("hex").slice(0, 10);
   const spans = materialSpans(materials, sources);
   const pattern = /[^\r\n]+/g;
   for (const match of materials.matchAll(pattern)) {
@@ -55,7 +56,7 @@ export function chunkMaterials(materials: string, sources: MaterialSource[] = []
         const text = materials.slice(start, Math.min(start + 500, boundaries[segment + 1]));
         if (!text.trim()) continue;
         chunks.push({
-          id: `M-${createHash("sha256").update(materials).digest("hex").slice(0, 10)}-${start}`,
+          id: `M-${materialHash}-${start}`,
           text,
           start,
           end: start + text.length,
@@ -84,28 +85,42 @@ export function searchMaterials(
   query: string,
   sources: MaterialSource[] = [],
 ): MaterialChunk[] {
-  const chunks = chunkMaterials(materials, sources);
-  if (!chunks.length) return [];
-  const docs = chunks.map((c) => terms(c.text));
-  const queryTerms = [...new Set(terms(query))];
-  const avg = docs.reduce((a, d) => a + d.length, 0) / docs.length || 1;
-  const ranked = chunks.map((chunk, index) => {
-    const doc = docs[index];
-    let score = 0;
-    for (const term of queryTerms) {
-      const tf = doc.filter((t) => t === term).length;
-      if (!tf) continue;
-      const df = docs.filter((d) => d.includes(term)).length;
-      const idf = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));
-      score += (idf * (tf * 2.2)) / (tf + 1.2 * (0.25 + (0.75 * doc.length) / avg));
-    }
-    return { chunk, score };
-  });
-  return ranked
-    .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score || a.chunk.start - b.chunk.start)
+  return rankMaterialChunks(chunkMaterials(materials, sources), query)
     .slice(0, 4)
-    .map((r) => r.chunk);
+    .map((entry) => entry.chunk);
+}
+
+/** Shared BM25 ranking for the historical material view and frozen version corpora. */
+export function rankMaterialChunks<T extends Pick<MaterialChunk, "text" | "start" | "id">>(
+  chunks: T[],
+  query: string,
+): { chunk: T; score: number }[] {
+  if (!chunks.length) return [];
+  const docs = chunks.map((chunk) => terms(chunk.text));
+  const queryTerms = [...new Set(terms(query))];
+  const averageLength = docs.reduce((sum, doc) => sum + doc.length, 0) / docs.length || 1;
+  return chunks
+    .map((chunk, index) => {
+      const doc = docs[index];
+      let score = 0;
+      for (const term of queryTerms) {
+        const frequency = doc.filter((token) => token === term).length;
+        if (!frequency) continue;
+        const documentFrequency = docs.filter((tokens) => tokens.includes(term)).length;
+        const inverseFrequency = Math.log(
+          1 + (docs.length - documentFrequency + 0.5) / (documentFrequency + 0.5),
+        );
+        score +=
+          (inverseFrequency * (frequency * 2.2)) /
+          (frequency + 1.2 * (0.25 + (0.75 * doc.length) / averageLength));
+      }
+      return { chunk, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score || a.chunk.start - b.chunk.start || a.chunk.id.localeCompare(b.chunk.id),
+    );
 }
 
 /** Tiny arithmetic grammar. No eval, Function, identifiers, networking or shell. % is remainder. */
@@ -174,12 +189,14 @@ const materialLabels = {
   model_transcription: "模型转录，待核对原文件",
   model_interpretation: "模型解读，非原文",
   unknown: "旧材料片段，来源方式未记录",
+  web: "公开网页，内容待核实",
 } as const;
 
 /** Retrieval confirms that text exists, not that an interpretation is independently verified. */
 function usableEvidence(evidence: Evidence) {
   return (
     (evidence.status === "found" || evidence.status === "calculated") &&
+    (evidence.provenance !== "web" || evidence.tool === "read_web") &&
     !["model_transcription", "model_interpretation", "unknown"].includes(evidence.provenance ?? "")
   );
 }
@@ -201,6 +218,15 @@ export function executeAttackTools(
       },
     ];
   return attack.requests.flatMap<Evidence>((request) => {
+    if (request.tool === "search_web" || request.tool === "read_web")
+      return {
+        ...baseEvidence(attack.id),
+        tool: request.tool,
+        status: "unavailable",
+        title: "联网核验需要异步工具执行器",
+        content: "此次同步材料核验未调用联网工具。",
+        source: "协议检查：未执行联网调用",
+      } satisfies Evidence;
     if (request.tool === "search_materials") {
       const results = searchMaterials(materials, request.query, sources);
       if (!results.length)
@@ -338,6 +364,9 @@ function userText(challenge: Challenge, sources: MaterialSource[]) {
     challenge.constraints,
     challenge.preferences,
     originalUserText(challenge.materials, sources),
+    ...sources
+      .filter((source) => source.origin === "document" && !source.interpretation)
+      .map((source) => source.text),
     ...challenge.options,
   ].join("\n");
 }
@@ -581,7 +610,7 @@ export function validateVerdict(
     assertExplicitArithmetic(field);
   }
   const strategies = input.strategies.map((s) =>
-    normalizeCostPlan(input.revisions.find((r) => r.strategyId === s.id)?.strategy || s),
+    normalizeCostPlan(input.revisions.findLast((r) => r.strategyId === s.id)?.strategy || s),
   );
   const successful = new Set(input.evidence.filter(usableEvidence).map((e) => e.id));
   if (verdict.evidenceIds.some((id) => !input.evidence.some((e) => e.id === id)))

@@ -40,7 +40,6 @@
 }
 .console-shell .modal.modal-side::backdrop {
   background: rgb(20 28 42 / 0.08);
-  backdrop-filter: none;
 }
 .modal-side .modal-heading {
   margin-bottom: 12px;
@@ -60,7 +59,7 @@
   bottom: -16px;
   z-index: 2;
   padding: 12px 0 8px;
-  background: #fff;
+  background: var(--paper, #fff);
   border-top: 1px solid #e8ebef;
 }
 .modal-side .field textarea {

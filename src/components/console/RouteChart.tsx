@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import type { ArenaVersion } from "@/lib/contracts";
 import { comparisonMeta } from "@/components/status";
 import { ROUTE_COLOR } from "./effects";
-import type { Beat } from "./beats";
+import { latestShownRevision, type Beat } from "./beats";
 
 const ROUTES = ["A", "B", "C"] as const;
 
@@ -53,9 +53,7 @@ export function RouteChart({
   const verdict = seen.has("judge") ? version.verdict : null;
   const routes = ROUTES.map((id) => {
     const proposal = seen.has(`p:${id}`) ? version.strategies.find((s) => s.id === id) : undefined;
-    const revised = seen.has(`r:${id}`)
-      ? version.revisions.find((r) => r.strategyId === id)?.strategy
-      : undefined;
+    const revised = latestShownRevision(shown, id)?.revision?.strategy;
     const view = revised ?? proposal;
     const taken = attacks.filter((a) => a.targetStrategyId === id);
     const state = (status: string) =>
@@ -77,10 +75,8 @@ export function RouteChart({
     budget,
   );
   const jumpTo = (id: string) => {
-    const target = ["r:", "p:"]
-      .map((prefix) => shown.findIndex((b) => b.id === `${prefix}${id}`))
-      .find((i) => i >= 0);
-    if (target !== undefined) onStep(target);
+    const target = latestShownRevision(shown, id) ?? shown.find((beat) => beat.id === `p:${id}`);
+    if (target) onStep(shown.indexOf(target));
   };
   return (
     <section className="c-compare" aria-label="三路对比">

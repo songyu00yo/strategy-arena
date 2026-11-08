@@ -66,6 +66,9 @@ import { validateRevision, validateVerdict } from "../src/lib/server/tools";
 import { startArenaWorker, stopArenaWorker } from "../src/lib/server/runner";
 import { stepContext } from "../src/lib/step-context";
 import { advanceFixture, fixtureSnapshot } from "./e2e/ui.fixture";
+import { POST as createArenaRequest } from "../src/app/api/arenas/route";
+import { POST as newVersionRequest } from "../src/app/api/arenas/[id]/versions/route";
+import { POST as advanceArenaRequest } from "../src/app/api/arenas/[id]/advance/route";
 
 const challenge = ChallengeSchema.parse({ goal: "在两个月内完成一门入门课程并交付项目" });
 function result(role = "A"): ModelResult<Strategy> {
@@ -97,6 +100,7 @@ beforeEach(() => {
   stopArenaWorker();
   closeDb();
   vi.stubEnv("ARENA_DATABASE_PATH", ":memory:");
+  vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", undefined);
   vi.stubEnv("ARENA_RUN_BUDGET_CNY", "1.5");
   vi.stubEnv("ARENA_GLOBAL_BUDGET_CNY", "90");
   vi.stubEnv("ARENA_DAILY_VISITOR_LIMIT", "6");
@@ -315,6 +319,57 @@ describe("durable execution and ownership", () => {
     expect(repaired.versions[0].costCny).toBe(0.08);
     expect(repaired.events.filter((e) => e.type === "protocol_repair_scheduled")).toHaveLength(1);
   });
+  it("passes all local cost diagnostics beyond 500 characters into one paid repair", async () => {
+    const source = "未来24周生活费每月2000元，6个月12000元。已有运行环境。";
+    const arena = createArena({ ...challenge, materials: source, budget: 18000 }, "owner");
+    const malformed = result();
+    malformed.value.estimatedCost = null;
+    malformed.value.costPlan = {
+      complete: false,
+      items: [
+        {
+          id: "living",
+          label: "生活费",
+          amount: 12000,
+          basis: "user",
+          quote: "每月2000元，6个月12000元",
+        },
+        { id: "runtime", label: "运行环境", amount: 0, basis: "user", quote: "已有运行环境" },
+      ],
+    };
+    malformed.value.steps = ["确认累计总额不超过18000元后再作不可撤回承诺。"];
+    const corrected = structuredClone(malformed);
+    corrected.value.costPlan!.items[0].quote = "未来24周生活费每月2000元，6个月12000元";
+    corrected.value.costPlan!.items[1] = {
+      id: "runtime",
+      label: "运行环境费用待核实",
+      amount: null,
+      basis: "unknown",
+      quote: "",
+    };
+    corrected.value.steps = ["完整费用清单累计总额已核实且不超过18000元后才可正式执行。"];
+    model.generate.mockResolvedValueOnce(malformed).mockImplementationOnce(async (input) => {
+      expect(input.repairFeedback.length).toBeGreaterThan(500);
+      expect(input.repairFeedback).toContain("costPlan.items[0]（id=living）");
+      expect(input.repairFeedback).toContain("costPlan.items[1]（id=runtime）");
+      expect(input.repairFeedback).toContain("steps[0] 费用正文格式");
+      expect(JSON.parse(input.rejectedOutput)).toEqual(malformed.value);
+      return corrected;
+    });
+    const failed = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(failed.versions[0].strategies).toHaveLength(0);
+    expect(
+      failed.events.filter((entry) => entry.type === "protocol_repair_scheduled"),
+    ).toHaveLength(1);
+    const repaired = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(model.generate).toHaveBeenCalledTimes(2);
+    expect(repaired.versions[0]).toMatchObject({ status: "ready", costCny: 0.08, reservedCny: 0 });
+    expect(repaired.versions[0].strategies).toHaveLength(1);
+    expect(repaired.steps.filter((step) => step.status === "failed")).toHaveLength(1);
+    expect(
+      repaired.events.filter((entry) => entry.type === "protocol_repair_scheduled"),
+    ).toHaveLength(1);
+  });
   it("bounds known-format repair to one attempt and charges both failed responses", async () => {
     const arena = createArena(challenge, "owner");
     model.generate.mockImplementation(async () => result("B"));
@@ -324,7 +379,7 @@ describe("durable execution and ownership", () => {
     await advanceArena(arena.id, "owner", arena.activeVersionId);
     expect(model.generate).toHaveBeenCalledTimes(2);
   });
-  it("treats stale leases as uncertain, but can settle a late response exactly once", async () => {
+  it("settles a late expired response exactly once while keeping later calls stopped", async () => {
     const arena = createArena(challenge, "owner");
     let resolve!: (value: ModelResult<Strategy>) => void;
     model.generate.mockImplementationOnce(
@@ -345,7 +400,16 @@ describe("durable execution and ownership", () => {
     expect(model.generate).toHaveBeenCalledTimes(1);
     resolve(result());
     const settled = await first;
-    expect(settled.versions[0]).toMatchObject({ status: "ready", reservedCny: 0, costCny: 0.04 });
+    expect(settled.versions[0]).toMatchObject({ status: "paused", reservedCny: 0, costCny: 0.04 });
+    expect(settled.versions[0].strategies).toHaveLength(1);
+    expect(settled.events.filter((entry) => entry.type === "step_uncertain")).toHaveLength(1);
+    expect(settled.steps.find((step) => step.status === "completed")?.error).toContain(
+      "超出记录期限",
+    );
+    const stopped = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(stopped.versions[0]).toMatchObject({ status: "paused", reservedCny: 0, costCny: 0.04 });
+    expect(stopped.versions[0].strategies).toHaveLength(1);
+    expect(model.generate).toHaveBeenCalledTimes(1);
   });
   it("settles an old in-flight response only into its original superseded version", async () => {
     const arena = createArena(challenge, "owner");
@@ -593,6 +657,128 @@ describe("budgets and limits", () => {
     for (let i = 0; i < 5; i++) newVersion(arena.id, "owner", challenge, `重赛${i}`);
     expect(() => newVersion(arena.id, "owner", challenge, "超额重赛")).toThrow("次数已用完");
     expect(getArena(arena.id, "owner").versions).toHaveLength(6);
+  });
+  it("serves independent friend identities past daily and spending quotas through normal API routes", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    vi.stubEnv("ARENA_RUN_BUDGET_CNY", "0.000001");
+    vi.stubEnv("ARENA_GLOBAL_BUDGET_CNY", "0.000001");
+    const request = (path: string, body: unknown, cookie = "") =>
+      new Request(`http://localhost:3100${path}`, {
+        method: "POST",
+        headers: { Origin: "http://localhost:3100", "Content-Type": "application/json", cookie },
+        body: JSON.stringify(body),
+      });
+    const owners: string[] = [];
+    for (let friend = 0; friend < 2; friend++) {
+      let cookie = "";
+      let arena!: ReturnType<typeof createArena>;
+      for (let index = 0; index < 7; index++) {
+        const response = await createArenaRequest(
+          request("/api/arenas", { ...challenge, executionMode: "fixed" }, cookie),
+        );
+        expect(response.status).toBe(201);
+        cookie ||= response.headers.get("set-cookie")!.split(";", 1)[0];
+        arena = await response.json();
+        expect(arena.versions[0].challenge).toEqual(challenge);
+      }
+      const owner = ownerFromRequest(request("/api/arenas", {}, cookie))!;
+      owners.push(owner);
+      const context = { params: Promise.resolve({ id: arena.id }) };
+      const advanced = await advanceArenaRequest(
+        request(`/api/arenas/${arena.id}/advance`, { versionId: arena.activeVersionId }, cookie),
+        context,
+      );
+      expect(advanced.status).toBe(200);
+      const rematched = await newVersionRequest(
+        request(
+          `/api/arenas/${arena.id}/versions`,
+          { challenge, changeReason: "朋友补充条件后重比", executionMode: "fixed" },
+          cookie,
+        ),
+        context,
+      );
+      expect(rematched.status).toBe(200);
+      const rematch = (await rematched.json()) as ReturnType<typeof createArena>;
+      const second = await advanceArenaRequest(
+        request(`/api/arenas/${arena.id}/advance`, { versionId: rematch.activeVersionId }, cookie),
+        context,
+      );
+      expect(second.status).toBe(200);
+      expect(getArena(arena.id, owner).versions.map((version) => version.costCny)).toEqual([
+        0.04, 0.04,
+      ]);
+      expect(db().prepare("SELECT count FROM visitor_runs WHERE owner=?").get(owner)).toMatchObject(
+        {
+          count: 8,
+        },
+      );
+      vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "true");
+      const limited = await createArenaRequest(
+        request("/api/arenas", { ...challenge, executionMode: "fixed" }, cookie),
+      );
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ code: "DAILY_LIMIT" });
+      vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    }
+    expect(new Set(owners).size).toBe(2);
+    expect(model.generate).toHaveBeenCalledTimes(4);
+  });
+  it("retains uncertain reservations, no-replay and global concurrency with usage quotas disabled", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    vi.stubEnv("ARENA_MAX_CONCURRENT_CALLS", "1");
+    const arena = createArena(challenge, "owner");
+    const other = createArena(challenge, "other");
+    model.generate.mockRejectedValueOnce(new ModelCallError("请求结果未知", true));
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(getVersion(arena.activeVersionId)).toMatchObject({
+      status: "uncertain",
+      reservedCny: 0.2,
+    });
+    await expect(advanceArena(other.id, "other", other.activeVersionId)).rejects.toMatchObject({
+      code: "CONCURRENCY_LIMIT",
+    });
+    expect(model.generate).toHaveBeenCalledTimes(1);
+  });
+  it("still rejects invalid cost configuration with usage quotas disabled", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    model.estimate = Number.NaN;
+    const arena = createArena(challenge, "owner");
+    await expect(advanceArena(arena.id, "owner", arena.activeVersionId)).rejects.toMatchObject({
+      code: "INVALID_COST_CONFIG",
+    });
+    expect(model.generate).not.toHaveBeenCalled();
+  });
+  it("keeps the user's decision budget and time constraints with usage quotas disabled", () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    const checked = validateVerdict(
+      {
+        outcome: "recommendation",
+        preferred: "A",
+        headline: "先核实条件",
+        rationale: "合成估计供核实",
+        conditions: [],
+        uncertainties: [],
+        nextActions: ["核实实际投入"],
+        exitCondition: "超限则退出",
+        evidenceIds: [],
+        comparisons: [],
+        attackFindings: [],
+      },
+      {
+        challenge: { ...challenge, budget: 1, timeHours: 1 },
+        role: "judge",
+        strategies: [{ ...result().value, estimatedCost: 2, estimatedHours: 2 }],
+        attacks: [],
+        evidence: [],
+        revisions: [],
+        userChallenges: [],
+      },
+    );
+    expect(checked.comparisons).toEqual([
+      expect.objectContaining({ strategyId: "A", status: "violates" }),
+    ]);
+    expect(checked.preferred).toBeNull();
   });
   it("fails explicitly without a model key and makes no model request", async () => {
     model.configured = false;

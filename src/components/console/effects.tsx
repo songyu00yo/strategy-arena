@@ -4,7 +4,6 @@ import { recordMotionOrigin } from "../motion-origin";
 import {
   createMotionLoop,
   createMotionScope,
-  motionNow,
   useReducedMotion,
   type MotionOrigin,
 } from "./motion-runtime";
@@ -13,20 +12,20 @@ export const reducedMotion = () =>
   typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export const STATE_COLOR = {
-  attack: "255,255,255",
-  pending: "120,190,255",
-  supported: "255,70,45",
-  refuted: "50,225,140",
-  unresolved: "255,190,50",
+  attack: "21,19,15",
+  pending: "92,86,74",
+  supported: "200,51,31",
+  refuted: "47,101,73",
+  unresolved: "154,106,28",
 };
-/** Each route's light. Used only as light, never to carry a meaning of its own. */
+/** Each route's ink: printed indigo, vermilion and ochre. Never carries a meaning of its own. */
 export const ROUTE_COLOR: Record<string, string> = {
-  A: "70,130,255",
-  B: "255,60,150",
-  C: "255,175,40",
+  A: "38,69,122",
+  B: "200,51,31",
+  C: "154,106,28",
 };
 
-type Spark = {
+type Blot = {
   x: number;
   y: number;
   vx: number;
@@ -35,11 +34,10 @@ type Spark = {
   max: number;
   size: number;
   color: string;
-  drag: number;
-  rise: number;
+  grow: number;
 };
 type Ring = { x: number; y: number; life: number; max: number; reach: number; color: string };
-type Stream = {
+type Stroke = {
   x0: number;
   y0: number;
   x1: number;
@@ -48,22 +46,24 @@ type Stream = {
   color: string;
   age: number;
   dur: number;
+  width: number;
 };
-type Mote = { x: number; y: number; z: number; phase: number };
 
-/** A light layer: comet trails, charges, impacts, embers and drifting dust. It only decorates recorded steps. */
+const inkEase = (k: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, k)), 4);
+
+/**
+ * An ink layer: brush strokes that are drawn between parts of the page, blots where they land,
+ * and a strike when old text is replaced. Solid ink only, no glow. It only decorates recorded steps.
+ */
 export class Sparks {
-  private sparks: Spark[] = [];
+  private blots: Blot[] = [];
   private rings: Ring[] = [];
-  private motes: Mote[] = [];
-  private streams: Stream[] = [];
-  private sprites = new Map<string, HTMLCanvasElement>();
+  private strokes: Stroke[] = [];
   private context: CanvasRenderingContext2D | null;
   private width = 0;
   private height = 0;
-  private time = 0;
-  dark = false;
   private blank = false;
+  dark = false;
   dust = 0;
 
   constructor(
@@ -71,35 +71,12 @@ export class Sparks {
     private wake: () => void = () => {},
   ) {
     this.context = canvas.getContext("2d");
-    for (let i = 0; i < 60; i++)
-      this.motes.push({
-        x: Math.random(),
-        y: Math.random(),
-        z: 0.25 + Math.random() * 0.75,
-        phase: Math.random() * 6.28,
-      });
-  }
-
-  private sprite(color: string) {
-    let sprite = this.sprites.get(color);
-    if (sprite) return sprite;
-    sprite = document.createElement("canvas");
-    sprite.width = sprite.height = 48;
-    const c = sprite.getContext("2d")!;
-    const g = c.createRadialGradient(24, 24, 0, 24, 24, 24);
-    g.addColorStop(0, `rgba(${color},1)`);
-    g.addColorStop(0.22, `rgba(${color},.55)`);
-    g.addColorStop(1, `rgba(${color},0)`);
-    c.fillStyle = g;
-    c.fillRect(0, 0, 48, 48);
-    this.sprites.set(color, sprite);
-    return sprite;
   }
 
   fit(width: number, height: number) {
     this.width = width;
     this.height = height;
-    // Soft light needs no retina pixels, and a full-screen layer at 2x is what costs frames.
+    // Ink at 1x is soft enough; a full-screen 2x layer is what costs frames.
     const ratio = 1;
     if (
       this.canvas.width === Math.round(width * ratio) &&
@@ -111,7 +88,7 @@ export class Sparks {
     this.context?.setTransform(ratio, 0, 0, ratio, 0, 0);
   }
 
-  private add(
+  private blot(
     x: number,
     y: number,
     vx: number,
@@ -119,177 +96,163 @@ export class Sparks {
     max: number,
     size: number,
     color: string,
-    drag = 0.95,
-    rise = 0,
+    grow = 1,
   ) {
-    if (this.sparks.length > 1400) return;
-    this.sparks.push({ x, y, vx, vy, life: 0, max, size, color, drag, rise });
+    if (this.blots.length > 260) return;
+    this.blots.push({ x, y, vx, vy, life: 0, max, size, color, grow });
     this.wake();
   }
 
-  /** Energy travelling from one part of the screen to another, ending in a small ring. */
+  /** A brush stroke from one part of the page to another, drawn like a pen moving across paper. */
   stream(x0: number, y0: number, x1: number, y1: number, color: string, ms: number) {
-    const bow = (Math.random() < 0.5 ? -1 : 1) * Math.min(150, Math.hypot(x1 - x0, y1 - y0) * 0.25);
-    this.streams.push({ x0, y0, x1, y1, bow, color, age: 0, dur: ms / 1000 });
+    const bow = (Math.random() < 0.5 ? -1 : 1) * Math.min(90, Math.hypot(x1 - x0, y1 - y0) * 0.16);
+    this.strokes.push({ x0, y0, x1, y1, bow, color, age: 0, dur: ms / 1000, width: 2.4 });
     this.wake();
   }
 
+  /** A moving point leaves a fine ink trail behind it. */
   comet(x: number, y: number, color: string) {
-    for (let i = 0; i < 4; i++)
-      this.add(
-        x + (Math.random() - 0.5) * 7,
-        y + (Math.random() - 0.5) * 7,
-        (Math.random() - 0.5) * 46,
-        (Math.random() - 0.5) * 46,
-        0.45 + Math.random() * 0.7,
-        3 + Math.random() * 8,
-        color,
-      );
-    this.add(x, y, 0, 0, 0.26, 26, color);
+    this.blot(x, y, 0, 0, 0.42, 2.2 + Math.random() * 1.2, color, 0);
   }
 
-  /** Light gathers to a point before something launches. */
+  /** Nothing gathers before a launch: ink does not glow. */
   charge(x: number, y: number, color: string) {
-    for (let i = 0; i < 2; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const r = 70 + Math.random() * 110;
-      this.add(
-        x + Math.cos(a) * r,
-        y + Math.sin(a) * r,
-        -Math.cos(a) * r * 2.5,
-        -Math.sin(a) * r * 2.5,
-        0.38,
-        4 + Math.random() * 9,
-        color,
-        1,
-      );
-    }
+    void x;
+    void y;
+    void color;
   }
 
+  /** Ink lands: a blot spreads, a fine ring opens once, a few drops fall short. */
   impact(x: number, y: number, color: string, power = 1) {
-    for (let i = 0; i < 2; i++)
-      this.rings.push({ x, y, life: -i * 0.08, max: 0.85, reach: (60 + i * 42) * power, color });
-    this.add(x, y, 0, 0, 0.26, 90 * power, color);
-    for (let i = 0; i < 46 * power; i++) {
+    this.rings.push({ x, y, life: 0, max: 0.9, reach: 34 * power + 12, color });
+    this.blot(x, y, 0, 0, 0.9, 9 * power + 4, color, 1);
+    const drops = Math.round(5 + 4 * power);
+    for (let i = 0; i < drops; i++) {
       const a = Math.random() * Math.PI * 2;
-      const speed = (40 + Math.random() * 240) * power;
-      this.add(
+      const speed = (40 + Math.random() * 90) * power;
+      this.blot(
         x,
         y,
         Math.cos(a) * speed,
         Math.sin(a) * speed,
-        0.45 + Math.random() * 0.95,
-        2 + Math.random() * 6,
+        0.7 + Math.random() * 0.5,
+        1.2 + Math.random() * 2.6,
         color,
-        0.93,
-        40,
+        0.3,
       );
     }
   }
 
-  /** A band of light rising from a line, as when old text burns away. */
+  /** Old text is struck through with one firm stroke. */
   burn(x: number, y: number, width: number, color: string) {
-    for (let i = 0; i < 30; i++)
-      this.add(
-        x + Math.random() * width,
-        y + Math.random() * 14,
-        (Math.random() - 0.5) * 60,
-        -30 - Math.random() * 170,
-        0.5 + Math.random() * 0.9,
-        3 + Math.random() * 9,
-        color,
-        0.97,
-      );
+    this.strokes.push({
+      x0: x,
+      y0: y + 9,
+      x1: x + width,
+      y1: y + 9 + (Math.random() - 0.5) * 3,
+      bow: 1.5,
+      color,
+      age: 0,
+      dur: 0.42,
+      width: 2,
+    });
+    this.wake();
   }
 
   ember(color: string) {
-    this.add(
-      Math.random() * this.width,
-      this.height + 10,
-      (Math.random() - 0.5) * 34,
-      -60 - Math.random() * 200,
-      2 + Math.random() * 2.4,
-      3 + Math.random() * 14,
-      color,
-      0.998,
-    );
+    void color;
   }
 
   get active() {
-    return (
-      this.sparks.length > 0 || this.rings.length > 0 || this.streams.length > 0 || this.dust > 0.01
-    );
+    return this.blots.length > 0 || this.rings.length > 0 || this.strokes.length > 0;
   }
 
   clear() {
-    this.sparks = [];
+    this.blots = [];
     this.rings = [];
-    this.streams = [];
+    this.strokes = [];
     this.context?.clearRect(0, 0, this.width, this.height);
     this.blank = true;
+  }
+
+  private point(f: Stroke, t: number) {
+    const nx = -(f.y1 - f.y0);
+    const ny = f.x1 - f.x0;
+    const len = Math.hypot(nx, ny) || 1;
+    const arc = Math.sin(t * Math.PI) * f.bow;
+    return [
+      f.x0 + (f.x1 - f.x0) * t + (nx / len) * arc,
+      f.y0 + (f.y1 - f.y0) * t + (ny / len) * arc,
+    ];
   }
 
   tick(dt: number) {
     const c = this.context;
     if (!c) return;
-    this.time += dt;
-    // Nothing on screen: leave the layer alone so the compositor has no work.
-    const idle =
-      !this.sparks.length && !this.rings.length && !this.streams.length && this.dust <= 0.01;
+    const idle = !this.active;
     if (idle && this.blank) return;
     this.blank = idle;
     c.clearRect(0, 0, this.width, this.height);
-    c.globalCompositeOperation = this.dark ? "lighter" : "source-over";
-    if (this.dust > 0.01) {
-      const sprite = this.sprite(this.dark ? "190,205,235" : "60,70,90");
-      for (const m of this.motes) {
-        m.y -= dt * 0.012 * m.z;
-        if (m.y < -0.02) m.y = 1.02;
-        const x = (m.x + Math.sin(this.time * 0.22 + m.phase) * 0.018) * this.width;
-        const twinkle = 0.45 + 0.55 * Math.sin(this.time * 1.5 + m.phase * 3);
-        c.globalAlpha = this.dust * twinkle * m.z * (this.dark ? 0.5 : 0.09);
-        const size = 2.5 + m.z * 9;
-        c.drawImage(sprite, x - size / 2, m.y * this.height - size / 2, size, size);
-      }
-    }
-    this.streams = this.streams.filter((f) => {
+    c.globalCompositeOperation = "source-over";
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    // Strokes: drawn with the pen, held a moment, then the ink dries away.
+    const HOLD = 0.35;
+    const FADE = 0.55;
+    this.strokes = this.strokes.filter((f) => {
       f.age += dt;
-      const k = Math.min(1, f.age / f.dur);
-      const e = 1 - Math.pow(1 - k, 2.4);
-      const nx = -(f.y1 - f.y0);
-      const ny = f.x1 - f.x0;
-      const len = Math.hypot(nx, ny) || 1;
-      const arc = Math.sin(e * Math.PI) * f.bow;
-      const x = f.x0 + (f.x1 - f.x0) * e + (nx / len) * arc;
-      const y = f.y0 + (f.y1 - f.y0) * e + (ny / len) * arc;
-      this.comet(x, y, f.color);
-      if (k >= 1) this.rings.push({ x, y, life: 0, max: 0.55, reach: 22, color: f.color });
-      return k < 1;
+      const drawn = inkEase(f.age / f.dur);
+      const after = f.age - f.dur - HOLD;
+      const alpha = after > 0 ? Math.max(0, 1 - after / FADE) : 1;
+      const segments = 28;
+      const upto = Math.max(1, Math.round(segments * drawn));
+      let [px, py] = this.point(f, 0);
+      for (let i = 1; i <= upto; i++) {
+        const t = (i / segments) * (drawn * segments >= i ? 1 : drawn);
+        const [x, y] = this.point(f, Math.min(t, drawn));
+        // A brush swells in the middle of a stroke and lifts at both ends.
+        const pressure = Math.pow(Math.sin((i / segments) * Math.PI), 0.7);
+        c.globalAlpha = alpha * 0.82;
+        c.strokeStyle = `rgb(${f.color})`;
+        c.lineWidth = 0.6 + f.width * pressure;
+        c.beginPath();
+        c.moveTo(px, py);
+        c.lineTo(x, y);
+        c.stroke();
+        px = x;
+        py = y;
+      }
+      if (f.age >= f.dur && !(f as Stroke & { landed?: boolean }).landed) {
+        (f as Stroke & { landed?: boolean }).landed = true;
+        this.blot(f.x1, f.y1, 0, 0, 0.6, 3.4, f.color, 1);
+      }
+      return after < FADE;
     });
     this.rings = this.rings.filter((r) => (r.life += dt) < r.max);
     for (const r of this.rings) {
-      if (r.life < 0) continue;
       const k = r.life / r.max;
-      c.globalAlpha = 1;
+      c.globalAlpha = (1 - k) * 0.55;
       c.beginPath();
-      c.arc(r.x, r.y, r.reach * (1 - Math.pow(1 - k, 3)), 0, Math.PI * 2);
-      c.strokeStyle = `rgba(${r.color},${(1 - k) * 0.55})`;
-      c.lineWidth = 2.4 * (1 - k) + 0.4;
+      c.arc(r.x, r.y, r.reach * inkEase(k), 0, Math.PI * 2);
+      c.strokeStyle = `rgb(${r.color})`;
+      c.lineWidth = 1.2;
       c.stroke();
     }
-    this.sparks = this.sparks.filter((s) => (s.life += dt) < s.max);
-    for (const s of this.sparks) {
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      s.vx *= s.drag;
-      s.vy = s.vy * s.drag + s.rise * dt;
-      const fade = 1 - s.life / s.max;
-      c.globalAlpha = fade * fade;
-      const size = s.size * (0.5 + fade * 0.5);
-      c.drawImage(this.sprite(s.color), s.x - size / 2, s.y - size / 2, size, size);
+    this.blots = this.blots.filter((b) => (b.life += dt) < b.max);
+    for (const b of this.blots) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.vx *= 0.86;
+      b.vy *= 0.86;
+      const k = b.life / b.max;
+      const spread = b.grow ? 0.55 + 0.45 * inkEase(k * 3) : 1;
+      c.globalAlpha = Math.pow(1 - k, 1.6) * 0.85;
+      c.fillStyle = `rgb(${b.color})`;
+      c.beginPath();
+      c.arc(b.x, b.y, b.size * spread, 0, Math.PI * 2);
+      c.fill();
     }
     c.globalAlpha = 1;
-    c.globalCompositeOperation = "source-over";
   }
 }
 
@@ -324,7 +287,7 @@ export function Chars({
   );
 }
 
-/** Text that resolves out of its own characters. It always settles on the exact recorded text. */
+/** Text that comes into focus like ink settling. It is always the exact recorded text. */
 export function Decode({
   text,
   active,
@@ -340,40 +303,16 @@ export function Decode({
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    el.textContent = text;
-    if (!active || reducedMotion() || !text) return;
-    const pool = Array.from(text.replace(/\s/g, ""));
-    const glyphs = Array.from(text);
-    const duration = Math.min(1000, 300 + glyphs.length * 16);
+    if (!el || !active || reducedMotion() || !text) return;
+    // Ink settles into the paper: out of focus, then sharp. The text itself never changes.
     const scope = createMotionScope(origin);
-    let loop: ReturnType<typeof createMotionLoop> | undefined;
-    scope.later(delay, () => {
-      const began = scope.now();
-      let painted = 0;
-      loop = createMotionLoop((now) => {
-        const k = (now - began) / duration;
-        if (k >= 1) {
-          el.textContent = text;
-          return false;
-        }
-        if (now - painted < 33) return true;
-        painted = now;
-        const solved = Math.floor(Math.max(0, k) * glyphs.length);
-        el.textContent = glyphs
-          .slice(0, solved + 7)
-          .map((g, i) =>
-            i < solved || g === " " ? g : pool[Math.floor(Math.random() * pool.length)],
-          )
-          .join("");
-        return true;
-      }, origin);
+    scope.animate(el, [{ opacity: 0 }, { opacity: 1 }], {
+      duration: 760,
+      delay,
+      easing: "cubic-bezier(.19,1,.22,1)",
+      fill: "backwards",
     });
-    return () => {
-      scope.dispose();
-      loop?.dispose();
-      el.textContent = text;
-    };
+    return () => scope.dispose();
   }, [text, active, delay, origin, reducePreference]);
   return <span ref={ref}>{text}</span>;
 }
@@ -407,7 +346,7 @@ export function Roll({
     scope.later(delay, () => {
       scope.animate(el, [{ transform: "scale(1.3)" }, { transform: "none" }], {
         duration: 700,
-        easing: "cubic-bezier(.2,1.4,.3,1)",
+        easing: "cubic-bezier(0.19, 1, 0.22, 1)",
       });
       const began = scope.now();
       loop = createMotionLoop((now) => {
@@ -432,38 +371,15 @@ export function Roll({
 }
 
 /** Drifting dust for a surface outside the stage, such as the home page. */
-export function Dust({ dark = false, embers }: { dark?: boolean; embers?: string[] }) {
-  const reducePreference = useReducedMotion();
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas || reducedMotion()) return;
-    const sparks = new Sparks(canvas);
-    sparks.dark = dark;
-    sparks.dust = 1;
-    const size = new ResizeObserver(() => sparks.fit(canvas.clientWidth, canvas.clientHeight));
-    size.observe(canvas);
-    let last = motionNow();
-    const loop = createMotionLoop((now) => {
-      if (now - last < 30) return true;
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      if (embers?.length) sparks.ember(embers[Math.floor(Math.random() * embers.length)]);
-      sparks.tick(dt);
-      return true;
-    });
-    return () => {
-      loop.dispose();
-      size.disconnect();
-      sparks.clear();
-    };
-  }, [dark, embers, reducePreference]);
-  return <canvas ref={ref} className="c-dust" aria-hidden="true" />;
+/** Drifting dust was light, not ink; the paper page keeps still behind its titles. */
+export function Dust(props: { dark?: boolean; embers?: string[] }) {
+  void props;
+  return null;
 }
 
 const CLICKABLE = "button, a[href], select, summary, label, [role='button']";
 
-/** Every press answers the same way: a sprung push, a ring and a few sparks from the exact point touched. */
+/** Every press answers the same way: pressed into the paper, a dab of ink and one ring from the exact point touched. */
 /**
  * Closing is animated by a stand-in. The real element leaves at once, so focus and state stay correct,
  * and every way of closing (button, Esc, backdrop, submit) gets the same exit.
@@ -593,59 +509,44 @@ export function ClickFx() {
       // Read before adding nodes or starting any animation.
       const style = getComputedStyle(target);
       const route = style.getPropertyValue("--route").trim();
-      const color = route ? route.replaceAll(" ", ",") : "11,13,16";
+      const color = route ? route.replaceAll(" ", ",") : "21,19,15";
       const box = target.getBoundingClientRect();
       recordMotionOrigin(target, x, y, box);
       if (reducedMotion()) return;
       const scale = style.scale === "none" ? "1" : style.scale;
       presses.get(target)?.cancel();
-      const press = target.animate(
-        [
-          { scale },
-          { scale: "0.955", offset: 0.28 },
-          { scale: "1.018", offset: 0.68 },
-          { scale: "1" },
-        ],
-        {
-          duration: 340,
-          easing: "ease-out",
-        },
-      );
+      // Pressed into the paper and released: no spring past rest.
+      const press = target.animate([{ scale }, { scale: "0.962", offset: 0.22 }, { scale }], {
+        duration: 560,
+        easing: "cubic-bezier(.19,1,.22,1)",
+      });
       presses.set(target, press);
       press.onfinish = () => {
         if (presses.get(target) === press) presses.delete(target);
       };
-      {
-        const ring = document.createElement("div");
-        ring.className = "c-press-ring";
-        ring.style.cssText = `left:${x}px;top:${y}px;color:rgb(${color})`;
-        add(
-          ring,
-          [
-            { transform: "translate(-50%,-50%) scale(.2)", opacity: 0.85 },
-            { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
-          ],
-          460,
-        );
-        for (let i = 0; i < 7; i++) {
-          const spark = document.createElement("div");
-          spark.className = "c-press-spark";
-          spark.style.cssText = `left:${x}px;top:${y}px;background:rgb(${color})`;
-          const angle = (i / 7) * Math.PI * 2 + Math.random() * 0.6;
-          const reach = 18 + Math.random() * 22;
-          add(
-            spark,
-            [
-              { transform: "translate(-50%,-50%)", opacity: 0.9 },
-              {
-                transform: `translate(calc(-50% + ${Math.cos(angle) * reach}px),calc(-50% + ${Math.sin(angle) * reach}px)) scale(.3)`,
-                opacity: 0,
-              },
-            ],
-            380 + Math.random() * 160,
-          );
-        }
-      }
+      // Ink touched to the page: a dab where the finger was and one fine ring that opens and dries.
+      const dab = document.createElement("div");
+      dab.className = "c-press-dab";
+      dab.style.cssText = `left:${x}px;top:${y}px;background:rgb(${color})`;
+      add(
+        dab,
+        [
+          { transform: "translate(-50%,-50%) scale(1)", opacity: 0.55 },
+          { transform: "translate(-50%,-50%) scale(.2)", opacity: 0 },
+        ],
+        520,
+      );
+      const ring = document.createElement("div");
+      ring.className = "c-press-ring";
+      ring.style.cssText = `left:${x}px;top:${y}px;color:rgb(${color})`;
+      add(
+        ring,
+        [
+          { transform: "translate(-50%,-50%) scale(.15)", opacity: 0.7 },
+          { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
+        ],
+        760,
+      );
       target.style.setProperty("--cx", `${x - box.left}px`);
       target.style.setProperty("--cy", `${y - box.top}px`);
       document.documentElement.style.setProperty("--press-dx", `${x - innerWidth / 2}px`);

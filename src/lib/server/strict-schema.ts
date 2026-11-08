@@ -18,6 +18,8 @@ export function toStrictToolSchema(value: unknown, field?: string): Schema {
   const result: Schema = {};
   for (const [key, item] of Object.entries(source)) {
     if (omitted.has(key)) continue;
+    // DeepSeek strict tools do not support URI format. Zod still validates returned URLs.
+    if (key === "format" && item === "uri") continue;
     if (key === "properties") {
       result.properties = Object.fromEntries(
         Object.entries(item as Schema).map(([name, child]) => [

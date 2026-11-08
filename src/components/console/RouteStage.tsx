@@ -1,10 +1,11 @@
 "use client";
+import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
-import type { Beat } from "./beats";
+import { latestShownRevision, type Beat } from "./beats";
 import {
   createMotionLoop,
   createMotionScope,
@@ -805,9 +806,7 @@ export function RouteStage({
   const board = (id: "A" | "B" | "C") => {
     const strategy = version.strategies.find((s) => s.id === id);
     const present = !!strategy && seen.has(`p:${id}`);
-    const revision = seen.has(`r:${id}`)
-      ? version.revisions.find((r) => r.strategyId === id)
-      : undefined;
+    const revision = latestShownRevision(shown, id)?.revision;
     const view = revision?.strategy ?? strategy;
     const taken = attacks.filter((a) => a.targetStrategyId === id);
     const sent = attacks.filter((a) => a.from === id);
@@ -815,7 +814,7 @@ export function RouteStage({
     const speaking = current?.agent === id;
     const target = !speaking && current?.to === id;
     const enter = directed && current?.id === `p:${id}`;
-    const rewriting = directed && current?.id === `r:${id}`;
+    const rewriting = directed && current?.revision?.strategyId === id;
     return (
       <section
         key={id}
@@ -837,13 +836,17 @@ export function RouteStage({
         {present && strategy && view ? (
           <div className="c-board-body">
             <h3>
-              <Chars text={view.title} active={enter} delay={lead + 700} />
+              <Chars
+                text={readableClaimText(version, view.title)}
+                active={enter}
+                delay={lead + 700}
+              />
             </h3>
-            <p>{view.thesis}</p>
+            <p>{readableClaimText(version, view.thesis)}</p>
             <div className="est">
               {strategy.estimatedHours === view.estimatedHours
-                ? `${view.estimatedHours ?? "?"} 小时`
-                : `${strategy.estimatedHours} → ${view.estimatedHours} 小时`}
+                ? `${view.estimatedHours ?? "待核实"} 小时`
+                : `${strategy.estimatedHours ?? "待核实"} → ${view.estimatedHours ?? "待核实"} 小时`}
               {" · "}¥{view.estimatedCost ?? "?"}
             </div>
             {[...new Set([...strategy.claims, ...view.claims].map((c) => c.id))].map((claimId) => {
@@ -863,7 +866,7 @@ export function RouteStage({
                   onClick={() => onClaim(view, claimId)}
                 >
                   <em>
-                    {claimId} {CLAIM[claim.status]}
+                    {claimLabel(version, id, claimId)} · {CLAIM[claim.status]}
                     {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
                     {!after && " · 已撤回"}
                     {!before && " · 新增"}
@@ -875,12 +878,16 @@ export function RouteStage({
                   </em>
                   <span>
                     <span className={lost || !after ? "struck" : ""}>
-                      {before?.text ?? claim.text}
+                      {readableClaimText(version, before?.text ?? claim.text)}
                     </span>
                   </span>
                   {before && after && before.text !== after.text && (
                     <span className={`changed ${rewriting ? "fresh" : ""}`}>
-                      <Chars text={after.text} active={rewriting} delay={lead + 800} />
+                      <Chars
+                        text={readableClaimText(version, after.text)}
+                        active={rewriting}
+                        delay={lead + 800}
+                      />
                     </span>
                   )}
                 </button>

@@ -54,7 +54,7 @@
   padding: 9px;
   border: 1px solid #d8dce3;
   border-radius: 13px;
-  background: #fff;
+  background: var(--paper, #fff);
   color: #15181e;
   box-shadow:
     0 18px 60px rgb(14 22 36 / 0.18),
@@ -200,4 +200,110 @@
 
 .option[aria-disabled="true"] {
   cursor: default;
+}
+
+/* Switching models: the new name rises out of a mask on one expo-out curve while a soft
+   three-colour light passes across the pill; the check mark draws in. No overshoot. */
+.trigger {
+  position: relative;
+  overflow: hidden;
+}
+.label {
+  display: inline-block;
+  animation: label-in 0.85s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+/* The same three-colour hairline as the composer draws under the new name, then fades. */
+.glint {
+  position: absolute;
+  left: 9px;
+  right: 30px;
+  bottom: 5px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: linear-gradient(
+    90deg,
+    rgb(64 119 245 / 0.85),
+    rgb(235 53 138 / 0.8),
+    rgb(209 139 13 / 0.8)
+  );
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+  animation: label-sheen 1.2s 0.1s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes label-in {
+  from {
+    opacity: 0;
+    transform: translateY(105%);
+  }
+  35% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes label-sheen {
+  0% {
+    opacity: 1;
+    transform: scaleX(0);
+  }
+  55% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(1);
+  }
+}
+.option.selected > svg {
+  animation: check-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Opening the menu: options settle in one after another beneath the panel's arrival. */
+.popover:popover-open .option,
+.popover:popover-open .heading {
+  animation: option-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.popover:popover-open .option:nth-child(1) {
+  animation-delay: 0.04s;
+}
+.popover:popover-open .option:nth-child(2) {
+  animation-delay: 0.07s;
+}
+.popover:popover-open .option:nth-child(3) {
+  animation-delay: 0.1s;
+}
+.popover:popover-open .option:nth-child(4) {
+  animation-delay: 0.13s;
+}
+.popover:popover-open .option:nth-child(n + 5) {
+  animation-delay: 0.16s;
+}
+@keyframes option-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glint {
+    display: none;
+  }
 }

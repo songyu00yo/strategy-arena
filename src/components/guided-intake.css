@@ -10,7 +10,7 @@
   position: relative;
   border: 1px solid #c8cdd5;
   border-radius: 12px;
-  background: #fff;
+  background: var(--paper, #fff);
   box-shadow:
     0 2px 5px rgb(11 13 16 / 0.025),
     0 24px 72px rgb(11 13 16 / 0.045);
@@ -142,7 +142,7 @@
 .gi-attachments li {
   border: 1px solid var(--gi-line);
   padding: 11px 14px;
-  background: rgb(255 255 255 / 0.7);
+  background: rgb(251 248 241 / 0.7);
 }
 .gi-file-heading {
   display: flex;
@@ -313,7 +313,7 @@
   padding: 11px 12px;
   border: 1px solid var(--gi-line);
   border-radius: 0;
-  background: #fff;
+  background: var(--paper, #fff);
   color: var(--gi-ink);
   font: inherit;
   font-size: 13px;
@@ -344,7 +344,7 @@
   gap: 8px;
   padding: 10px 13px;
   border: 1px solid var(--gi-line);
-  background: #fff;
+  background: var(--paper, #fff);
   font-size: 12px;
   cursor: pointer;
 }

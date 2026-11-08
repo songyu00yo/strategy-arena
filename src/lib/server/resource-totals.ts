@@ -27,6 +27,7 @@ export function assertCanonicalCostReference(text: string, budget?: number | nul
   const budgetComparisons = [
     new RegExp(`${canonicalName}\\s*${confirmed}${comparison}\\s*${budgetAmount}`, "g"),
     new RegExp(`${canonicalName}\\s*与\\s*${budgetAmount}(?:作|进行)?(?:比较|对比|核对)`, "g"),
+    new RegExp(`核对\\s*${canonicalName}\\s*与\\s*${budgetAmount}`, "g"),
   ];
   // Mask complete quotes first so punctuation inside a quotation cannot split its boundary.
   for (const sentence of unquoted(text).matchAll(/[^。；;\n]+/g)) {

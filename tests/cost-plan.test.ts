@@ -77,6 +77,7 @@ const verdict = (): Verdict => ({
 describe("single necessary-expense list and server execution gate", () => {
   it.each([
     "将完整费用清单累计总额与1000元预算比较，并预留交付后复检与缓冲。",
+    "核对完整费用清单累计总额与1000元预算，并核实实际现金流及工时。",
     "完整费用清单累计总额超过1000元预算则退出。",
     "完整费用清单累计总额核实且不超过1000元预算后才付款。",
     "完整费用清单累计总额≤1000元才可正式执行。",
@@ -89,12 +90,30 @@ describe("single necessary-expense list and server execution gate", () => {
     expect(() => assertCanonicalCostReference(text, null)).toThrow("当前上限未知");
   });
 
+  it("accepts the recorded prefixed budget comparison through cost-plan normalization", () => {
+    const candidate = route({
+      complete: true,
+      items: [item("living", "生活费", 12000), item("entry", "入职交通和材料费", 500)],
+    });
+    candidate.estimatedCost = 12500;
+    candidate.steps = [
+      "核对完整费用清单累计总额与18000元预算，并核实实际现金流及工时；工资不抵扣支出上限。",
+    ];
+    expect(normalizeCostPlan(candidate, undefined, 18000).estimatedCost).toBe(12500);
+    expect(() => normalizeCostPlan(candidate, undefined, 17500)).toThrow("当前用户预算");
+    expect(() => normalizeCostPlan(candidate, undefined, null)).toThrow("当前上限未知");
+  });
+
   it.each([
     "完整费用清单累计总额=1000元才付款。",
     "完整费用清单累计总额算出总额1000元才付款。",
     "完整费用清单累计总额不超过1000元，同时租金+押金合计500元才签约。",
     "完整费用清单累计总额≤1000元+500元才付款。",
     "完整费用清单累计总额与1000元预算比较，另核对场地费＋设备费合计500元才付款。",
+    "核对完整费用清单累计总额与1000元预算，同时租金+押金合计500元才签约。",
+    "核对完整费用清单累计总额与1000元+500元才付款。",
+    "核对完整费用清单累计总额与1000元预算，另设总费用500元才执行。",
+    "核对完整费用清单累计总额与1000元预算且生活费和入职费合计500元才执行。",
   ])("does not exempt another formula merely because a valid reference is present: %s", (text) => {
     expect(() => assertCanonicalCostReference(text, 1000)).toThrow("费用正文格式");
   });

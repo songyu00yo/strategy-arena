@@ -324,6 +324,7 @@ export default function Page() {
           <span>方案擂台</span>
         </button>
         <div className="header-right">
+          {!demo && !arena.snapshot && <RecordedExamples />}
           {!demo && (
             <IdentityHistory
               disabled={accessRequired || arena.restoring || !arena.health}
@@ -478,7 +479,6 @@ export default function Page() {
                     )}
                   </div>
                 </GoalFocusStage>
-                {!demo && <RecordedExamples />}
               </section>
             </div>
           </>

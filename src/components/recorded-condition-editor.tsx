@@ -158,7 +158,7 @@ export function RecordedConditionEditor({
   return (
     <Modal title="调整条件" trigger={trigger} onClose={close} motionRef={motion} side>
       <div ref={root} className="recorded-challenge">
-        {(blocked || error) && (
+        {(error || (!health && !healthError ? "" : blocked)) && (
           <p className="recorded-challenge-error" role="alert">
             {error || blocked}
           </p>

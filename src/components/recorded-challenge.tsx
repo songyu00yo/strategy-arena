@@ -301,7 +301,7 @@ export function RecordedChallenge({
           )}
         </div>
         <p className="recorded-challenge-notice">确认后新建真实推演并计费，原记录保留。</p>
-        {(blocked || error) && (
+        {(error || (!health && !healthError && quote ? "" : blocked)) && (
           <p className="recorded-challenge-error" role="alert">
             {error || blocked}
           </p>

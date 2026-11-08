@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   Paperclip,
   Plus,
+  RotateCcw,
   X,
 } from "lucide-react";
 import {
@@ -890,6 +891,18 @@ export function GuidedIntake({
                 });
               }}
             />
+            {draft && !uncertain && (
+              <button
+                type="button"
+                className="gi-tool gi-reset"
+                aria-label="准备新问题"
+                title="准备新问题"
+                disabled={busy || analyzing || reading}
+                onClick={reset}
+              >
+                <RotateCcw size={16} />
+              </button>
+            )}
           </div>
           <button
             className="primary-button gi-analyze"

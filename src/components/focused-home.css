@@ -12,11 +12,9 @@
   animation: none;
   text-align: left;
 }
-.goal-landing .h-examples-link {
-  position: relative;
-  z-index: 1;
-  margin-top: -24px;
-  padding: 10px 14px;
+.site-header .h-examples-link {
+  margin: 0;
+  padding: 6px 8px;
   font-size: 12px;
   color: var(--c-t2);
 }
@@ -36,9 +34,6 @@
     animation: none;
     opacity: 1;
     transform: none;
-  }
-  .goal-landing .h-examples-link {
-    margin-top: -14px;
   }
 }
 
@@ -137,112 +132,219 @@
   white-space: nowrap;
 }
 
-/* The bar keeps its place so nothing jumps; only its contents arrive. */
+/* ===== Poster home: paper, ink and one vermilion =====
+   Printed-matter language instead of glass and glow: warm paper with a faint grain,
+   a Song-style headline with a short vermilion rule, and an input card cut from paper
+   with a solid ink offset. Typing makes the card lift off the page: it rises toward
+   the reader while its ink shadow lengthens beneath it, a dotted rule is ruled from
+   the left, and the tools come into focus one after another. */
+.console-shell.home.focus-home {
+  --ink: #15130f;
+  --paper: #fbf8f1;
+  --vermilion: #c8331f;
+  --serif-cn: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
+  --reveal-ease: cubic-bezier(0.19, 1, 0.22, 1);
+  background-color: #efeae0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.08 0 0 0 0 0.07 0 0 0 0 0.05 0 0 0 .06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.focus-home .g-focus-field,
+.focus-home .g-focus-input-wrapper::before {
+  display: none;
+}
+.focus-home .home-intro h1 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-family: var(--serif-cn);
+  font-size: clamp(32px, 4.4vw, 52px);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.focus-home .home-intro h1::after {
+  content: "";
+  display: block;
+  width: 34px;
+  height: 3px;
+  margin: 18px auto 0;
+  background: var(--vermilion);
+}
+.focus-home .site-header .wordmark .brand-symbol i:last-child {
+  background: var(--vermilion);
+}
+
+.focus-home .gi-composer {
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--ink);
+  transition:
+    transform 0.9s var(--reveal-ease),
+    box-shadow 0.9s var(--reveal-ease);
+}
+.focus-home .gi-composer:focus-within {
+  border-color: var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.focus-home .gi-goal {
+  color: var(--ink);
+}
+.focus-home .gi-goal::placeholder {
+  color: rgb(21 19 15 / 0.4);
+}
 .focus-home .gi-composer-footer {
   position: relative;
   border-top-color: transparent;
+  border-radius: 0 0 6px 6px;
   background: transparent;
 }
-.focus-home .gi-composer-footer::before,
-.focus-home .gi-composer-footer::after {
+/* A dotted rule, ruled from the left like a pen across the page. */
+.focus-home .gi-composer-footer::before {
   content: "";
   position: absolute;
   top: -1px;
-  height: 1px;
-  pointer-events: none;
-}
-/* A hairline draws out from the centre... */
-.focus-home .gi-composer-footer::before {
   right: 22px;
   left: 22px;
-  background: #eceef2;
+  height: 1.5px;
+  background: repeating-linear-gradient(90deg, rgb(21 19 15 / 0.42) 0 3px, transparent 3px 7px);
   transform: scaleX(0);
-  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-}
-/* ...and a short streak of the three route colours runs along it once. */
-.focus-home .gi-composer-footer::after {
-  left: 0;
-  width: 34%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgb(64 119 245 / 0.9),
-    rgb(235 53 138 / 0.85),
-    rgb(209 139 13 / 0.85),
-    transparent
-  );
-  opacity: 0;
-  transform: translateX(-100%);
+  transform-origin: left center;
+  pointer-events: none;
+  transition: transform 0.3s ease;
 }
 .focus-home .gi-tools > *,
 .focus-home .guided-intake .gi-analyze {
   opacity: 0;
   visibility: hidden;
-  transform: translateY(16px) scale(0.92);
+  filter: blur(5px);
+  transform: translateY(8px);
   transition:
-    opacity 0.28s ease,
-    transform 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-    visibility 0s linear 0.4s;
+    opacity 0.2s ease,
+    filter 0.2s ease,
+    transform 0.25s ease,
+    visibility 0s linear 0.25s;
+}
+.focus-home .gi-tool {
+  color: rgb(21 19 15 / 0.72);
+}
+.focus-home .guided-intake .gi-analyze {
+  border-radius: 3px;
+  background: var(--ink);
+  color: var(--paper);
+}
+.focus-home .guided-intake .gi-analyze:hover:not(:disabled) {
+  box-shadow: 3px 3px 0 var(--vermilion);
+  transform: translate(-2px, -2px);
 }
 .focus-home .gi-analyze svg {
+  color: #ff8a73;
   opacity: 0;
-  transform: translateX(-10px);
+  transform: translateX(-8px);
   transition:
     opacity 0.2s,
-    transform 0.3s;
+    transform 0.25s;
+}
+.focus-home .gi-reset {
+  padding: 8px;
+  border-left: 1px solid rgb(21 19 15 / 0.18);
+  border-radius: 0;
 }
 
-.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-composer-footer::before,
-.focus-home .guided-intake[data-expanded="true"] .gi-composer-footer::before {
+/* --- the card lifts off the page --- */
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  ) {
+  transform: translate(-3px, -3px);
+  box-shadow: 9px 9px 0 var(--ink);
+}
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  .gi-composer-footer::before {
   transform: scaleX(1);
-  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 1.1s 0.08s var(--reveal-ease);
 }
-.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-composer-footer::after,
-.focus-home .guided-intake[data-expanded="true"] .gi-composer-footer::after {
-  animation: home-streak 1.15s 0.12s cubic-bezier(0.25, 0.7, 0.2, 1) both;
-}
-.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) :is(.gi-tools > *, .gi-analyze),
-.focus-home .guided-intake[data-expanded="true"] :is(.gi-tools > *, .gi-analyze) {
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  :is(.gi-tools > *, .gi-analyze) {
   opacity: 1;
   visibility: visible;
+  filter: blur(0);
   transform: none;
   transition:
-    opacity 0.5s ease,
-    transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 0.6s ease,
+    filter 0.7s var(--reveal-ease),
+    transform 0.9s var(--reveal-ease),
+    box-shadow 0.4s var(--reveal-ease),
     visibility 0s;
 }
-.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-tools > :nth-child(1),
-.focus-home .guided-intake[data-expanded="true"] .gi-tools > :nth-child(1) {
-  transition-delay: 0.05s;
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  .gi-tools
+  > :nth-child(1) {
+  transition-delay: 0.16s;
 }
-.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-tools > :nth-child(2),
-.focus-home .guided-intake[data-expanded="true"] .gi-tools > :nth-child(2) {
-  transition-delay: 0.12s;
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  .gi-tools
+  > :nth-child(2) {
+  transition-delay: 0.24s;
 }
-.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-analyze,
-.focus-home .guided-intake[data-expanded="true"] .gi-analyze {
-  transition-delay: 0.2s;
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  .gi-tools
+  > :nth-child(3) {
+  transition-delay: 0.32s;
 }
-.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-analyze svg,
-.focus-home .guided-intake[data-expanded="true"] .gi-analyze svg {
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  .gi-analyze {
+  transition-delay: 0.36s;
+}
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  .gi-analyze:hover:not(:disabled) {
+  transition-delay: 0s;
+}
+.focus-home
+  :is(
+    .gi-composer:has(.gi-goal:not(:placeholder-shown)),
+    .guided-intake[data-expanded="true"] .gi-composer
+  )
+  .gi-analyze
+  svg {
   opacity: 1;
   transform: none;
   transition:
-    opacity 0.3s 0.45s,
-    transform 0.6s 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+    opacity 0.5s 0.62s ease,
+    transform 0.9s 0.62s var(--reveal-ease);
 }
-@keyframes home-streak {
-  0% {
-    opacity: 0;
-    transform: translateX(-100%);
-  }
-  20% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(300%);
-  }
+
+/* The home page is the question and the card: no bookkeeping footer under it.
+   Starting over lives in the tool row as the reset icon. */
+.focus-home .gi-usage,
+.focus-home .gi-draft-footer {
+  display: none;
 }
 
 /* Drag a file over the composer: a veil says it will be taken. */
@@ -273,14 +375,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .focus-home .gi-composer,
   .focus-home .gi-tools > *,
   .focus-home .guided-intake .gi-analyze,
   .focus-home .gi-analyze svg {
+    filter: none !important;
     transform: none !important;
     transition-delay: 0s !important;
-  }
-  .focus-home .gi-composer-footer::after {
-    display: none;
   }
 }
 /* A closed sources panel must not leave a strip under the card. */
@@ -289,4 +390,9 @@
 }
 .focus-home .gi-sources > div {
   padding-top: 10px;
+}
+
+/* Title and card read as one group: only enough room above the card for the outer glow. */
+.focus-home .g-focus-stage {
+  padding-top: clamp(28px, 3.4vw, 40px);
 }

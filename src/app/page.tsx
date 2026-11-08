@@ -42,7 +42,7 @@ import { ArenaConsole } from "@/components/console/ArenaConsole";
 import "@/components/console/console.css";
 import { ClickFx, Leaving } from "@/components/console/effects";
 import "@/components/focused-home.css";
-import "@/components/home-glass.css";
+import "@/components/home-write.css";
 import "@/components/friend-feedback.css";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { Modal } from "@/components/modal";
@@ -391,7 +391,7 @@ export default function Page() {
                   <h1 className="sr-only">方案擂台：重要的选择，想清楚再出发</h1>
                   <p className="eyebrow">方案擂台 · 大学生的重大选择</p>
                 </div>
-                <GoalFocusStage>
+                <GoalFocusStage quiet>
                   <div className="h-form">
                     {accessRequired && (
                       <form

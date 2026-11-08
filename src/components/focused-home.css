@@ -1,216 +1,396 @@
-/* Home: everything except the composer steps back, so the eye lands on the input. */
-.goal-landing {
-  position: relative;
-  display: grid;
-  place-items: center;
-  min-height: 100dvh;
-  padding: 72px 16px 56px;
-  /* A soft pool of light behind the composer; the page edges fall away. */
-  background:
-    radial-gradient(ellipse 52% 46% at 50% 48%, rgb(255 255 255 / 0.9), transparent 72%),
-    radial-gradient(ellipse 120% 90% at 50% 50%, transparent 50%, rgb(38 53 79 / 0.07));
-}
-.goal-landing-center {
-  width: min(100%, 1040px);
-  text-align: center;
-}
-.focus-home .h-form {
-  animation: none;
-  text-align: left;
+/*
+ * Home as a writing surface: the whole screen is the input.
+ * No card, no frame, no light field. Everything except the question and the text
+ * sits faint at the edges until the visitor reaches for it or starts typing.
+ */
+.console-shell.focus-home {
+  --w-bg: #f7f7f4;
+  --w-ink: #0b0d10;
+  --w-ink-2: #33373e;
+  --w-muted: #70757d;
+  --w-faint: #a6aab0;
+  --w-line: rgb(11 13 16 / 0.1);
+  --w-line-2: rgb(11 13 16 / 0.2);
+  --w-sheet: #fff;
+  --w-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  background: var(--w-bg);
 }
 
-/* Header and footer links stay available but quiet until reached. */
-.focus-home .site-header {
-  opacity: 0.5;
-  transition: opacity 0.3s ease;
+/* ---------- Edges: present, quiet ---------- */
+.console-shell.focus-home .site-header {
+  justify-content: flex-end;
+  opacity: 0.32;
+  transition: opacity 0.35s ease;
 }
-.focus-home .site-header:hover,
-.focus-home .site-header:focus-within {
+.console-shell.focus-home .site-header:hover,
+.console-shell.focus-home .site-header:focus-within {
   opacity: 1;
 }
-.focus-home .site-header .model-pill {
-  border-color: transparent;
+.console-shell.focus-home .site-header .model-pill,
+.console-shell.focus-home .site-header .header-right .identity-history-trigger {
+  border: 0;
   background: transparent;
-  color: var(--c-t2);
-  font-size: 11px;
+  color: var(--w-ink-2);
+  font-size: 11.5px;
+  box-shadow: none;
 }
-.focus-home .site-footer {
-  opacity: 0.55;
+.console-shell.focus-home .wordmark {
+  display: none;
 }
-
-.goal-landing .h-examples-link {
-  position: relative;
-  z-index: 1;
-  margin-top: 4px;
-  padding: 10px 14px;
-  font-size: 12px;
-  color: var(--c-t2);
-}
-.goal-landing .h-examples-link:hover {
-  color: var(--c-t0);
-}
-
-.home-connection-state {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  color: var(--c-t2);
-  font-size: 13px;
-}
-
-/* One quiet line names the product; the input itself is the headline. */
 .home-intro {
-  padding: 0 16px;
+  position: fixed;
+  z-index: 25;
+  top: 15px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 .home-intro .eyebrow {
   margin: 0;
-  color: var(--c-t2);
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  color: var(--w-faint, #a6aab0);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
-/* The composer: wider; its material lives in home-glass.css. */
+/* ---------- The surface ---------- */
+.goal-landing {
+  min-height: 100dvh;
+  padding: 0;
+}
+.goal-landing-center {
+  width: 100%;
+  text-align: left;
+}
+.console-shell.home.focus-home .h-form {
+  animation: none;
+  opacity: 1;
+  transform: none;
+  text-align: left;
+}
+.focus-home .g-focus-stage {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  overflow: visible;
+}
+.focus-home .g-focus-stage[data-quiet] .g-focus-field,
+.focus-home .g-focus-stage .g-focus-input-wrapper::before {
+  display: none;
+}
 .focus-home .g-focus-input-wrapper {
-  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
+  width: min(100%, 1000px);
+  max-width: none;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 96px 48px 150px;
+}
+.console-shell.focus-home .gi-composer {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.console-shell.focus-home .gi-composer:focus-within {
+  box-shadow: none;
+}
+.console-shell.focus-home .gi-composer > label {
+  padding: 0 0 22px;
+  color: var(--w-muted);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.console-shell.focus-home .gi-goal {
+  min-height: 2.6em;
+  max-height: 52dvh;
+  padding: 0;
+  color: var(--w-ink);
+  font-size: clamp(34px, 4.6vw, 58px);
+  font-weight: 560;
+  line-height: 1.3;
+  letter-spacing: -0.04em;
+  caret-color: var(--w-ink);
+  resize: none;
+  scrollbar-width: none;
+}
+.console-shell.focus-home .gi-goal::placeholder {
+  color: #c5c8cc;
+  font-weight: 500;
 }
 
-/* Example prompts: one row of small glass capsules under the composer. */
+/* ---------- Action bar: faint at rest, rises once there is something to send ---------- */
+.console-shell.focus-home .gi-composer-footer {
+  position: fixed;
+  z-index: 20;
+  right: 0;
+  bottom: 28px;
+  left: 0;
+  width: min(904px, calc(100vw - 48px));
+  margin-inline: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  opacity: 0.3;
+  transform: translateY(10px);
+  transition:
+    opacity 0.45s var(--w-ease),
+    transform 0.55s var(--w-ease);
+}
+.console-shell.focus-home .gi-composer:has(.gi-goal:not(:placeholder-shown)) .gi-composer-footer,
+.console-shell.focus-home .gi-composer-footer:hover,
+.console-shell.focus-home .gi-composer-footer:focus-within {
+  opacity: 1;
+  transform: none;
+}
+.console-shell.focus-home .gi-tools {
+  gap: 4px;
+}
+.console-shell.focus-home .gi-tool,
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"] {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--w-ink-2);
+  font-size: 13px;
+  box-shadow: none;
+}
+.console-shell.focus-home .gi-tool:not(:disabled):hover,
+.console-shell.focus-home .gi-tool[aria-expanded="true"],
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"]:not(:disabled):hover,
+.console-shell.focus-home .gi-tools button[aria-haspopup="listbox"][aria-expanded="true"] {
+  background: rgb(11 13 16 / 0.06);
+  color: var(--w-ink);
+  transform: none;
+  box-shadow: none;
+}
+.console-shell.focus-home .gi-model-trigger {
+  border-left: 0;
+}
+.console-shell.focus-home .primary-button {
+  min-height: 46px;
+  padding: 0 24px 0 20px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--w-ink);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: none;
+}
+.console-shell.focus-home .primary-button::after {
+  display: none;
+}
+.console-shell.focus-home .primary-button:not(:disabled):hover {
+  transform: none;
+  background: #23272e;
+  box-shadow: none;
+}
+.console-shell.focus-home .primary-button:not(:disabled):active {
+  transform: scale(0.97);
+}
+.console-shell.focus-home .primary-button:disabled,
+.console-shell.focus-home .guided-intake .primary-button:disabled {
+  opacity: 1;
+  background: rgb(11 13 16 / 0.08);
+  color: var(--w-faint);
+}
+.console-shell.focus-home .guided-intake .gi-analyze {
+  gap: 10px;
+}
+
+/* ---------- Suggestions: a faint line of text under the question ---------- */
 .gi-scenarios {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 6px 10px;
-  padding: 18px 12px 0;
-  color: var(--g-muted, var(--c-t2));
-  font-size: 12px;
-  text-align: center;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 30px 0 0;
+  color: var(--w-faint, #a6aab0);
+  font-size: 13px;
+  opacity: 0.85;
+  transition: opacity 0.3s;
+}
+.gi-scenarios:hover,
+.gi-scenarios:focus-within {
+  opacity: 1;
 }
 .gi-scenarios > div {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
+  gap: 4px 14px;
   margin: 0;
 }
 .gi-scenarios button {
-  min-height: 32px;
-  padding: 0 14px;
+  padding: 2px 0;
   border: 0;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 0.6);
-  color: var(--g-ink-2, var(--c-t1));
+  background: none;
+  color: var(--w-muted, #70757d);
   font: inherit;
-  font-weight: 500;
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.9),
-    0 0 0 1px rgb(11 13 16 / 0.07);
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 4px;
   transition:
-    background 0.22s,
-    box-shadow 0.22s,
-    transform 0.3s cubic-bezier(0.2, 1.4, 0.3, 1);
+    color 0.2s,
+    text-decoration-color 0.2s;
 }
 .gi-scenarios button:not(:disabled):hover {
-  background: #fff;
-  transform: translateY(-2px);
-  box-shadow:
-    inset 0 1px 0 #fff,
-    0 0 0 1px rgb(11 13 16 / 0.08),
-    0 8px 20px rgb(38 53 79 / 0.12);
-}
-.gi-scenarios button:not(:disabled):active {
-  transform: scale(0.96);
+  color: var(--w-ink, #0b0d10);
+  text-decoration-color: currentColor;
 }
 .gi-scenarios button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 .gi-scenarios small {
-  flex-basis: 100%;
-  color: var(--g-faint, var(--c-t3));
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 11.5px;
+}
+.goal-landing .h-examples-link {
+  position: fixed;
+  z-index: 20;
+  right: 0;
+  bottom: 92px;
+  left: 0;
+  width: min(904px, calc(100vw - 48px));
+  margin: 0 auto;
+  padding: 0;
+  justify-content: flex-end;
+  color: var(--w-faint, #a6aab0);
+  font-size: 12px;
+  background: none;
+}
+.goal-landing .h-examples-link:hover {
+  color: var(--w-ink, #0b0d10);
 }
 
-/* Access code: one slim glass row that sits on top of the composer. */
-.console-shell.focus-home .h-form .access-panel {
-  grid-template-columns: auto minmax(0, 1fr);
-  margin-bottom: 6px;
-  padding: 6px 6px 6px 18px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--g-surface-solid);
-  box-shadow:
-    var(--g-hi),
-    0 0 0 1px var(--g-hair),
-    var(--g-shadow-2);
-}
-.console-shell.focus-home .h-form .access-panel h2 {
+/* ---------- Status lines: plain text, never a box ---------- */
+.home-connection-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  color: var(--w-faint, #a6aab0);
   font-size: 13px;
-  font-weight: 650;
-  white-space: nowrap;
 }
-.console-shell.focus-home .h-form .access-input-row {
-  flex-wrap: nowrap;
-  gap: 6px;
-}
-.console-shell.focus-home .h-form .access-input-row input {
-  min-height: 36px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--g-surface-sunk);
-  box-shadow: inset 0 0 0 1px var(--g-hair);
-  font-size: 14px;
-}
-.console-shell.focus-home .h-form .access-input-row input:focus {
-  background: #fff;
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--g-blue) / 0.5),
-    var(--g-focus);
-}
-.console-shell.focus-home .h-form .access-input-row .primary-button {
-  flex: none;
-  min-height: 36px;
-  white-space: nowrap;
+.console-shell.focus-home .gi-config {
+  margin: 20px 0 0;
+  padding: 0;
+  background: none;
+  color: #9a6a10;
+  font-size: 12.5px;
 }
 .console-shell.focus-home .h-form .configuration-notice {
   margin-top: 10px;
-  padding: 12px 16px;
+  padding: 0;
   border: 0;
-  border-radius: var(--g-r3);
-  background: var(--g-surface-solid);
-  box-shadow:
-    0 0 0 1px var(--g-hair),
-    var(--g-shadow-1);
-  font-size: 13px;
+  background: none;
+  color: var(--w-muted);
+  font-size: 12.5px;
+}
+
+/* ---------- Access code: one underlined line above the question ---------- */
+.console-shell.focus-home .h-form .access-panel {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 40px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.console-shell.focus-home .h-form .access-panel h2 {
+  margin: 0;
+  color: var(--w-muted);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.console-shell.focus-home .h-form .access-input-row {
+  flex: 1;
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+.console-shell.focus-home .h-form .access-input-row input {
+  min-height: 40px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1.5px solid var(--w-line-2);
+  border-radius: 0;
+  background: transparent;
+  font-size: 16px;
+}
+.console-shell.focus-home .h-form .access-input-row input:focus {
+  border-bottom-color: var(--w-ink);
+  outline: none;
+}
+.console-shell.focus-home .h-form .access-input-row .primary-button {
+  flex: none;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+/* ---------- Once the flow opens (materials, questions, summary), the page scrolls normally ---------- */
+.focus-home .g-focus-stage[data-expanded="true"] .g-focus-input-wrapper {
+  justify-content: flex-start;
+  padding-bottom: 72px;
+}
+.console-shell.focus-home .guided-intake[data-expanded="true"] .gi-composer-footer {
+  position: static;
+  width: auto;
+  margin-top: 28px;
+  opacity: 1;
+  transform: none;
+}
+.console-shell.focus-home .guided-intake[data-expanded="true"] .gi-goal {
+  font-size: clamp(26px, 3vw, 38px);
 }
 
 @media (max-width: 650px) {
-  .goal-landing {
-    min-height: 100dvh;
-    padding: 64px 2px 24px;
-  }
-  .console-shell.home.focus-home .h-form {
-    animation: none;
-    opacity: 1;
-    transform: none;
-  }
   .home-intro {
-    margin-bottom: 4px;
+    top: 52px;
+  }
+  .focus-home .g-focus-input-wrapper {
+    padding: 96px 22px 132px;
+  }
+  .console-shell.focus-home .gi-composer > label {
+    padding-bottom: 14px;
+    font-size: 15px;
+  }
+  .console-shell.focus-home .gi-goal {
+    font-size: 30px;
+  }
+  .console-shell.focus-home .gi-composer-footer {
+    bottom: 16px;
+    width: calc(100vw - 32px);
+  }
+  .console-shell.focus-home .gi-tool > span {
+    display: none;
+  }
+  .console-shell.focus-home .primary-button {
+    min-height: 44px;
+    padding: 0 18px 0 16px;
+  }
+  .goal-landing .h-examples-link {
+    bottom: 82px;
+    width: calc(100vw - 32px);
   }
   .console-shell.focus-home .h-form .access-panel {
-    grid-template-columns: minmax(0, 1fr);
+    flex-direction: column;
+    align-items: stretch;
     gap: 8px;
-    padding: 12px;
-    border-radius: 18px;
   }
 }
-
-/* The composer carries its own shadow; drop the stage's box glow so no pale rectangle frames the chips. */
-.focus-home .g-focus-stage .g-focus-input-wrapper::before,
-.focus-home .g-focus-stage[data-expanded] .g-focus-input-wrapper::before {
-  box-shadow: none;
+@media (prefers-reduced-motion: reduce) {
+  .console-shell.focus-home .gi-composer-footer {
+    transform: none;
+    transition: opacity 0.2s;
+  }
 }

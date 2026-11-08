@@ -1,0 +1,239 @@
+/*
+ * Everything the home page opens (materials, the guided flow, dialogs) in the same
+ * plain material as the writing surface: white sheets, hairlines, ink. No glass,
+ * no gradients, no glow. Tokens come from focused-home.css (--w-*).
+ */
+
+/* ---------- Materials ---------- */
+.console-shell.focus-home .gi-materials-picker > div > div {
+  gap: 14px 16px;
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px dashed var(--w-line-2);
+  border-radius: 14px;
+  background: var(--w-sheet);
+}
+.console-shell.focus-home .gi-drop-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: rgb(11 13 16 / 0.05);
+  color: var(--w-ink);
+}
+.console-shell.focus-home .gi-materials-picker p {
+  color: var(--w-muted);
+  font-size: 12.5px;
+}
+.console-shell.focus-home .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--w-line-2);
+  border-radius: 999px;
+  background: var(--w-sheet);
+  color: var(--w-ink);
+  box-shadow: none;
+}
+.console-shell.focus-home .secondary-button:not(:disabled):hover {
+  transform: none;
+  border-color: var(--w-ink);
+  box-shadow: none;
+}
+.console-shell.focus-home .text-button:not(:disabled):hover {
+  transform: none;
+  box-shadow: none;
+}
+.console-shell.focus-home .gi-attachments ul {
+  gap: 8px;
+  margin-top: 14px;
+}
+.console-shell.focus-home .gi-attachments li {
+  padding: 12px 14px;
+  border: 1px solid var(--w-line);
+  border-radius: 14px;
+  background: var(--w-sheet);
+}
+.console-shell.focus-home .gi-file-heading {
+  gap: 10px;
+}
+.console-shell.focus-home .gi-file-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: rgb(11 13 16 / 0.05);
+  color: var(--w-ink-2);
+}
+.console-shell.focus-home .gi-file-icon::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--w-faint);
+  box-shadow: 0 0 0 2px var(--w-sheet);
+}
+.console-shell.focus-home li[data-state="ready"] .gi-file-icon::after {
+  background: #137042;
+}
+.console-shell.focus-home li[data-state="reading"] .gi-file-icon::after {
+  background: #3d6fe0;
+}
+.console-shell.focus-home li[data-state="needs_pages"] .gi-file-icon::after {
+  background: #c38a12;
+}
+.console-shell.focus-home li[data-state="failed"] .gi-file-icon::after {
+  background: #c42b18;
+}
+.console-shell.focus-home .gi-file-state,
+.console-shell.focus-home .gi-file-warning {
+  margin-left: 42px;
+}
+.console-shell.focus-home .gi-pages {
+  margin: 10px 0 0 42px;
+}
+
+/* ---------- Guided flow ---------- */
+.console-shell.focus-home .gi-phase > div {
+  margin-top: 28px;
+  padding: 2px 28px 26px;
+  border: 1px solid var(--w-line);
+  border-radius: 18px;
+  background: var(--w-sheet);
+}
+.console-shell.focus-home .gi-section-title > div > span {
+  color: var(--w-muted);
+  font-weight: 500;
+}
+.console-shell.focus-home .gi-section-title h3 {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+.console-shell.focus-home .gi-question {
+  border-top-color: var(--w-line);
+}
+.console-shell.focus-home .gi-answer-states {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgb(11 13 16 / 0.05);
+}
+.console-shell.focus-home .gi-answer-states button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--w-muted);
+  font-size: 11.5px;
+}
+.console-shell.focus-home .gi-answer-states button[aria-pressed="true"] {
+  background: var(--w-ink);
+  color: #fff;
+}
+.console-shell.focus-home .gi-answer-options label {
+  border-radius: 999px;
+  border-color: var(--w-line-2);
+}
+.console-shell.focus-home .gi-answer-options label.selected {
+  border-color: var(--w-ink);
+  background: var(--w-sheet);
+}
+.console-shell.focus-home .guided-intake textarea:not(.gi-goal),
+.console-shell.focus-home .guided-intake input[type="number"],
+.console-shell.focus-home .guided-intake .gi-pages input,
+.console-shell.focus-home .gi-answer-field input {
+  border: 1px solid var(--w-line-2);
+  border-radius: 12px;
+}
+.console-shell.focus-home .guided-intake textarea:not(.gi-goal):focus-visible,
+.console-shell.focus-home .guided-intake input:focus-visible {
+  border-color: var(--w-ink);
+  outline: none;
+}
+.console-shell.focus-home .gi-assumptions {
+  border-radius: 14px;
+  background: rgb(11 13 16 / 0.035);
+}
+.console-shell.focus-home .gi-disclosure-trigger {
+  border-bottom-color: var(--w-line);
+}
+.console-shell.focus-home .guided-intake .gi-start {
+  min-height: 50px;
+}
+.console-shell.focus-home .gi-progress > div > div {
+  color: var(--w-muted);
+}
+.console-shell.focus-home .gi-error {
+  border-left: 0;
+  border-radius: 12px;
+}
+.console-shell.focus-home .gi-recovery {
+  border-radius: 16px;
+}
+
+/* ---------- Dialogs ---------- */
+.console-shell.focus-home .modal {
+  padding: 22px 24px 24px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--w-sheet);
+  box-shadow:
+    0 0 0 1px rgb(11 13 16 / 0.06),
+    0 30px 80px rgb(11 13 16 / 0.18);
+}
+.console-shell.focus-home .modal::backdrop {
+  background: rgb(247 247 244 / 0.72);
+}
+.console-shell.focus-home .modal-heading {
+  align-items: center;
+  margin-bottom: 16px;
+}
+.console-shell.focus-home .modal-heading h2 {
+  font-size: 19px;
+  font-weight: 650;
+}
+.console-shell.focus-home .icon-button {
+  border-radius: 999px;
+}
+.console-shell.focus-home .recorded-example-card {
+  border-radius: 14px;
+  border-color: var(--w-line);
+}
+.console-shell.focus-home .recorded-example-card:hover,
+.console-shell.focus-home .recorded-example-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: var(--w-ink);
+  box-shadow: none;
+}
+.console-shell.focus-home .identity-history-list button,
+.console-shell.focus-home .identity-history textarea,
+.console-shell.focus-home .identity-history-code {
+  border-radius: 12px;
+}
+.console-shell.focus-home .model-setup,
+.console-shell.focus-home .model-cost-note {
+  border-radius: 12px;
+}
+
+@media (max-width: 650px) {
+  .console-shell.focus-home .gi-drop-icon {
+    display: none;
+  }
+  .console-shell.focus-home .gi-phase > div {
+    padding: 2px 18px 20px;
+  }
+}

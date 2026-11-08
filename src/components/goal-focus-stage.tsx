@@ -29,7 +29,14 @@ const UNIT = Array.from({ length: 161 }, (_, i) => {
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
 
 /** A decorative field around the real form, with no duplicate inputs or text. */
-export function GoalFocusStage({ children }: { children: ReactNode }) {
+/** `quiet` keeps the input bare: no light field around it and no entrance animation. */
+export function GoalFocusStage({
+  children,
+  quiet = false,
+}: {
+  children: ReactNode;
+  quiet?: boolean;
+}) {
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -191,6 +198,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
 
     const enter = () => {
       if (
+        quiet ||
         introStarted ||
         compact.matches ||
         preference.matches ||
@@ -222,7 +230,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       };
     };
     const loop = createMotionLoop((_, dt) => {
-      if (!field || !visible || !windowActive || preference.matches) return false;
+      if (quiet || !field || !visible || !windowActive || preference.matches) return false;
       age += dt;
       focused += ((input.current.focused ? 1 : 0) - focused) * Math.min(1, dt * 6);
       input.current.energy = Math.max(0, input.current.energy - dt * 0.65);
@@ -413,10 +421,10 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       host.removeEventListener("click", clicked, true);
       ctx.clearRect(0, 0, surface.width, surface.height);
     };
-  }, []);
+  }, [quiet]);
 
   return (
-    <div className="g-focus-stage" ref={root}>
+    <div className="g-focus-stage" data-quiet={quiet || undefined} ref={root}>
       <canvas className="g-focus-field" ref={canvas} aria-hidden="true" />
       <div className="g-focus-input-wrapper" ref={panel}>
         {children}

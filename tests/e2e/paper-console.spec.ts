@@ -169,6 +169,41 @@ test("agent progress stays readable on a phone viewport", async ({ page }) => {
   await page.screenshot({ path: "test-results/paper-console-390.png", fullPage: true });
 });
 
+test("revised hours label unknown values and preserve zero in the synthetic result", async ({
+  page,
+}) => {
+  const snapshot = fixtureSnapshot();
+  for (let i = 0; i < 5; i++) advanceFixture(snapshot);
+  const version = snapshot.versions[0];
+  const cases = [
+    { id: "A", before: 768, after: null, expected: "768 → 待核实 小时" },
+    { id: "B", before: null, after: 0, expected: "待核实 → 0 小时" },
+    { id: "C", before: null, after: null, expected: "待核实 小时" },
+  ];
+  for (const entry of cases) {
+    version.strategies.find((strategy) => strategy.id === entry.id)!.estimatedHours = entry.before;
+    version.revisions.find(
+      (revision) => revision.strategyId === entry.id,
+    )!.strategy.estimatedHours = entry.after;
+  }
+  await page.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/health")
+      return route.fulfill({ json: { status: "ok", model: snapshot.model, accessGranted: true } });
+    if (url.pathname.endsWith("/events"))
+      return route.fulfill({ contentType: "text/event-stream", body: "" });
+    if (url.pathname === `/api/arenas/${snapshot.id}`) return route.fulfill({ json: snapshot });
+    return route.fulfill({ status: 404, json: { error: "explicit fixture boundary" } });
+  });
+  await page.goto(`/?arena=${snapshot.id}`);
+  for (const entry of cases) {
+    const estimate = page.locator(`[data-board="${entry.id}"] .est`);
+    await expect(estimate).toBeVisible();
+    await expect(estimate).toContainText(entry.expected);
+    await expect(estimate).not.toContainText(/null|undefined/);
+  }
+});
+
 test("the opening never covers the whole page", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const snapshot = fixtureSnapshot();

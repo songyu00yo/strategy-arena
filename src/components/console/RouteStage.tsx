@@ -845,8 +845,8 @@ export function RouteStage({
             <p>{readableClaimText(version, view.thesis)}</p>
             <div className="est">
               {strategy.estimatedHours === view.estimatedHours
-                ? `${view.estimatedHours ?? "?"} 小时`
-                : `${strategy.estimatedHours} → ${view.estimatedHours} 小时`}
+                ? `${view.estimatedHours ?? "待核实"} 小时`
+                : `${strategy.estimatedHours ?? "待核实"} → ${view.estimatedHours ?? "待核实"} 小时`}
               {" · "}¥{view.estimatedCost ?? "?"}
             </div>
             {[...new Set([...strategy.claims, ...view.claims].map((c) => c.id))].map((claimId) => {

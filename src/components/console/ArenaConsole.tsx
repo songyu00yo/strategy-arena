@@ -21,7 +21,7 @@ import { attackMeta } from "@/components/status";
 import type { StepContext } from "@/lib/step-context";
 import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
-import { Chapter, Intro, RecordWall, VerdictFilm } from "./fx";
+import { RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
 import { RouteStage } from "./RouteStage";
 import { StepCard } from "./StepCard";
@@ -63,6 +63,8 @@ export function ArenaConsole({
   slate,
   notices,
   conditions,
+  agent,
+  drafts,
   selectedAttack,
   historical,
   startFromBeginning = false,
@@ -80,6 +82,10 @@ export function ArenaConsole({
   slate: React.ReactNode;
   notices: React.ReactNode;
   conditions: React.ReactNode;
+  /** The agent's plan and action chain: its own band, so it never pushes the stage around. */
+  agent?: React.ReactNode;
+  /** Live and archived draft text: kept in the rail with its own scroll. */
+  drafts?: React.ReactNode;
   selectedAttack?: string;
   historical: boolean;
   startFromBeginning?: boolean;
@@ -141,6 +147,18 @@ export function ArenaConsole({
       // Nothing to remember it in.
     }
   }, []);
+  // The opening happens on the page itself, never over it: the bands are printed in from the
+  // top, then the boards are raised. Nothing covers the whole screen.
+  useEffect(() => {
+    if (!intro) return;
+    const quick = reducedMotion();
+    const raise = setTimeout(reveal, quick ? 0 : 520);
+    const settle = setTimeout(endIntro, quick ? 0 : 2000);
+    return () => {
+      clearTimeout(raise);
+      clearTimeout(settle);
+    };
+  }, [intro, reveal, endIntro]);
 
   const stage = current?.stage;
   // The first step of a stage waits for its word to land, so the two never collide.
@@ -337,7 +355,7 @@ export function ArenaConsole({
   return (
     <div
       data-motion-origin={seeking ? "interaction" : "story"}
-      className={`c-root ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
+      className={`c-root ${intro ? "opening" : ""} ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
     >
       <RecordWall
         version={version}
@@ -411,6 +429,7 @@ export function ArenaConsole({
           </ResultRegion>
         )}
         <div className="c-conditions">{conditions}</div>
+        {agent && <div className="c-agent">{agent}</div>}
         <div className="c-notices">{notices}</div>
         <div className="c-track">
           <div className="c-time" role="group" aria-label="推演步骤">
@@ -564,6 +583,7 @@ export function ArenaConsole({
                 </button>
               </div>
             </section>
+            {drafts && <div className="c-drafts">{drafts}</div>}
             <section className="c-trace" aria-label="步骤记录">
               <h2>
                 步骤记录 <span>{logged.length}</span>
@@ -629,9 +649,6 @@ export function ArenaConsole({
           </section>
         </div>
       </div>
-      {playing && directed && !seeking && current && current.stage !== "judge" && (
-        <Chapter key={current.stage} stage={current.stage} />
-      )}
       {verdict && directed && !filmDone && current?.id === "judge" && (
         <VerdictFilm verdict={verdict} onDone={endFilm} />
       )}
@@ -669,9 +686,6 @@ export function ArenaConsole({
             onEvidence(attack);
           }}
         />
-      )}
-      {intro && (
-        <Intro version={version} events={events} demo={demo} onReveal={reveal} onDone={endIntro} />
       )}
     </div>
   );

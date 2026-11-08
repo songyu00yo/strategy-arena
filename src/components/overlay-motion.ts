@@ -91,9 +91,14 @@ export function useOverlayMotion<T extends HTMLElement>(
         source.x <= innerWidth &&
         source.y >= 0 &&
         source.y <= innerHeight;
-      const destination = visibleSource
-        ? `translate(${source.x - (box.left + box.width / 2 - matrix.m41)}px,${source.y - (box.top + box.height / 2 - matrix.m42)}px) scale(${Math.min(0.45, source.width / Math.max(1, el.offsetWidth))},${Math.min(0.45, source.height / Math.max(1, el.offsetHeight))})`
-        : start.transform;
+      // Leaving retraces the landing: the sheet lifts back into depth instead of shrinking into a button.
+      void visibleSource;
+      void box;
+      void matrix;
+      const destination =
+        kind === "drawer"
+          ? "translateX(64px) rotate(0.4deg)"
+          : "perspective(1200px) translateY(22px) rotateX(7deg) scale(0.95)";
       const veil = kind === "modal" ? el : backdrop.current;
       const pseudo = kind === "modal" ? "::backdrop" : "::before";
       const veilOpacity = veil ? getComputedStyle(veil, pseudo).opacity : "1";
@@ -111,7 +116,7 @@ export function useOverlayMotion<T extends HTMLElement>(
             opacity: 0,
           },
         ],
-        { duration: 420, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" },
+        { duration: 480, easing: "cubic-bezier(.65,0,.15,1)", fill: "forwards" },
       );
       animations.current = [...continuing, flight];
       if (veil)
@@ -157,20 +162,24 @@ export function useOverlayMotion<T extends HTMLElement>(
         }
       : { x: 0, y: 18 };
     if (!reducedMotion()) {
+      // A sheet is laid on the desk: it comes down out of depth, slightly tilted, and settles flat.
+      // A drawer is a slip of paper slid out from between the pages.
       const flight = el.animate(
-        [
-          {
-            transform:
-              kind === "drawer" && !source
-                ? "translateX(60px)"
-                : `translate(${origin.current.x}px,${origin.current.y}px) scale(.32)`,
-            opacity: kind === "drawer" ? 0.2 : 0,
-          },
-          { transform: "none", opacity: 1 },
-        ],
+        kind === "drawer"
+          ? [
+              { transform: "translateX(72px) rotate(0.6deg)", opacity: 0 },
+              { transform: "none", opacity: 1 },
+            ]
+          : [
+              {
+                transform: `perspective(1200px) translate(${origin.current.x * 0.06}px, 34px) rotateX(9deg) scale(0.94)`,
+                opacity: 0,
+              },
+              { transform: "none", opacity: 1 },
+            ],
         {
-          duration: kind === "drawer" ? 620 : 460,
-          easing: "cubic-bezier(.16,1,.3,1)",
+          duration: kind === "drawer" ? 820 : 760,
+          easing: "cubic-bezier(.19,1,.22,1)",
           fill: "both",
         },
       );
@@ -179,8 +188,8 @@ export function useOverlayMotion<T extends HTMLElement>(
       if (veil)
         animations.current.push(
           veil.animate([{ opacity: 0 }, { opacity: 1 }], {
-            duration: 350,
-            easing: "ease-out",
+            duration: 620,
+            easing: "cubic-bezier(.19,1,.22,1)",
             fill: "both",
             pseudoElement: kind === "modal" ? "::backdrop" : "::before",
           }),
@@ -190,13 +199,13 @@ export function useOverlayMotion<T extends HTMLElement>(
           animations.current.push(
             section.animate(
               [
-                { opacity: 0, transform: "translateX(20px)" },
+                { opacity: 0, transform: "translateY(10px)" },
                 { opacity: 1, transform: "none" },
               ],
               {
-                duration: 480,
-                delay: 100 + Math.min(index, 3) * 80,
-                easing: "cubic-bezier(.16,1,.3,1)",
+                duration: 720,
+                delay: 160 + Math.min(index, 4) * 90,
+                easing: "cubic-bezier(.19,1,.22,1)",
                 fill: "both",
               },
             ),

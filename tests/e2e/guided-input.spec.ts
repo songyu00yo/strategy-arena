@@ -292,8 +292,8 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
     .getByRole("group", { name: questions[2].title, exact: true })
     .getByRole("button", { name: "跳过", exact: true })
     .click();
-  await page.getByRole("button", { name: "继续梳理", exact: true }).click();
-  await expect(page.getByText("第 2 / 2 轮 · 可以说不知道")).toBeVisible();
+  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+  await expect(page.getByText("第 2 轮 · 可以说不知道")).toBeVisible();
   expect(answers[0]).toEqual([
     { questionId: "direction", state: "answered", value: "完成作品" },
     { questionId: "limits", state: "answered", value: ["不买设备", "独立完成"] },
@@ -304,7 +304,7 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
   expect(analysis.map((call) => call.finish)).toEqual([false, false, true]);
   expect(new Set(analysis.map((call) => call.operationId)).size).toBe(3);
   await expect(page.getByText("暂定假设 · 请逐条核对")).toBeVisible();
-  const submit = page.getByRole("button", { name: "开始推演", exact: true });
+  const submit = page.getByRole("button", { name: "确认摘要并开始推演", exact: true });
   await expect(submit).toBeEnabled();
   await page
     .getByRole("textbox", { name: "必须满足的限制", exact: true })
@@ -363,7 +363,7 @@ test("explicit UI fixture: refresh restores questions and a late pre-refresh res
       .getByRole("group", { name: questions[0].title, exact: true })
       .getByRole("radio", { name: "学会基础" })
       .check();
-    await page.getByRole("button", { name: "继续梳理", exact: true }).click();
+    await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
     await started;
     await page.reload();
     await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
@@ -372,7 +372,9 @@ test("explicit UI fixture: refresh restores questions and a late pre-refresh res
       fixtureChallenge.goal,
     );
     await expect(page.getByRole("heading", { name: "再了解你一点。" })).toBeHidden();
-    await expect(page.getByRole("button", { name: "开始推演", exact: true })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "确认摘要并开始推演", exact: true }),
+    ).toBeEnabled();
     expect(analyses).toBe(1);
   } finally {
     releaseOld();
@@ -405,7 +407,7 @@ test("explicit UI fixture: rapid repeated confirmation starts exactly one submis
   });
   try {
     await page.goto("/");
-    const submit = page.getByRole("button", { name: "开始推演", exact: true });
+    const submit = page.getByRole("button", { name: "确认摘要并开始推演", exact: true });
     await submit.evaluate((button) => {
       (button as HTMLButtonElement).click();
       (button as HTMLButtonElement).click();

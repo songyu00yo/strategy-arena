@@ -42,8 +42,10 @@ import {
 } from "./agent";
 import { draftWriter } from "./model-drafts";
 import { CostPlanValidationError } from "./resource-totals";
-import { allSources } from "./intakes";
-import { SCHEMA_VERSION } from "@/lib/contracts";
+import { allSources, createFollowUpIntake } from "./intakes";
+import type { IntakeDraft, SubmitIntakeSchema } from "@/lib/intake-contracts";
+import { freezeCorpus } from "./retrieval";
+import { SCHEMA_VERSION, ChallengeSchema } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
@@ -182,6 +184,99 @@ export function getArena(arenaId: string, owner: string) {
     return snapshot(arenaId, owner, modelInfo());
   });
 }
+
+/** The executable text is assembled from explicit confirmations, never from the verdict. */
+export function refreshRequirements(version: ArenaVersion) {
+  const intake = version.intake;
+  if (!intake?.confirmation) return;
+  const confirmed: string[] = [];
+  const summary = intake.confirmation.summary;
+  const pendingFields = new Set(intake.confirmation.pendingSummaryFields ?? []);
+  if (summary) {
+    const labels: Partial<Record<keyof Challenge, string>> = {
+      goal: "目标",
+      constraints: "必须满足的要求",
+      preferences: "内容、流程与风格偏好",
+      budget: "可投入金额（人民币）",
+      timeHours: "可投入时间（小时）",
+      options: "已确认备选",
+    };
+    for (const [field, label] of Object.entries(labels)) {
+      const key = field as keyof Challenge;
+      const value = summary.challenge[key];
+      if (pendingFields.has(key) || value === null || value === undefined || value === "") continue;
+      const text = Array.isArray(value) ? value.join("、") : String(value);
+      if (text) confirmed.push(`${label} — ${text}`);
+    }
+  }
+  const unresolved: string[] = [];
+  for (const answer of intake.answers) {
+    const value = Array.isArray(answer.value) ? answer.value.join("、") : answer.value;
+    if (answer.state === "answered" && answer.confirmation === "confirmed" && value.trim())
+      confirmed.push(
+        `${answer.question.title} — ${value}${answer.question.authorization ? `（授权范围仅适用于明确同意的答复 — ${answer.question.authorization}）` : ""}`,
+      );
+    else
+      unresolved.push(
+        `${answer.question.title}（${answer.state === "unknown" ? "不知道" : answer.state === "skipped" ? "已跳过" : "待确认"}）`,
+      );
+  }
+  for (const field of pendingFields) unresolved.push(`摘要中的 ${field} 已受修改影响，待重新确认`);
+  const missingMaterials = (intake.attachments ?? [])
+    .filter((attachment) => attachment.state !== "ready")
+    .map(
+      (attachment) =>
+        `${attachment.name} — ${attachment.error || "材料尚未完整读取，需要另行提供或补齐"}`,
+    );
+  const suggestions = [
+    ...new Set([
+      ...intake.assumptions.map((text) => `暂定假设 — ${text}`),
+      ...(version.verdict
+        ? [
+            version.verdict.rationale,
+            ...version.verdict.conditions,
+            ...version.verdict.nextActions,
+            version.verdict.exitCondition,
+          ]
+        : []),
+    ]),
+  ];
+  unresolved.push(...(version.verdict?.uncertainties ?? []));
+  const requirements = [...new Set(confirmed)];
+  version.requirements = {
+    confirmed: requirements,
+    unresolved: [...new Set(unresolved)],
+    suggestions,
+    missingMaterials,
+    executionPrompt: [
+      `依据需求版本 V${version.number} 执行以下用户已确认的要求。`,
+      ...requirements.map((text) => `- ${text}`),
+      requirements.length
+        ? "遇到尚未确认的功能、内容、流程或风格，请先询问用户。授权仅在用户明确同意的单项范围内生效。"
+        : "当前没有可执行的已确认要求，请先向用户补问。",
+    ].join("\n"),
+  };
+}
+
+function confirmedIntake(
+  draft: IntakeDraft,
+  challenge: Challenge,
+  revision: number,
+): NonNullable<ArenaVersion["intake"]> {
+  const confirmation = structuredClone(draft.confirmation ?? { history: [] });
+  confirmation.summary = { revision, confirmedAt: now(), challenge: structuredClone(challenge) };
+  confirmation.pendingSummaryFields = [];
+  return {
+    id: draft.id,
+    originalGoal: draft.goal ?? challenge.goal,
+    answers: structuredClone(draft.answers ?? []),
+    assumptions: [...(draft.assumptions ?? [])],
+    usedSources: structuredClone(draft.sources ?? []),
+    usage: structuredClone(draft.usage ?? []),
+    attachments: structuredClone(draft.attachments ?? []),
+    confirmation,
+  };
+}
 export function createArena(
   challenge: Challenge,
   owner: string,
@@ -243,20 +338,14 @@ export function createArena(
     if (options && draftBody) {
       draftBody.challenge = challenge;
       if (options.assumptions) draftBody.assumptions = options.assumptions;
-      version.intake = {
-        id: options.intakeId,
-        originalGoal: String(draftBody.goal ?? ""),
-        answers: Array.isArray(draftBody.answers)
-          ? (draftBody.answers as NonNullable<ArenaVersion["intake"]>["answers"])
-          : [],
-        assumptions: Array.isArray(draftBody.assumptions)
-          ? (draftBody.assumptions as string[])
-          : [],
-        usedSources: Array.isArray(draftBody.sources)
-          ? (draftBody.sources as NonNullable<ArenaVersion["intake"]>["usedSources"])
-          : [],
-        usage: Array.isArray(draftBody.usage) ? (draftBody.usage as ModelUsage[]) : [],
-      };
+      draftBody.id = options.intakeId;
+      version.intake = confirmedIntake(
+        draftBody as unknown as IntakeDraft,
+        challenge,
+        options.revision,
+      );
+      draftBody.confirmation = version.intake.confirmation;
+      refreshRequirements(version);
     }
     if (executionMode === "agent")
       seedAgent(arenaId, version, options ? allSources(options.intakeId) : []);
@@ -274,6 +363,150 @@ export function createArena(
         .run(arenaId, JSON.stringify(draftBody), Date.now(), options.intakeId, owner);
     }
     return arenaId;
+  });
+  return getArena(arenaId, owner);
+}
+
+/** Continue the saved chain in a child version, preserving the source and its billing records. */
+export function resumeIntake(
+  arenaId: string,
+  owner: string,
+  sourceVersionId: string,
+  draftId: string,
+  input: z.infer<typeof SubmitIntakeSchema>,
+) {
+  atomic(() => {
+    const arena = assertOwner(arenaId, owner);
+    const row = db()
+      .prepare("SELECT body,submitted_arena_id FROM intake_drafts WHERE id=? AND owner=?")
+      .get(draftId, owner) as { body: string; submitted_arena_id: string | null } | undefined;
+    if (!row) throw new ArenaError("未找到这份补问草稿。", 404, "NOT_FOUND");
+    const draft = JSON.parse(row.body) as IntakeDraft;
+    if (row.submitted_arena_id === arenaId) return;
+    if (
+      draft.link?.arenaId !== arenaId ||
+      draft.link.versionId !== sourceVersionId ||
+      arena.active_version_id !== sourceVersionId ||
+      draft.revision !== input.revision
+    )
+      throw new ArenaError("任务或草稿已更新，请核对当前版本后提交。", 409, "STALE_INTAKE");
+    const source = getVersion(sourceVersionId);
+    if (source.waitingForIntake?.id !== draftId || draft.status !== "summary")
+      throw new ArenaError("当前任务已不再等待这份补问。", 409, "STALE_INTAKE");
+    const challenge = ChallengeSchema.parse({
+      ...input.challenge,
+      materials: draft.challenge?.materials ?? source.challenge.materials,
+    });
+    const version = addVersion(arenaId, challenge, "用户确认补问，继续原进度", source.id);
+    db().prepare("DELETE FROM steps WHERE version_id=?").run(version.id);
+    version.strategies = structuredClone(source.strategies);
+    version.attacks = structuredClone(source.attacks);
+    version.evidence = structuredClone(source.evidence);
+    version.revisions = structuredClone(source.revisions);
+    if (source.followUp) version.followUp = structuredClone(source.followUp);
+    for (const text of userChallenges(source.id))
+      db()
+        .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
+        .run(id(), version.id, text);
+    version.stage = source.stage;
+    version.executionMode = source.executionMode;
+    version.continuedFrom = { versionId: source.id, modelRequests: modelRequestsUsed(source.id) };
+    version.intake = confirmedIntake(
+      { ...draft, assumptions: input.assumptions },
+      challenge,
+      input.revision,
+    );
+    version.agent = source.agent ? structuredClone(source.agent) : undefined;
+    const rows = db()
+      .prepare("SELECT * FROM steps WHERE version_id=? ORDER BY ordinal")
+      .all(source.id) as unknown as StepRow[];
+    const mapping = new Map(rows.map((step) => [step.id, id()]));
+    for (const step of rows) {
+      const nextId = mapping.get(step.id)!;
+      db()
+        .prepare(
+          "INSERT INTO steps(id,arena_id,version_id,stage,role,ordinal,status,error,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          nextId,
+          arenaId,
+          version.id,
+          step.stage,
+          step.role.replaceAll(step.id, nextId),
+          step.ordinal,
+          step.status,
+          step.error,
+          step.finished_at,
+        );
+      const action = actionFor(step.id);
+      if (action) {
+        const dependencies = (JSON.parse(action.dependencies) as string[]).map(
+          (dependency) => mapping.get(dependency) ?? dependency,
+        );
+        const payload = JSON.parse(action.payload) as Record<string, unknown>;
+        if (typeof payload.repairOf === "string")
+          payload.repairOf = mapping.get(payload.repairOf) ?? payload.repairOf;
+        db()
+          .prepare(
+            "INSERT INTO agent_actions(step_id,version_id,kind,role,round,dependencies,payload) VALUES(?,?,?,?,?,?,?)",
+          )
+          .run(
+            nextId,
+            version.id,
+            action.kind,
+            action.role,
+            action.round,
+            JSON.stringify(dependencies),
+            JSON.stringify(payload),
+          );
+      }
+    }
+    if (version.agent)
+      version.agent.actions = version.agent.actions.map((action) => ({
+        ...action,
+        id: mapping.get(action.id) ?? action.id,
+        dependencies: action.dependencies.map(
+          (dependency) => mapping.get(dependency) ?? dependency,
+        ),
+        inputHash: undefined,
+      }));
+    for (const revision of version.revisions)
+      if (revision.revisionId)
+        revision.revisionId = mapping.get(revision.revisionId) ?? revision.revisionId;
+    for (const evidence of version.evidence)
+      if (evidence.actionId)
+        evidence.actionId = mapping.get(evidence.actionId) ?? evidence.actionId;
+    const corpus = freezeCorpus(version.id, challenge.materials, draft.sources);
+    if (version.agent) {
+      version.corpusHash = corpus.snapshotHash;
+      db()
+        .prepare("INSERT INTO version_corpora(version_id,body) VALUES(?,?)")
+        .run(version.id, JSON.stringify(corpus));
+    }
+    pinConfiguration(version, draft.modelMode);
+    refreshRequirements(version);
+    saveVersion(version);
+    source.status = "superseded";
+    saveVersion(source);
+    draft.status = "submitted";
+    draft.arenaId = arenaId;
+    draft.revision++;
+    draft.updatedAt = now();
+    draft.confirmation = version.intake.confirmation;
+    db()
+      .prepare(
+        "UPDATE intake_drafts SET submitted_arena_id=?,body=?,updated_at=? WHERE id=? AND owner=?",
+      )
+      .run(arenaId, JSON.stringify(draft), Date.now(), draftId, owner);
+    event(
+      arenaId,
+      version.id,
+      "intake_resumed",
+      "已确认补问，继续保存的推演进度。",
+      version.stage,
+      null,
+      { sourceVersionId, intakeId: draftId },
+    );
   });
   return getArena(arenaId, owner);
 }
@@ -353,6 +586,26 @@ export function newVersion(
     }
     const version = addVersion(arenaId, challenge, reason, previous.id);
     if (previous.intake) version.intake = structuredClone(previous.intake);
+    if (version.intake?.confirmation) {
+      const fields = (Object.keys(challenge) as (keyof Challenge)[]).filter(
+        (field) =>
+          field !== "materials" &&
+          JSON.stringify(challenge[field]) !== JSON.stringify(previous.challenge[field]),
+      );
+      version.intake.confirmation.pendingSummaryFields = [
+        ...new Set([...(version.intake.confirmation.pendingSummaryFields ?? []), ...fields]),
+      ];
+      for (const answer of version.intake.answers) {
+        const affected = answer.question.affects ?? ["constraints", "preferences", "options"];
+        if (!affected.some((field) => fields.includes(field))) continue;
+        answer.confirmation = "pending";
+        answer.needsReconfirmation = true;
+        delete answer.confirmedAt;
+        delete answer.confirmedRevision;
+      }
+      // Editing through the original condition editor produces a draft until explicitly reconfirmed.
+      refreshRequirements(version);
+    }
     if (options.followUp) version.followUp = { ...options.followUp, sourceVersionId: previous.id };
     if ((options.executionMode ?? previous.executionMode) === "agent") {
       const inherited = corpusFor(previous.id);
@@ -363,6 +616,33 @@ export function newVersion(
       db()
         .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
         .run(id(), version.id, text);
+    if (version.intake?.confirmation?.pendingSummaryFields?.length) {
+      const labels: Partial<Record<keyof Challenge, string>> = {
+        goal: "目标",
+        constraints: "必须满足的要求",
+        preferences: "偏好与风格",
+        options: "备选方案",
+        budget: "金额",
+        timeHours: "时间",
+        domain: "成果类型",
+      };
+      const questions = version.intake.confirmation.pendingSummaryFields.map(
+        (field) => `请确认最新修改后的${labels[field] ?? field}要求，或填写需要进一步调整的内容。`,
+      );
+      const followUp = createFollowUpIntake(arenaId, version, owner, questions);
+      if (followUp) {
+        version.waitingForIntake = { id: followUp.id, versionId: version.id };
+        version.status = "paused";
+        saveVersion(version);
+        event(
+          arenaId,
+          version.id,
+          "waiting_for_answers",
+          "修改已保存，请通过我的历史确认受影响的要求。",
+          version.stage,
+        );
+      }
+    }
   });
   return getArena(arenaId, owner);
 }
@@ -527,6 +807,8 @@ function inputFor(version: ArenaVersion, step: StepRow): StageInput {
     if (row) repair = JSON.parse(row.data);
   }
   const input: StageInput = {
+    confirmedRequirements: version.requirements?.confirmed,
+    unresolvedRequirements: version.requirements?.unresolved,
     challenge: version.challenge,
     role: step.role.split(":")[0],
     strategies: independent ? [] : version.strategies,
@@ -598,7 +880,11 @@ function claim(
     requireVersion(arenaId, versionId);
     expireLeases();
     const version = getVersion(versionId);
-    if (arena.active_version_id !== versionId || !["ready", "running"].includes(version.status))
+    if (
+      arena.active_version_id !== versionId ||
+      version.waitingForIntake ||
+      !["ready", "running"].includes(version.status)
+    )
       return null;
     if (db().prepare("SELECT id FROM steps WHERE version_id=? AND status='running'").get(versionId))
       return null;
@@ -1116,7 +1402,31 @@ export async function advanceArena(arenaId: string, owner: string, versionId: st
         version.status = step.stage === "judge" ? "completed" : "ready";
         version.error = null;
       }
-      if (version.status === "paused") version.verdict = partialVerdict(version);
+      if (action?.kind === "plan" && version.status === "ready" && version.intake?.confirmation) {
+        const followUp = createFollowUpIntake(
+          arenaId,
+          version,
+          owner,
+          (value as AgentPlan).questions,
+        );
+        if (followUp) {
+          version.waitingForIntake = { id: followUp.id, versionId };
+          version.status = "paused";
+          version.error = null;
+          event(
+            arenaId,
+            versionId,
+            "waiting_for_answers",
+            "进度已保存，请从我的历史打开对应补问草稿。",
+            version.stage,
+            null,
+            { intakeId: followUp.id },
+          );
+        }
+      }
+      if (version.status === "paused" && !version.waitingForIntake)
+        version.verdict = partialVerdict(version);
+      refreshRequirements(version);
       syncAttackStatuses(version);
       syncActions(version);
       draft.finish("committed");

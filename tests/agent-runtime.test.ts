@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentPlan } from "../src/lib/agent-contracts";
+import type { IntakeDraft } from "../src/lib/intake-contracts";
 import { AGENT_LIMITS } from "../src/lib/agent-contracts";
 import {
   ChallengeSchema,
@@ -64,12 +65,14 @@ vi.mock("../src/lib/server/mcp-tools", () => ({
 }));
 import { ModelCallError } from "../src/lib/server/model";
 import { atomic, closeDb, db, getVersion, id, now } from "../src/lib/server/db";
+import { getIntake, submitIntake, updateIntake } from "../src/lib/server/intakes";
 import { actionFor, hashOf, modelRequestsUsed } from "../src/lib/server/agent";
 import {
   advanceArena,
   createArena,
   getArena,
   newVersion,
+  resumeIntake,
   stopArena,
 } from "../src/lib/server/runtime";
 
@@ -217,6 +220,66 @@ function verdict(input: StageInput): Verdict {
 function arena() {
   return createArena(challenge, owner, "deepseek", undefined, "agent");
 }
+/** Seed an explicitly confirmed intake fixture without sending an intake model request. */
+function clarifiedArena() {
+  const draft: IntakeDraft = {
+    id: id(),
+    revision: 1,
+    goal: challenge.goal,
+    modelMode: "deepseek",
+    status: "summary",
+    round: 1,
+    questions: [],
+    answers: [],
+    challenge: structuredClone(challenge),
+    assumptions: ["测试建议：采用红色装饰，尚未经本人确认"],
+    attachments: [],
+    sources: [],
+    usedSourceIds: [],
+    usage: [],
+    error: null,
+    createdAt: now(),
+    updatedAt: now(),
+    arenaId: null,
+    confirmation: {
+      history: [],
+      summary: { revision: 1, confirmedAt: now(), challenge: structuredClone(challenge) },
+    },
+  };
+  db()
+    .prepare("INSERT INTO intake_drafts(id,owner,body,updated_at) VALUES(?,?,?,?)")
+    .run(draft.id, owner, JSON.stringify(draft), Date.now());
+  return createArena(
+    challenge,
+    owner,
+    "deepseek",
+    { intakeId: draft.id, revision: draft.revision },
+    "agent",
+  );
+}
+/** The intake model's editable-summary response is an explicit test fixture. */
+function followUpSummary(
+  draftId: string,
+  answer: string,
+  state: "answered" | "unknown" | "skipped" = "answered",
+) {
+  let draft = getIntake(draftId, owner);
+  draft = updateIntake(draft.id, owner, {
+    revision: draft.revision,
+    answerMode: "complete",
+    answers: draft.questions.map((question) => ({
+      questionId: question.id,
+      state,
+      value: state === "answered" ? answer : "",
+    })),
+  });
+  draft.status = "summary";
+  draft.challenge = { ...challenge, preferences: answer };
+  db()
+    .prepare("UPDATE intake_drafts SET body=?,updated_at=? WHERE id=?")
+    .run(JSON.stringify(draft), Date.now(), draft.id);
+  return draft;
+}
 async function drive(snapshot: ArenaSnapshot, until?: (snapshot: ArenaSnapshot) => boolean) {
   let current = snapshot;
   for (let index = 0; index < 80; index++) {
@@ -305,6 +368,157 @@ afterEach(() => {
 });
 
 describe("durable bounded agent with synthetic models", () => {
+  it("persists a linked question pause across reopening and finishes the current advance request", async () => {
+    const created = clarifiedArena();
+    const paused = await advanceArena(created.id, owner, created.activeVersionId);
+    const version = paused.versions[0];
+    expect(version).toMatchObject({ status: "paused", verdict: null });
+    expect(version.waitingForIntake).toMatchObject({ versionId: version.id });
+    const draft = getIntake(version.waitingForIntake!.id, owner);
+    expect(draft.link).toEqual({ arenaId: created.id, versionId: version.id });
+    expect(draft.questions.map((question) => question.title)).toEqual(["材料是否足够"]);
+    expect(models.plan).toHaveBeenCalledTimes(1);
+    expect(models.propose).not.toHaveBeenCalled();
+    closeDb();
+    expect(getArena(created.id, owner).versions[0].waitingForIntake).toEqual(
+      version.waitingForIntake,
+    );
+    await advanceArena(created.id, owner, version.id);
+    expect(models.plan).toHaveBeenCalledTimes(1);
+    expect(models.propose).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing three proposals after checkpoint-two questions and resumes pending work once", async () => {
+    models.plan.mockImplementation(async (request) => ({
+      value: {
+        ...plan(request.input.checkpoint),
+        questions: request.input.checkpoint === 2 ? ["你希望报告偏正式还是活泼？"] : [],
+      },
+      usage,
+    }));
+    const paused = await drive(clarifiedArena());
+    const source = paused.versions.find((version) => version.id === paused.activeVersionId)!;
+    expect(source.status).toBe("paused");
+    expect(source.strategies.map((strategy) => strategy.id)).toEqual(roles);
+    expect(models.propose).toHaveBeenCalledTimes(3);
+    expect(new Set(models.propose.mock.calls.map((call) => call[2])).size).toBe(3);
+    const previousRequests = modelRequestsUsed(source.id);
+    const intervention = "测试用户反馈：保留原活动流程说明，执行前先核对";
+    db()
+      .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
+      .run(id(), source.id, intervention);
+    const saved = followUpSummary(source.waitingForIntake!.id, "本人选择正式报告风格");
+    const submission = {
+      revision: saved.revision,
+      challenge: saved.challenge!,
+      assumptions: saved.assumptions,
+      executionMode: "agent" as const,
+    };
+    const resumed = resumeIntake(paused.id, owner, source.id, saved.id, submission);
+    expect(resumed.id).toBe(paused.id);
+    expect(resumed.activeVersionId).not.toBe(source.id);
+    const next = resumed.versions.find((version) => version.id === resumed.activeVersionId)!;
+    expect(next).toMatchObject({
+      parentVersionId: source.id,
+      status: "ready",
+      strategies: source.strategies,
+      continuedFrom: { versionId: source.id, modelRequests: previousRequests },
+    });
+    expect(next.waitingForIntake).toBeUndefined();
+    expect(modelRequestsUsed(next.id)).toBe(previousRequests);
+    const historical = resumed.versions.find((version) => version.id === source.id)!;
+    expect(historical.strategies).toEqual(source.strategies);
+    expect(historical.challenge.preferences).toBe(challenge.preferences);
+    expect(submitIntake(saved.id, owner, submission).activeVersionId).toBe(next.id);
+    const completed = await drive(resumed);
+    const result = completed.versions.find((version) => version.id === next.id)!;
+    expect(result.status).toBe("completed");
+    expect(models.propose).toHaveBeenCalledTimes(3);
+    expect(models.revise).toHaveBeenCalledTimes(3);
+    expect(models.judge).toHaveBeenCalledTimes(1);
+    for (const [input] of models.revise.mock.calls)
+      expect(input.userChallenges).toContain(intervention);
+    expect(models.judge.mock.calls[0][0].userChallenges).toContain(intervention);
+    expect(result.requirements?.confirmed.join("\n")).toContain("本人选择正式报告风格");
+    expect(result.requirements?.executionPrompt).toContain("本人选择正式报告风格");
+    expect(result.requirements?.executionPrompt).not.toContain("采用红色装饰");
+    const actualPaidSteps = db()
+      .prepare("SELECT COUNT(*) AS count FROM steps WHERE usage IS NOT NULL")
+      .get() as { count: number };
+    expect(actualPaidSteps.count).toBe(
+      models.plan.mock.calls.length +
+        models.propose.mock.calls.length +
+        models.attack.mock.calls.length +
+        models.revise.mock.calls.length +
+        models.judge.mock.calls.length,
+    );
+    expect(completed.versions.reduce((total, version) => total + version.costCny, 0)).toBeCloseTo(
+      actualPaidSteps.count * usage.estimatedCny,
+    );
+  });
+
+  it("rejects wrong-owner, stale-version and stale-draft resumes while preserving the saved answer", async () => {
+    const created = clarifiedArena();
+    const paused = await advanceArena(created.id, owner, created.activeVersionId);
+    const source = paused.versions[0];
+    const saved = followUpSummary(source.waitingForIntake!.id, "本人选择仅制作界面演示");
+    const input = { revision: saved.revision, challenge: saved.challenge!, assumptions: [] };
+    expect(() => resumeIntake(paused.id, "other-owner", source.id, saved.id, input)).toThrow();
+    expect(() =>
+      resumeIntake(paused.id, owner, source.id, saved.id, {
+        ...input,
+        revision: input.revision - 1,
+      }),
+    ).toThrow();
+    expect(getIntake(saved.id, owner).challenge?.preferences).toBe("本人选择仅制作界面演示");
+    newVersion(paused.id, owner, challenge, "测试用户已改为新任务版本");
+    expect(() => resumeIntake(paused.id, owner, source.id, saved.id, input)).toThrow();
+    expect(getIntake(saved.id, owner).challenge?.preferences).toBe("本人选择仅制作界面演示");
+  });
+
+  it.each(["unknown", "skipped"] as const)(
+    "keeps a %s answer unresolved without repeatedly asking or selecting a default",
+    async (state) => {
+      const created = clarifiedArena();
+      const paused = await advanceArena(created.id, owner, created.activeVersionId);
+      const source = paused.versions[0];
+      const saved = followUpSummary(source.waitingForIntake!.id, "", state);
+      const resumed = resumeIntake(paused.id, owner, source.id, saved.id, {
+        revision: saved.revision,
+        challenge: saved.challenge!,
+        assumptions: saved.assumptions,
+        executionMode: "agent",
+      });
+      const completed = await drive(resumed);
+      const version = completed.versions.find((item) => item.id === completed.activeVersionId)!;
+      expect(version.status).toBe("completed");
+      expect(version.waitingForIntake).toBeUndefined();
+      expect(
+        version.intake?.answers.find((answer) => answer.question.title === "材料是否足够"),
+      ).toMatchObject({ state, value: "" });
+      expect(version.requirements?.unresolved.join("\n")).toContain("材料是否足够");
+      expect(version.requirements?.confirmed.join("\n")).not.toContain("材料是否足够");
+      const drafts = db().prepare("SELECT COUNT(*) AS count FROM intake_drafts").get() as {
+        count: number;
+      };
+      expect(drafts.count).toBe(2);
+      expect(models.propose).toHaveBeenCalledTimes(3);
+      expect(models.plan).toHaveBeenCalledTimes(2);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains original behavior for legacy tasks without explicit confirmation records", async () => {
+    const created = arena();
+    const advanced = await advanceArena(created.id, owner, created.activeVersionId);
+    expect(advanced.versions[0].status).toBe("ready");
+    expect(advanced.versions[0].waitingForIntake).toBeUndefined();
+    expect(advanced.versions[0].intake?.confirmation).toBeUndefined();
+    expect(
+      advanced.steps.some((step) => step.stage === "propose" && step.status === "pending"),
+    ).toBe(true);
+  });
   it("freezes planner protocol 1.3 with single-expression tools and scoped resource directions", async () => {
     const created = arena();
     expect(created.versions[0].agent?.protocol).toBe("bounded-agent-1.3");

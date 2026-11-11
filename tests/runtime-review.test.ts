@@ -48,11 +48,13 @@ vi.mock("../src/lib/server/model", () => {
   };
 });
 import { closeDb, db, getVersion, saveVersion } from "../src/lib/server/db";
+import { getIntake } from "../src/lib/server/intakes";
 import {
   advanceArena,
   createArena,
   getArena,
   newVersion,
+  refreshRequirements,
   stopArena,
 } from "../src/lib/server/runtime";
 import { ModelCallError } from "../src/lib/server/model";
@@ -163,6 +165,280 @@ afterEach(() => {
 });
 
 describe("runtime adversarial review", () => {
+  it("assembles executable requirements only from active explicit confirmations and scoped authorization", () => {
+    const created = createArena(challenge, "review-owner");
+    const version = getVersion(created.activeVersionId);
+    const confirmedChallenge = {
+      ...challenge,
+      constraints: "交付一份十页PPT",
+      preferences: "旧版正式风格",
+    };
+    const question = (id: string, title: string) => ({
+      id,
+      title,
+      reason: "测试本人决定",
+      placeholder: "填写或暂缓",
+      type: "text" as const,
+      options: [],
+      unit: "",
+    });
+    version.intake = {
+      id: "explicit-output-fixture",
+      originalGoal: challenge.goal,
+      answers: [
+        {
+          questionId: "content",
+          question: question("content", "内容范围"),
+          state: "answered",
+          value: "只介绍活动流程",
+          confirmation: "confirmed",
+          confirmedRevision: 1,
+        },
+        {
+          questionId: "style",
+          question: question("style", "风格选择"),
+          state: "answered",
+          value: "改成活泼风格",
+          confirmation: "pending",
+        },
+        {
+          questionId: "budget",
+          question: question("budget", "预算上限"),
+          state: "unknown",
+          value: "",
+        },
+        { questionId: "date", question: question("date", "交付日期"), state: "skipped", value: "" },
+        {
+          questionId: "authorize",
+          question: {
+            ...question("authorize", "是否授权此操作"),
+            authorization: "仅授权生成PPT提纲，上传外部系统需另行确认",
+          },
+          state: "answered",
+          value: "同意",
+          confirmation: "confirmed",
+          confirmedRevision: 1,
+        },
+      ],
+      assumptions: ["模型建议使用红色背景"],
+      usedSources: [
+        {
+          id: "S-interpretation",
+          attachmentId: "image",
+          filename: "demo.png",
+          location: "图片1",
+          text: "模型推测用户允许公开报名信息",
+          interpretation: true,
+        },
+      ],
+      attachments: [
+        {
+          id: "missing",
+          name: "活动名单.xlsx",
+          size: 100,
+          state: "failed",
+          imageCount: 0,
+          interpreted: false,
+          locations: [],
+          warnings: [],
+          error: "测试文件读取失败",
+        },
+      ],
+      usage: [],
+      confirmation: {
+        history: [],
+        summary: {
+          revision: 1,
+          confirmedAt: new Date().toISOString(),
+          challenge: confirmedChallenge,
+        },
+        pendingSummaryFields: ["preferences"],
+      },
+    };
+    version.verdict = {
+      ...proposedVerdict("A"),
+      rationale: "模型建议制作宣传网站",
+      nextActions: ["模型建议立即公开发布"],
+      uncertainties: ["品牌素材尚未收到"],
+    };
+    refreshRequirements(version);
+    const output = version.requirements!;
+    const confirmed = output.confirmed.join("\n");
+    expect(confirmed).toContain("交付一份十页PPT");
+    expect(confirmed).toContain("只介绍活动流程");
+    expect(confirmed).toContain("仅授权生成PPT提纲，上传外部系统需另行确认");
+    expect(confirmed).not.toContain("旧版正式风格");
+    expect(confirmed).not.toContain("改成活泼风格");
+    expect(output.unresolved.join("\n")).toContain("预算上限（不知道）");
+    expect(output.unresolved.join("\n")).toContain("交付日期（已跳过）");
+    expect(output.unresolved.join("\n")).toContain("风格选择（待确认）");
+    expect(output.suggestions.join("\n")).toContain("模型建议使用红色背景");
+    expect(output.suggestions.join("\n")).toContain("模型建议制作宣传网站");
+    expect(output.missingMaterials.join("\n")).toContain("活动名单.xlsx");
+    expect(output.executionPrompt).toContain(`V${version.number}`);
+    expect(output.executionPrompt).toContain("交付一份十页PPT");
+    for (const unconfirmed of [
+      "旧版正式风格",
+      "改成活泼风格",
+      "模型建议使用红色背景",
+      "立即公开发布",
+      "用户允许公开报名信息",
+    ])
+      expect(output.executionPrompt).not.toContain(unconfirmed);
+  });
+
+  it("preserves historical output and invalidates only changed summary fields in a condition revision", () => {
+    const created = createArena(challenge, "review-owner");
+    const original = getVersion(created.activeVersionId);
+    original.intake = {
+      id: "revision-output-fixture",
+      originalGoal: challenge.goal,
+      answers: [],
+      assumptions: [],
+      usedSources: [],
+      usage: [],
+      confirmation: {
+        history: [],
+        summary: {
+          revision: 1,
+          confirmedAt: new Date().toISOString(),
+          challenge: { ...challenge, preferences: "正式报告" },
+        },
+      },
+    };
+    original.challenge = { ...challenge, preferences: "正式报告" };
+    refreshRequirements(original);
+    saveVersion(original);
+    const revised = newVersion(
+      created.id,
+      "review-owner",
+      { ...original.challenge, preferences: "活泼报告" },
+      "测试改答风格",
+    );
+    const next = revised.versions.find((version) => version.id === revised.activeVersionId)!;
+    refreshRequirements(next);
+    expect(next.intake?.confirmation?.pendingSummaryFields).toContain("preferences");
+    expect(next.requirements?.confirmed.join("\n")).toContain(challenge.goal);
+    expect(next.requirements?.confirmed.join("\n")).not.toContain("正式报告");
+    expect(next.requirements?.executionPrompt).not.toContain("活泼报告");
+    expect(getVersion(original.id).requirements?.executionPrompt).toContain("正式报告");
+    expect(getVersion(original.id).challenge.preferences).toBe("正式报告");
+  });
+
+  it("asks for confirmation again when the same summary field changes a second time", () => {
+    const created = createArena(challenge, "review-owner");
+    const original = getVersion(created.activeVersionId);
+    original.challenge = { ...challenge, preferences: "正式报告" };
+    const title = "请确认最新修改后的偏好与风格要求，或填写需要进一步调整的内容。";
+    original.intake = {
+      id: "repeated-condition-fixture",
+      originalGoal: challenge.goal,
+      answers: [
+        {
+          questionId: "follow_style",
+          question: {
+            id: "follow_style",
+            title,
+            reason: "前次改答",
+            placeholder: "",
+            type: "text",
+            options: [],
+            unit: "",
+            affects: ["preferences"],
+          },
+          state: "answered",
+          value: "正式报告",
+          confirmation: "confirmed",
+          confirmedRevision: 1,
+          confirmedAt: new Date().toISOString(),
+        },
+      ],
+      assumptions: [],
+      usedSources: [],
+      usage: [],
+      confirmation: {
+        history: [],
+        summary: {
+          revision: 1,
+          confirmedAt: new Date().toISOString(),
+          challenge: original.challenge,
+        },
+      },
+    };
+    saveVersion(original);
+    const revised = newVersion(
+      created.id,
+      "review-owner",
+      { ...original.challenge, preferences: "极简报告" },
+      "再次改变同一偏好",
+    );
+    const next = revised.versions.find((version) => version.id === revised.activeVersionId)!;
+    expect(next.status).toBe("paused");
+    expect(next.waitingForIntake).toBeDefined();
+    expect(next.intake?.answers[0]).toMatchObject({
+      confirmation: "pending",
+      needsReconfirmation: true,
+    });
+    expect(next.intake?.answers[0].confirmedAt).toBeUndefined();
+    expect(next.intake?.answers[0].confirmedRevision).toBeUndefined();
+    expect(
+      getIntake(next.waitingForIntake!.id, "review-owner").questions.map(
+        (question) => question.title,
+      ),
+    ).toContain(title);
+  });
+
+  it("preserves an explicit refusal without interpreting the authorization scope as consent", () => {
+    const created = createArena(challenge, "review-owner");
+    const version = getVersion(created.activeVersionId);
+    version.intake = {
+      id: "denied-authorization-fixture",
+      originalGoal: challenge.goal,
+      answers: [
+        {
+          questionId: "publish",
+          question: {
+            id: "publish",
+            title: "是否允许公开报名名单",
+            reason: "单项授权",
+            placeholder: "",
+            type: "single",
+            options: ["同意", "拒绝"],
+            unit: "",
+            authorization: "仅公开本次报名名单",
+          },
+          state: "answered",
+          value: "拒绝",
+          confirmation: "confirmed",
+          confirmedRevision: 1,
+        },
+      ],
+      assumptions: [],
+      usedSources: [],
+      usage: [],
+      confirmation: { history: [] },
+    };
+    refreshRequirements(version);
+    expect(version.requirements?.executionPrompt).toContain("是否允许公开报名名单 — 拒绝");
+    expect(version.requirements?.executionPrompt).toContain("授权范围仅适用于明确同意的答复");
+    expect(version.requirements?.executionPrompt).not.toContain("是否允许公开报名名单 — 同意");
+  });
+
+  it("keeps legacy intake records unconfirmed when no explicit confirmation metadata exists", () => {
+    const created = createArena(challenge, "review-owner");
+    const version = getVersion(created.activeVersionId);
+    version.intake = {
+      id: "legacy-intake",
+      originalGoal: challenge.goal,
+      answers: [],
+      assumptions: ["旧自动保存内容"],
+      usedSources: [],
+      usage: [],
+    };
+    refreshRequirements(version);
+    expect(version.requirements).toBeUndefined();
+    expect(version.intake.confirmation).toBeUndefined();
+  });
   it("archives safe strict-function diagnostics and known usage without scheduling a repair", async () => {
     const diagnostic: StructuredOutputDiagnostic = {
       expectedFunction: "submit_propose",

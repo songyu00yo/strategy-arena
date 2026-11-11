@@ -389,31 +389,61 @@ export function ArenaConsole({
                   </b>
                   <span>{OUTCOME[verdict.outcome]}</span>
                 </div>
-                <h2>{readableClaimText(version, verdict.headline)}</h2>
-                <p>{readableClaimText(version, verdict.rationale)}</p>
+                <h2>
+                  {version.requirements
+                    ? "已确认需求与执行提示词"
+                    : readableClaimText(version, verdict.headline)}
+                </h2>
+                <p>
+                  {version.requirements
+                    ? wholeResult
+                      ? listOf(version.requirements.confirmed) || "当前要求尚待确认"
+                      : `已确认 ${version.requirements.confirmed.length} 项要求，展开完整结论查看。`
+                    : readableClaimText(version, verdict.rationale)}
+                </p>
               </div>
               <div className="act">
                 <div className="first">
-                  <small>现在该做的第一步</small>
-                  <strong>{readableClaimText(version, verdict.nextActions[0])}</strong>
+                  <small>{version.requirements ? "执行提示词" : "现在该做的第一步"}</small>
+                  <strong>
+                    {version.requirements
+                      ? wholeResult
+                        ? version.requirements.executionPrompt
+                        : "展开完整结论查看本版本执行提示词"
+                      : readableClaimText(version, verdict.nextActions[0])}
+                  </strong>
                 </div>
                 <dl>
                   <div>
-                    <dt>前提</dt>
-                    <dd>{readableClaimText(version, listOf(verdict.conditions)) || "未给出"}</dd>
+                    <dt>{version.requirements ? "AI 建议及暂定假设（待确认）" : "前提"}</dt>
+                    <dd>
+                      {version.requirements
+                        ? listOf(version.requirements.suggestions) || "未列出"
+                        : readableClaimText(version, listOf(verdict.conditions)) || "未给出"}
+                    </dd>
                   </div>
                   <div>
                     <dt>仍需确认</dt>
-                    <dd>{readableClaimText(version, listOf(verdict.uncertainties)) || "未列出"}</dd>
+                    <dd>
+                      {version.requirements
+                        ? listOf(version.requirements.unresolved) || "未列出"
+                        : readableClaimText(version, listOf(verdict.uncertainties)) || "未列出"}
+                    </dd>
                   </div>
                   <div>
-                    <dt>退出条件</dt>
-                    <dd>{readableClaimText(version, verdict.exitCondition)}</dd>
+                    <dt>{version.requirements ? "待提供材料" : "退出条件"}</dt>
+                    <dd>
+                      {version.requirements
+                        ? listOf(version.requirements.missingMaterials) || "未列出缺失材料"
+                        : readableClaimText(version, verdict.exitCondition)}
+                    </dd>
                   </div>
                 </dl>
                 {verdict.nextActions.length > 1 && (
                   <p className="more">
-                    接着做：{readableClaimText(version, listOf(verdict.nextActions.slice(1)))}
+                    {version.requirements
+                      ? `材料引用 ${version.intake?.usedSources.map((source) => `${source.filename} ${source.location} [${source.id}]`).join("、") || "暂无材料引用"}`
+                      : `接着做：${readableClaimText(version, listOf(verdict.nextActions.slice(1)))}`}
                   </p>
                 )}
                 <button

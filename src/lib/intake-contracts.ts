@@ -16,6 +16,14 @@ export const QuestionSchema = z.object({
   type: z.enum(["text", "single", "multiple", "number"]),
   options: z.array(z.string().min(1).max(100)).max(6),
   unit: z.string().max(30),
+  dependsOn: z.array(z.string().max(40)).max(12).optional(),
+  affects: z
+    .array(
+      z.enum(["goal", "constraints", "preferences", "options", "domain", "budget", "timeHours"]),
+    )
+    .max(7)
+    .optional(),
+  authorization: z.string().max(300).optional(),
 });
 export type IntakeQuestion = z.infer<typeof QuestionSchema>;
 export const AnswerSchema = z.object({
@@ -24,7 +32,22 @@ export const AnswerSchema = z.object({
   value: z.union([z.string().max(3000), z.array(z.string().max(100)).max(6)]),
 });
 export type IntakeAnswer = z.infer<typeof AnswerSchema>;
-export type RecordedAnswer = IntakeAnswer & { question: IntakeQuestion };
+export type RecordedAnswer = IntakeAnswer & {
+  question: IntakeQuestion;
+  confirmation?: "confirmed" | "pending";
+  confirmedRevision?: number;
+  confirmedAt?: string;
+  needsReconfirmation?: boolean;
+};
+export interface IntakeConfirmation {
+  summary?: { revision: number; confirmedAt: string; challenge: Challenge };
+  pendingSummaryFields?: (keyof Challenge)[];
+  history: Array<{
+    revision: number;
+    answers: RecordedAnswer[];
+    summary?: IntakeConfirmation["summary"];
+  }>;
+}
 export interface MaterialSource {
   id: string;
   attachmentId: string;
@@ -45,6 +68,7 @@ export interface IntakeAttachment {
   locations: string[];
   warnings: string[];
   error?: string;
+  sourceAttachmentId?: string;
 }
 export interface IntakeDraft {
   id: string;
@@ -54,6 +78,7 @@ export interface IntakeDraft {
   status: "input" | "analyzing" | "questions" | "summary" | "failed" | "uncertain" | "submitted";
   round: number;
   questions: IntakeQuestion[];
+  queuedQuestions?: IntakeQuestion[];
   answers: RecordedAnswer[];
   challenge: Challenge | null;
   assumptions: string[];
@@ -67,6 +92,8 @@ export interface IntakeDraft {
   createdAt: string;
   updatedAt: string;
   arenaId: string | null;
+  link?: { arenaId: string; versionId: string };
+  confirmation?: IntakeConfirmation;
 }
 export const CreateIntakeSchema = z.object({
   goal: z.string().max(3000).default(""),

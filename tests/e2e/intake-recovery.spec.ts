@@ -213,7 +213,7 @@ test("explicit UI fixture: unsent question answers survive refresh and failed sy
   await expect(field).toHaveValue("测试：不离职，保留当前收入。");
   expect(answerSaves).toBe(0);
   expect(analyses).toBe(0);
-  await page.getByRole("button", { name: "继续梳理", exact: true }).click();
+  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "测试：暂时离线" })).toBeVisible();
   expect(answerSaves).toBe(1);
   expect(analyses).toBe(0);
@@ -281,7 +281,9 @@ test("explicit UI fixture: summary saves serialize, preserve newer edits and rec
     await constraints.fill("测试最新限制：不离职，保留当前收入。");
     releaseFirst();
     await expect(constraints).toHaveValue("测试最新限制：不离职，保留当前收入。");
-    await expect(page.getByRole("status").filter({ hasText: "摘要已保存" })).toBeVisible();
+    await expect(
+      page.getByRole("status").filter({ hasText: "摘要草稿已保存，提交后确认" }),
+    ).toBeVisible();
     expect(draft.challenge?.constraints).toBe("测试最新限制：不离职，保留当前收入。");
     expect(saves).toBe(2);
     await page.getByRole("button", { name: "预算、时间与备选方案", exact: true }).click();
@@ -299,7 +301,9 @@ test("explicit UI fixture: summary saves serialize, preserve newer edits and rec
     ).toHaveValue("123");
     await expect(page.getByRole("button", { name: "移除第 1 条假设", exact: true })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "移除第 2 条假设", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("status").filter({ hasText: "摘要已保存" })).toBeVisible();
+    await expect(
+      page.getByRole("status").filter({ hasText: "摘要草稿已保存，提交后确认" }),
+    ).toBeVisible();
     expect(draft.challenge?.budget).toBe(123);
     expect(draft.assumptions).toEqual(["测试：保留的假设"]);
     expect(await page.evaluate((key) => localStorage.getItem(key), SUMMARY_JOURNAL_KEY)).toBeNull();
@@ -342,7 +346,9 @@ test("explicit UI fixture: summary saves serialize, preserve newer edits and rec
     );
     expect(saves).toBe(beforeConflict);
     await page.getByRole("button", { name: "恢复本机未保存的修改", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "摘要已保存" })).toBeVisible();
+    await expect(
+      page.getByRole("status").filter({ hasText: "摘要草稿已保存，提交后确认" }),
+    ).toBeVisible();
     expect(draft.challenge?.constraints).toBe("测试本机待恢复限制。");
   } finally {
     releaseFirst();
@@ -408,7 +414,7 @@ test("explicit UI fixture: committed submit with a lost response recovers the sa
   await page
     .getByRole("textbox", { name: "必须满足的限制", exact: true })
     .fill("测试提交前最后修正：保留收入。");
-  await page.getByRole("button", { name: "开始推演", exact: true }).click();
+  await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
   await expect.poll(() => submissions).toBe(1);
   expect(order).toEqual(["save-summary", "submit"]);
   expect(await page.evaluate((key) => localStorage.getItem(key), intakeStorageKey)).toBe(draft.id);
@@ -430,4 +436,99 @@ test("explicit UI fixture: committed submit with a lost response recovers the sa
   expect(submissions).toBe(1);
   expect(analyses).toBe(0);
   expect(oldArenaReads).toBe(0);
+});
+
+test("explicit UI fixture: a third question round confirms only entered answers and preserves unknown and untouched items", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const snapshot = completedSnapshot();
+  const questions: IntakeDraft["questions"] = [
+    {
+      id: "style",
+      title: "这份演示文稿采用哪种风格？",
+      reason: "演示数据，风格由本人选择。",
+      placeholder: "",
+      type: "single",
+      options: ["简洁正式", "活泼插画"],
+      unit: "",
+    },
+    {
+      id: "materials",
+      title: "已有最终图片材料吗？",
+      reason: "演示数据，缺失材料继续保持未决。",
+      placeholder: "",
+      type: "text",
+      options: [],
+      unit: "",
+    },
+    {
+      id: "authorization",
+      title: "是否授权使用公开素材？",
+      reason: "演示数据，未作答不能自动授权。",
+      placeholder: "",
+      type: "single",
+      options: ["仅允许公开授权素材", "全部使用本人材料"],
+      unit: "",
+    },
+  ];
+  let draft = fixtureIntake({ status: "questions", round: 3, questions });
+  await restorePointer(page, draft.id);
+  const patches: { answers: IntakeAnswer[]; answerMode: string }[] = [];
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/health") return route.fulfill({ json: health(snapshot) });
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON();
+      patches.push(body);
+      expect(body.answerMode).toBe("complete");
+      expect(body.answers).toEqual([
+        { questionId: "style", state: "answered", value: "简洁正式" },
+        { questionId: "materials", state: "unknown", value: "" },
+      ]);
+      draft = {
+        ...draft,
+        revision: draft.revision + 1,
+        answers: body.answers.map((answer: IntakeAnswer) => ({
+          ...answer,
+          question: questions.find((question) => question.id === answer.questionId)!,
+        })),
+      };
+    }
+    if (path.endsWith("/analyze")) {
+      draft = {
+        ...draft,
+        revision: draft.revision + 1,
+        round: 4,
+        questions: [
+          {
+            ...questions[0],
+            id: "audience",
+            title: "这份演示文稿给谁阅读？",
+            type: "text",
+            options: [],
+          },
+        ],
+      };
+    }
+    if (path.startsWith("/api/intakes/")) return route.fulfill({ json: draft });
+    return route.fulfill({ status: 500, json: { error: "Unexpected fixture request" } });
+  });
+  await page.goto("/");
+  await expect(page.getByText("第 3 轮", { exact: false })).toBeVisible();
+  const style = page.getByRole("radio", { name: "简洁正式", exact: true });
+  await expect(style).not.toBeChecked();
+  await expect(page.getByRole("radio", { name: "活泼插画", exact: true })).not.toBeChecked();
+  await style.check();
+  await page
+    .getByRole("group", { name: "已有最终图片材料吗？", exact: true })
+    .getByRole("button", { name: "暂时不知道", exact: true })
+    .click();
+  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "这份演示文稿给谁阅读？", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("第 4 轮", { exact: false })).toBeVisible();
+  expect(patches).toHaveLength(1);
+  expect(draft.answers.some((answer) => answer.questionId === "authorization")).toBe(false);
 });

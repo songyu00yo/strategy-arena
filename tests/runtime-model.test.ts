@@ -371,7 +371,7 @@ describe("atomic intake submission", () => {
         Date.now(),
       );
   }
-  it("passes the confirmed assumptions into inference and retains them with an updated rematch challenge", async () => {
+  it("retains assumptions and requests confirmation when the original condition editor changes a confirmed requirement", async () => {
     draft();
     db()
       .prepare("UPDATE intake_drafts SET body=? WHERE id=?")
@@ -409,12 +409,12 @@ describe("atomic intake submission", () => {
       "人数由五人调整为两人",
     );
     await advanceArena(rematch.id, "owner", rematch.activeVersionId);
-    expect(fixture.generate.mock.calls[1][0]).toMatchObject({
-      assumptions: ["先验证已有设备是否可用"],
-      challenge: {
-        constraints: "本版只有两名成员，不可增人",
-        materials: "用户早期原话：当前团队五人",
-      },
+    expect(fixture.generate).toHaveBeenCalledTimes(1);
+    expect(rematch.versions[1]).toMatchObject({
+      status: "paused",
+      waitingForIntake: { versionId: rematch.activeVersionId },
+      challenge: { constraints: "本版只有两名成员，不可增人" },
+      intake: { confirmation: { pendingSummaryFields: ["constraints"] } },
     });
     expect(rematch.versions[0].intake?.assumptions).toEqual(["先验证已有设备是否可用"]);
     expect(rematch.versions[1].intake?.assumptions).toEqual(["先验证已有设备是否可用"]);

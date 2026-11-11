@@ -249,6 +249,15 @@ export interface ArenaEvent {
   createdAt: string;
 }
 export interface ArenaVersion {
+  waitingForIntake?: { id: string; versionId: string };
+  continuedFrom?: { versionId: string; modelRequests: number };
+  requirements?: {
+    confirmed: string[];
+    unresolved: string[];
+    suggestions: string[];
+    missingMaterials: string[];
+    executionPrompt: string;
+  };
   executionMode?: ExecutionMode;
   agent?: import("./agent-contracts").AgentState;
   corpusHash?: string;
@@ -277,6 +286,8 @@ export interface ArenaVersion {
     assumptions: string[];
     usedSources: import("./intake-contracts").MaterialSource[];
     usage: ModelUsage[];
+    confirmation?: import("./intake-contracts").IntakeConfirmation;
+    attachments?: import("./intake-contracts").IntakeAttachment[];
   };
   createdAt: string;
   changeReason: string;
@@ -344,6 +355,8 @@ export interface ModelResult<T> {
   formatNormalization?: ModelFormatNormalization;
 }
 export interface StageInput {
+  confirmedRequirements?: string[];
+  unresolvedRequirements?: string[];
   researchContext?: Evidence[];
   routeBrief?: string;
   toolCapabilities?: string[];

@@ -133,7 +133,11 @@ function QuestionInput({
   return (
     <fieldset className="gi-question" disabled={disabled}>
       <legend>{question.title}</legend>
-      <p id={`${id}-reason`}>{question.reason}</p>
+      <p id={`${id}-reason`}>
+        {question.authorization
+          ? `${question.reason} 本项授权范围为${question.authorization}`
+          : question.reason}
+      </p>
       <div className="gi-answer-states" role="group" aria-label="回答方式">
         {(
           [
@@ -611,12 +615,7 @@ export function GuidedIntake({
     );
     // Changing models does not submit this round or declare an untouched answer unknown.
     if (preserveUnanswered && (!answerUnsaved.current || !provided.length)) return saved;
-    const outgoing = (preserveUnanswered ? provided : answerValues.current).map((answer) =>
-      answer.state === "answered" &&
-      (Array.isArray(answer.value) ? !answer.value.length : !answer.value.trim())
-        ? { ...answer, state: finish ? ("skipped" as const) : ("unknown" as const) }
-        : answer,
-    );
+    const outgoing = provided;
     setAnswerSaveState("syncing");
     let next: IntakeDraft;
     try {
@@ -624,7 +623,7 @@ export function GuidedIntake({
       next = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
         revision: saved.revision,
         answers: outgoing,
-        ...(preserveUnanswered ? { answerMode: "draft" } : {}),
+        answerMode: preserveUnanswered || finish ? "draft" : "complete",
       });
     } catch (failure) {
       setAnswerSaveState(answerUnsaved.current ?? "memory");
@@ -1202,7 +1201,7 @@ export function GuidedIntake({
                 再了解你一点。
               </h3>
             </div>
-            <small>第 {draft?.round ?? 1} / 2 轮 · 可以说不知道</small>
+            <small>第 {draft?.round ?? 1} 轮 · 可以说不知道</small>
           </div>
           {draft?.questions.slice(0, 3).map((question) => (
             <QuestionInput
@@ -1260,7 +1259,7 @@ export function GuidedIntake({
               disabled={blocked || uncertain || unavailable}
               onClick={() => analyze(false)}
             >
-              继续梳理
+              确认本轮回答并继续
               <ArrowRight size={16} />
             </button>
           </div>
@@ -1457,7 +1456,7 @@ export function GuidedIntake({
             }
           >
             {busy ? <LoaderCircle size={17} className="gi-spin" /> : <ArrowRight size={17} />}
-            开始推演
+            确认摘要并开始推演
           </button>
         </DisclosureMotion>
       </DisclosureMotion>

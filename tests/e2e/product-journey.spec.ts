@@ -232,7 +232,7 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
     .getByRole("group", { name: question.title, exact: true })
     .getByRole("radio", { name: "独立完成，不买设备", exact: true })
     .check();
-  await page.getByRole("button", { name: "继续梳理", exact: true }).click();
+  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "这是我们理解的任务。", exact: true }),
   ).toBeVisible();
@@ -240,7 +240,7 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
   expect(submitted).toEqual([]);
   expect(versions).toEqual([]);
   expect(advances).toEqual([]);
-  await page.getByRole("button", { name: "开始推演", exact: true }).click();
+  await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "测试裁决：先做最小样片", exact: true }),
   ).toBeVisible();

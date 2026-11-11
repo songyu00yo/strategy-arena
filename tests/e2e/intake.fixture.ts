@@ -85,5 +85,5 @@ export async function confirmFixtureIntake(page: Page, goal = fixtureChallenge.g
   await page.getByLabel("你想解决什么问题？", { exact: true }).fill(goal);
   await page.getByRole("button", { name: "开始分析", exact: true }).click();
   await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
-  await page.getByRole("button", { name: "开始推演", exact: true }).click();
+  await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
 }

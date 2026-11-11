@@ -263,9 +263,9 @@ test("explicit UI fixture: submitting one tab cannot clear or resume another tab
   const fixture = await installTabFixture(context, first);
   await seedPointer(page, firstId);
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "开始推演", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "确认摘要并开始推演", exact: true })).toBeVisible();
   const other = await createSecondDraft(context);
-  await page.getByRole("button", { name: "开始推演", exact: true }).click();
+  await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
   await expect.poll(async () => (await pointers(page)).tab).toBe("");
   expect((await pointers(page)).shared).toBe(secondId);
   await other.reload();
@@ -343,8 +343,8 @@ async function arenaPointers(page: Page) {
 async function submitNewDiscussion(page: Page, goal: string, arenaId: string) {
   await page.getByLabel("你想解决什么问题？", { exact: true }).fill(goal);
   await page.getByRole("button", { name: "开始分析", exact: true }).click();
-  await expect(page.getByRole("button", { name: "开始推演", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "开始推演", exact: true }).click();
+  await expect(page.getByRole("button", { name: "确认摘要并开始推演", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
   await expect(page.getByRole("heading", { name: goal, exact: true })).toBeVisible();
   await expect.poll(async () => (await pointers(page)).tab).toBe("");
   expect(await arenaPointers(page)).toEqual({ tab: arenaId, shared: arenaId });

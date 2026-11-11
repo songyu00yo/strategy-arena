@@ -715,8 +715,10 @@ export function stopArena(arenaId: string, owner: string, versionId: string) {
     requireVersion(arenaId, versionId);
     const version = getVersion(versionId);
     if (version.status === "completed" || version.status === "superseded") return;
+    delete version.waitingForIntake;
     version.status = "paused";
     version.verdict = partialVerdict(version);
+    refreshRequirements(version);
     syncAttackStatuses(version);
     db()
       .prepare(

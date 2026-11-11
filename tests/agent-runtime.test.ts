@@ -368,6 +368,26 @@ afterEach(() => {
 });
 
 describe("durable bounded agent with synthetic models", () => {
+  it("cancels a saved question pause when the existing stop endpoint is used", async () => {
+    const created = clarifiedArena();
+    const paused = await advanceArena(created.id, owner, created.activeVersionId);
+    const source = paused.versions[0];
+    const saved = followUpSummary(source.waitingForIntake!.id, "用户补充的风格");
+    const stopped = stopArena(created.id, owner, source.id);
+    expect(stopped.versions[0].waitingForIntake).toBeUndefined();
+    expect(stopped.versions[0].verdict?.outcome).toBe("partial");
+    expect(() =>
+      resumeIntake(created.id, owner, source.id, saved.id, {
+        revision: saved.revision,
+        challenge: saved.challenge!,
+        assumptions: [],
+      }),
+    ).toThrow("不再等待");
+    expect(getIntake(saved.id, owner).answers).toEqual(saved.answers);
+    await advanceArena(created.id, owner, source.id);
+    expect(models.propose).not.toHaveBeenCalled();
+  });
+
   it("persists a linked question pause across reopening and finishes the current advance request", async () => {
     const created = clarifiedArena();
     const paused = await advanceArena(created.id, owner, created.activeVersionId);

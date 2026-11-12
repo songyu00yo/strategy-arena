@@ -55,6 +55,26 @@ for (const example of RECORDED_EXAMPLES) {
       await go(page, questionIndex);
       const scene = page.getByRole("region", { name: "补问过程回放", exact: true });
       await expect(scene).toBeVisible();
+      const compact = await scene.boundingBox();
+      expect(compact).not.toBeNull();
+      expect(compact!.width).toBeLessThanOrEqual(660);
+      expect(compact!.height).toBeLessThanOrEqual(
+        width === 390 ? Math.min(480, 844 * 0.58) + 1 : 480,
+      );
+      const prefixes = await scene
+        .locator(".gi-answer-options input")
+        .evaluateAll((inputs) =>
+          inputs.map((input) => ({
+            width: input.getBoundingClientRect().width,
+            clip: getComputedStyle(input).clipPath,
+            opacity: getComputedStyle(input).opacity,
+          })),
+        );
+      expect(
+        prefixes.every(
+          (input) => input.width <= 1 && input.clip === "inset(50%)" && input.opacity === "0",
+        ),
+      ).toBe(true);
       for (const question of action.questions!) {
         const field = scene.locator(`[data-question-id="${question.id}"]`);
         await expect(field).toContainText(question.title);
@@ -341,7 +361,7 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
           const label = [
             ...(fieldset?.querySelectorAll<HTMLElement>("[data-answer-option]") ?? []),
           ].find((option) => option.dataset.answerOption === values[selectedIndex]);
-          target = label?.querySelector<HTMLElement>("input") ?? null;
+          target = label ?? null;
         } else target = fieldset?.querySelector<HTMLElement>("[data-answer-field]") ?? null;
         if (!target) return null;
         const header = paper

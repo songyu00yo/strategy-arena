@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, type CSSProperties } from "react";
-import { Check, MousePointer2 } from "lucide-react";
+import { MousePointer2 } from "lucide-react";
 import type { IntakeAnswer, IntakeQuestion, RecordedAnswer } from "@/lib/intake-contracts";
 import type { ReplayAction } from "@/lib/replay-contracts";
 import { QuestionInput } from "../question-input";
@@ -275,11 +275,11 @@ export function ReplayQuestionScene({
       const fieldset = [...element.querySelectorAll<HTMLElement>("[data-question-id]")].find(
         (node) => node.dataset.questionId === currentAnswer?.questionId,
       );
-      const optionInput = (value: string | undefined) => {
+      const optionCard = (value: string | undefined) => {
         const label = [
           ...(fieldset?.querySelectorAll<HTMLElement>("[data-answer-option]") ?? []),
         ].find((node) => node.dataset.answerOption === value);
-        return label?.querySelector<HTMLElement>("input") ?? label ?? null;
+        return label ?? null;
       };
       let target: HTMLElement | null = null;
       if (userConfirmation) target = element.querySelector<HTMLElement>("[data-replay-confirm]");
@@ -288,7 +288,7 @@ export function ReplayQuestionScene({
           fieldset?.querySelector<HTMLElement>(`[data-answer-state="${currentAnswer.state}"]`) ??
           null;
       else if (targetQuestion?.type === "single" || targetQuestion?.type === "multiple")
-        target = optionInput(
+        target = optionCard(
           choices.length ? choices[targetIndex] : String(currentAnswer?.value ?? ""),
         );
       else target = fieldset?.querySelector<HTMLElement>("[data-answer-field]") ?? null;
@@ -311,7 +311,13 @@ export function ReplayQuestionScene({
       const positionOf = (node: HTMLElement) => {
         const box = node.getBoundingClientRect();
         return {
-          x: (box.left + Math.min(box.width / 2, 22) - panel.left) / scaleX,
+          x:
+            (box.left +
+              (node.hasAttribute("data-answer-option")
+                ? box.width / 2
+                : Math.min(box.width / 2, 22)) -
+              panel.left) /
+            scaleX,
           y: (box.top + box.height / 2 - panel.top) / scaleY,
         };
       };
@@ -329,7 +335,7 @@ export function ReplayQuestionScene({
         state.originY = origin.y;
       }
       const previousControl =
-        choices.length && targetIndex > 0 ? optionInput(choices[targetIndex - 1]) : null;
+        choices.length && targetIndex > 0 ? optionCard(choices[targetIndex - 1]) : null;
       const origin = previousControl
         ? positionOf(previousControl)
         : { x: state.originX, y: state.originY };
@@ -503,7 +509,6 @@ export function ReplayQuestionScene({
         </p>
         {action.kind === "summary_confirm" || action.kind === "handoff" ? (
           <span className="replay-question-acknowledgement">
-            {confirmed && <Check size={16} />}
             {confirmed
               ? BUTTONS[action.kind]
               : action.kind === "handoff"
@@ -517,7 +522,6 @@ export function ReplayQuestionScene({
             data-replay-confirm
             className={`primary-button ${confirming && confirmed ? "is-confirmed" : ""}`}
           >
-            {confirming && confirmed && <Check size={16} />}
             {BUTTONS[action.kind]}
           </button>
         )}

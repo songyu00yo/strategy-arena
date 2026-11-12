@@ -162,6 +162,8 @@ describe("controlled recorded question scenes", () => {
     const confirmation = action({ kind: "round_confirm", questions, answers });
     expect(scene(confirmation, 0.79)).not.toContain('data-confirmation="confirmed"');
     expect(scene(confirmation, 0.8).match(/data-confirmation="confirmed"/g)).toHaveLength(3);
+    expect(scene(confirmation, 0.8)).not.toContain("lucide-check");
+    expect(scene(confirmation, 0.8)).toContain('checked=""');
   });
 
   it("keeps unknown, skipped and changed answers unresolved during round confirmation", () => {
@@ -233,6 +235,7 @@ describe("controlled recorded question scenes", () => {
     expect(scene(confirmation, 0.8)).toContain("本次提交的摘要确认已接受");
     expect(scene(confirmation, 0.8)).not.toContain("data-replay-confirm");
     expect(scene(confirmation, 0.8)).not.toContain('data-pressed="true"');
+    expect(scene(confirmation, 0.8)).not.toContain("lucide-check");
     expect(scene(action({ kind: "handoff", questions: undefined }), 0.8)).not.toContain(
       'data-pressed="true"',
     );

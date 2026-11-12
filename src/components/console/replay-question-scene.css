@@ -4,13 +4,15 @@
   --gi-line: var(--line, #d2cbc0);
   position: absolute;
   z-index: 24;
-  inset: 8px;
+  inset: 24px 24px auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
   width: auto;
-  max-height: calc(100% - 16px);
-  margin: 0;
+  max-width: 660px;
+  height: auto;
+  max-height: min(480px, calc(100% - 48px));
+  margin: 0 auto;
   padding: 18px 20px 14px;
   overflow: hidden;
   border: 1.5px solid var(--ink, #15130f);
@@ -82,6 +84,20 @@
   max-width: 100%;
   color: var(--gi-ink);
   overflow-wrap: anywhere;
+}
+.console-shell
+  .replay-question-scene
+  .gi-answer-options
+  input:is([type="radio"], [type="checkbox"]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  opacity: 0;
 }
 .replay-question-scene .gi-answer-options label.selected {
   background: #f0eae0;
@@ -170,8 +186,8 @@
 }
 @media (max-width: 1100px) {
   .console-shell .replay-question-scene {
-    inset: 6px;
-    max-height: min(78dvh, 720px);
+    inset: 18px 18px auto;
+    max-height: min(58dvh, 480px);
     padding: 14px;
   }
   .replay-question-heading,

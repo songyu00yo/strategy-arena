@@ -105,6 +105,8 @@ export function replayReadingState(progress: number, stops: number[], range: num
   const positions = [
     ...new Set([0, ...stops.map((stop) => Math.max(0, Math.min(range, stop))), range]),
   ].sort((a, b) => a - b);
+  // Fold a bottom-padding remainder into the preceding move, without another reading pause.
+  if (positions.length > 2 && range - positions[positions.length - 2] < 16) positions.splice(-2, 1);
   if (positions.length < 2) return { top: 0, phase: "reading" as ReplayScrollPhase };
   const travel = bounded((progress - 0.2) / 0.6) * (positions.length - 1);
   const index = Math.min(positions.length - 2, Math.floor(travel));

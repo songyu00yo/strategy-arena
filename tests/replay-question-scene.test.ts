@@ -231,6 +231,18 @@ describe("controlled recorded question scenes", () => {
       );
   });
 
+  it("includes a small bottom-padding remainder in the last reading move", () => {
+    for (const progress of [0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 1])
+      expect(replayReadingState(progress, [0, 304, 655], 662)).toEqual(
+        replayReadingState(progress, [0, 304], 662),
+      );
+    expect(replayReadingState(0.8, [0, 304, 655], 662)).toEqual({
+      top: 662,
+      phase: "reading",
+    });
+    expect(replayReadingState(0.8, [0], 7).top).toBe(7);
+  });
+
   it("derives paper FLIP offsets and ratios from supplied rectangles and rejects empty geometry", () => {
     const source = { left: 100, top: 60, width: 300, height: 200 };
     const target = { left: 40, top: 20, width: 600, height: 400 };

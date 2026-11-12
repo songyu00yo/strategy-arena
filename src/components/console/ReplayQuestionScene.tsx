@@ -87,17 +87,31 @@ export function replayHandoffActive(frame: PlaybackFrame, fold: number, crossesC
   return crossesClip && fold >= 0.42 && fold < 1 && frame.progress >= 0.8 && !frame.settled;
 }
 
+type ReplayScrollPhase = "reading" | "accelerating" | "travel" | "settling" | "paused";
+
+function scrollMotionPhase(eased: number): ReplayScrollPhase {
+  if (eased <= 0 || eased >= 1) return "reading";
+  return eased < 0.1 ? "accelerating" : eased > 0.9 ? "settling" : "travel";
+}
+
 /** Each measured question gets a reading stop before the next continuous scroll. */
-export function replayReadingScroll(progress: number, stops: number[], range: number) {
+export function replayReadingState(progress: number, stops: number[], range: number) {
   const positions = [
     ...new Set([0, ...stops.map((stop) => Math.max(0, Math.min(range, stop))), range]),
   ].sort((a, b) => a - b);
-  if (positions.length < 2) return 0;
+  if (positions.length < 2) return { top: 0, phase: "reading" as ReplayScrollPhase };
   const travel = bounded((progress - 0.2) / 0.6) * (positions.length - 1);
   const index = Math.min(positions.length - 2, Math.floor(travel));
   const amount = bounded((travel - index - 0.42) / 0.58);
   const eased = amount * amount * (3 - 2 * amount);
-  return positions[index] + (positions[index + 1] - positions[index]) * eased;
+  return {
+    top: positions[index] + (positions[index + 1] - positions[index]) * eased,
+    phase: scrollMotionPhase(eased),
+  };
+}
+
+export function replayReadingScroll(progress: number, stops: number[], range: number) {
+  return replayReadingState(progress, stops, range).top;
 }
 
 function layoutPoint(element: HTMLElement): Point {
@@ -311,8 +325,12 @@ export function ReplayQuestionScene({
       const scaleX = (1 + ((source?.scaleX ?? 1) - 1) * (1 - open)) * (1 - unfolded * 0.16);
       const scaleY = (1 + ((source?.scaleY ?? 1) - 1) * (1 - open)) * (1 - unfolded * 0.86);
       let scroll = cache.scroll;
-      if (frame.running && action.kind === "questions")
-        scroll = replayReadingScroll(frame.progress, cache.stops, cache.range);
+      let scrollPhase: ReplayScrollPhase = frame.running ? "reading" : "paused";
+      if (frame.running && action.kind === "questions") {
+        const reading = replayReadingState(frame.progress, cache.stops, cache.range);
+        scroll = reading.top;
+        scrollPhase = reading.phase;
+      }
       const clickIndex = choices.length
         ? Math.min(
             choices.length - 1,
@@ -342,7 +360,9 @@ export function ReplayQuestionScene({
               Math.min(cache.range, previousTarget.y - cache.bodyTop - cache.bodyHeight * 0.35),
             )
           : cache.startScroll;
-        scroll = start + (desired - start) * easeOut(movement);
+        const eased = easeOut(movement);
+        scroll = start + (desired - start) * eased;
+        scrollPhase = desired === start ? "reading" : scrollMotionPhase(eased);
       }
       const toVisible = (point: Point) => ({
         x: point.x,
@@ -378,6 +398,8 @@ export function ReplayQuestionScene({
       element.style.setProperty("--replay-strip-scale-y", String(1 / scaleY));
       element.dataset.replayOpened = String(open >= 1);
       element.dataset.replayFold = fold.toFixed(3);
+      viewport.dataset.scrollPhase = scrollPhase;
+      viewport.dataset.scrollTarget = scroll.toFixed(3);
       if (carry) {
         if (!transfer) {
           const scope = createMotionScope();

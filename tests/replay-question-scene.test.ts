@@ -14,6 +14,7 @@ import {
   replayPaperTiming,
   replayPointerAt,
   replayPressedAt,
+  replayReadingState,
   replayReadingScroll,
 } from "../src/components/console/ReplayQuestionScene";
 import type { PlaybackFrame } from "../src/components/console/use-playback-progress";
@@ -201,6 +202,21 @@ describe("controlled recorded question scenes", () => {
       true,
     );
     expect(positions.some((position) => position > 0 && position < 180)).toBe(true);
+  });
+
+  it("labels the existing scroll curve by its eased segment progress without changing its target", () => {
+    const stops = [0, 180, 360];
+    expect(replayReadingState(0.3, stops, 360).phase).toBe("reading");
+    expect(replayReadingState(0.34, stops, 360).phase).toBe("accelerating");
+    expect(replayReadingState(0.41, stops, 360).phase).toBe("travel");
+    expect(replayReadingState(0.49, stops, 360).phase).toBe("settling");
+    expect(replayReadingState(0.55, stops, 360).phase).toBe("reading");
+    expect(replayReadingState(0.8, stops, 360)).toEqual({ top: 360, phase: "reading" });
+    expect(replayReadingState(0.5, [], 0)).toEqual({ top: 0, phase: "reading" });
+    for (const progress of [0.2, 0.3, 0.34, 0.41, 0.49, 0.55, 0.8])
+      expect(replayReadingState(progress, stops, 360).top).toBe(
+        replayReadingScroll(progress, stops, 360),
+      );
   });
 
   it("derives paper FLIP offsets and ratios from supplied rectangles and rejects empty geometry", () => {

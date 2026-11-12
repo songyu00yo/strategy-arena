@@ -43,12 +43,20 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     const blocked = await playQuestion(page);
     const sample = await page.evaluate(
-      () =>
-        new Promise<{ gaps: number[]; frameGaps: number[] }>((resolve) => {
+      (targetStep) =>
+        new Promise<{
+          gaps: number[];
+          frameGaps: number[];
+          phases: string[];
+          maxPositionError: number;
+        }>((resolve) => {
           const start = performance.now();
           let previousFrame = start;
           let previousScroll = start;
           let previousTop: number | undefined;
+          let previousTravel = false;
+          let maxPositionError = 0;
+          const phases = new Set<string>();
           const gaps: number[] = [];
           const frameGaps: number[] = [];
           const tick = (time: number) => {
@@ -56,7 +64,22 @@ for (const width of [1440, 390]) {
             previousFrame = time;
             const body = document.querySelector<HTMLElement>(".replay-question-body");
             const top = body?.scrollTop;
+            const selected = document
+              .querySelector('.c-time [aria-current="step"]')
+              ?.getAttribute("aria-label");
+            const active = selected === `第 ${targetStep} 步`;
+            const phase = active ? (body?.dataset.scrollPhase ?? "unmarked") : "outside";
+            phases.add(phase);
+            const travel = phase === "travel";
+            if (travel && body) {
+              maxPositionError = Math.max(
+                maxPositionError,
+                Math.abs(body.scrollTop - Number(body.dataset.scrollTarget)),
+              );
+            }
             if (
+              travel &&
+              previousTravel &&
               top !== undefined &&
               previousTop !== undefined &&
               Math.abs(top - previousTop) >= 0.1
@@ -64,12 +87,15 @@ for (const width of [1440, 390]) {
               gaps.push(time - previousScroll);
               previousScroll = time;
             }
+            if (!travel || !previousTravel) previousScroll = time;
+            previousTravel = travel;
             previousTop = top;
             if (time - start < 4600) requestAnimationFrame(tick);
-            else resolve({ gaps, frameGaps });
+            else resolve({ gaps, frameGaps, phases: [...phases], maxPositionError });
           };
           requestAnimationFrame(tick);
         }),
+      questionIndex + 1,
     );
     const sorted = sample.gaps.slice().sort((a, b) => a - b);
     const p95 = sorted[Math.floor(sorted.length * 0.95)];
@@ -77,9 +103,12 @@ for (const width of [1440, 390]) {
       body: JSON.stringify({ width, p95, ...sample }),
       contentType: "application/json",
     });
-    expect(sample.gaps.length).toBeGreaterThanOrEqual(60);
+    expect(sample.phases).toContain("reading");
+    expect(sample.phases).toContain("travel");
+    expect(sample.gaps.length).toBeGreaterThanOrEqual(24);
     // WebKit timestamps are integer milliseconds. Allow 1ms measurement rounding.
     expect(p95).toBeLessThanOrEqual(34.4);
+    expect(sample.maxPositionError).toBeLessThanOrEqual(1);
     expect(blocked).toEqual([]);
   });
 }

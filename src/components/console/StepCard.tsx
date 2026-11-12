@@ -197,7 +197,10 @@ function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
     const run = beat.clarificationRun;
     return [
       { label: "本次审查", text: run.summary },
-      { label: "完整输出", text: clarificationLines(run).join("\n") || "本次没有新增事项。" },
+      {
+        label: "完整输出",
+        text: clarificationLines(run, beat.clarificationAnswers).join("\n") || "本次没有新增事项。",
+      },
       { label: "结构化记录", text: JSON.stringify(run.output, null, 2) },
       {
         label: "调用依据",

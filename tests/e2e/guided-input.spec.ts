@@ -272,12 +272,12 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
   });
   await page.goto("/");
   // The home tools stay hidden until the visitor writes something.
-  await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeHidden();
+  await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeHidden();
   await expect(page.getByRole("textbox", { name: "必须满足的限制", exact: true })).toBeHidden();
   await page
-    .getByLabel("你想解决什么问题？", { exact: true })
+    .getByLabel("你想做什么", { exact: true })
     .fill("测试：我想在一个月内学会剪辑并完成自己的第一支视频");
-  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await page.getByRole("button", { name: "开始梳理", exact: true }).click();
   await expect(page.locator(".gi-question")).toHaveCount(3);
   await page
     .getByRole("group", { name: questions[0].title, exact: true })
@@ -507,7 +507,7 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
     return route.fulfill({ json: draft });
   });
   await page.goto("/");
-  await page.getByLabel("你想解决什么问题？", { exact: true }).fill(fixtureChallenge.goal);
+  await page.getByLabel("你想做什么", { exact: true }).fill(fixtureChallenge.goal);
   await page.getByLabel("选择参考材料", { exact: true }).setInputFiles({
     name: "fixture-long.pdf",
     mimeType: "application/pdf",
@@ -530,7 +530,7 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
     buffer: Buffer.from("%PDF-1.4 broken"),
   });
   await expect(page.getByText("测试替身：PDF 已损坏，请重新导出。")).toBeVisible();
-  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await page.getByRole("button", { name: "开始梳理", exact: true }).click();
   await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
   // Explicit browser-state fixture: the story clock sees a hidden document; interaction animation remains live.
   await page.evaluate(() => {

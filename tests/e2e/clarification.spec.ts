@@ -287,8 +287,8 @@ for (const width of [1440, 390]) {
     });
 
     await page.goto("/");
-    await page.getByLabel("你想解决什么问题？", { exact: true }).fill(goal);
-    await page.getByRole("button", { name: "开始分析", exact: true }).click();
+    await page.getByLabel("你想做什么", { exact: true }).fill(goal);
+    await page.getByRole("button", { name: "开始梳理", exact: true }).click();
     await expect(page.locator(".gi-questions")).toBeVisible();
     await expect(page.getByRole("radio", { name: "真实报名", exact: true })).not.toBeChecked();
     await page.getByRole("radio", { name: "界面演示", exact: true }).check();

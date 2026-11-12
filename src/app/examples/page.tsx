@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 
 export const metadata = {
-  title: "真实推演示例 · 方案擂台",
-  description: "回看已保存的真实生成记录，浏览和播放都不调用模型。",
+  title: "需求梳理示例 · 方案擂台",
+  description: "真实模型运行的模拟案例，逐轮回看问题、选项、回答和最终需求。回放新增模型用量为 0。",
 };
 
 export default function ExamplesPage() {

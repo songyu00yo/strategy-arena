@@ -466,18 +466,34 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
     state.retiredIds = [...new Set([...state.retiredIds, retired.id])];
   }
   state.suggestions = [...new Set([...state.suggestions, ...decomposition.suggestions])];
+  function knownForQuestions(item: DecisionItem) {
+    if (resolved(draft, item, context.submit)) return true;
+    const summary = draft.confirmation?.summary?.challenge;
+    const currentGoal = context.editedFields?.goal ?? draft.challenge?.goal;
+    const currentDomain = context.editedFields?.domain ?? draft.challenge?.domain;
+    return (
+      item.topic === "scope" &&
+      item.provided?.sourceRef === "original_goal" &&
+      concreteProvidedQuote(item.provided.quote) &&
+      draft.goal.includes(item.provided.quote) &&
+      !!currentGoal?.includes(item.provided.quote) &&
+      (!pendingFields.has("goal") ||
+        (currentGoal === draft.goal && summary?.goal === draft.goal)) &&
+      (!pendingFields.has("domain") || (!!summary && currentDomain === summary.domain)) &&
+      !pendingFields.has("budget") &&
+      !pendingFields.has("timeHours") &&
+      !pendingFields.has("options")
+    );
+  }
   async function options() {
     const questionableItems = activeItems(state).filter((item) => {
       const answer = decisionAnswer(draft, item);
       return (
-        !resolved(draft, item, context.submit) &&
+        !knownForQuestions(item) &&
         !deferred(answer) &&
         item.dependsOn.every((dependency) => {
           const prior = state.items.find((candidate) => candidate.id === dependency);
-          return (
-            state.retiredIds.includes(dependency) ||
-            (!!prior && resolved(draft, prior, context.submit))
-          );
+          return state.retiredIds.includes(dependency) || (!!prior && knownForQuestions(prior));
         })
       );
     });

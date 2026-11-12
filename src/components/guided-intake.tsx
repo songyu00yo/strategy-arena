@@ -53,16 +53,16 @@ const EMPTY: Challenge = {
 // These inputs describe fictional situations. Selecting one only fills the editable goal.
 const CHOICE_SCENARIOS = [
   {
-    label: "考研还是就业",
-    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我是一名大三学生，在全力考研、直接就业和先工作再读研之间犹豫。家里能支持一年生活费，九月前要定方向。我更看重长期发展，希望比较每条路线的代价、仍需核实的信息和第一步。",
+    label: "个人网站",
+    goal: "【模拟输入，可修改】我想做一个个人网站，但内容、用途和风格还没想清楚。",
   },
   {
-    label: "选 offer",
-    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我即将大学毕业，有两份 offer：本地岗位月薪八千元，外地岗位月薪一万二千元。我更看重成长机会，也在意生活成本和离家距离。两周内要答复，房租、试用期条款和岗位培养安排还没有核实。请帮我比较并列出决定前要确认的事。",
+    label: "PPT",
+    goal: "【模拟输入，可修改】我想做一份PPT，但主题、受众、内容和风格还没想清楚。",
   },
   {
-    label: "买二手车",
-    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我刚毕业，需要通勤，正在比较买二手车、继续公共交通和暂时租车。购车总预算五万元，希望每月养车支出可控。候选车辆的事故记录、车况、保险和维修费用都还没核实。请比较各路线的成本、风险和决定前的第一步。",
+    label: "说明文档",
+    goal: "【模拟输入，可修改】我想写一份说明文档，给谁看、写哪些内容还没想清楚。",
   },
 ];
 
@@ -738,7 +738,7 @@ export function GuidedIntake({
         !!error ||
         !!draft?.error
       }
-      aria-label="准备一场推演"
+      aria-label="开始一次需求梳理"
       aria-busy={busy || analyzing || restoring}
     >
       <form
@@ -777,7 +777,7 @@ export function GuidedIntake({
           <Paperclip size={22} />
           <span>松开即可添加材料</span>
         </div>
-        <label htmlFor={`${id}-goal`}>你想解决什么问题？</label>
+        <label htmlFor={`${id}-goal`}>你想做什么</label>
         <textarea
           ref={goalInput}
           id={`${id}-goal`}
@@ -787,7 +787,7 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="说说你的选择和顾虑，也可以把文件拖进来或直接粘贴。"
+          placeholder="先说说你想做的东西，没想清楚也没关系。可以添加文件或直接粘贴材料。"
           onPaste={(event) => {
             const files = [...event.clipboardData.files];
             if (!files.length) return;
@@ -918,14 +918,14 @@ export function GuidedIntake({
               {restoring
                 ? "恢复草稿…"
                 : analyzing
-                  ? "正在分析…"
+                  ? "正在梳理…"
                   : busy
                     ? "正在保存…"
                     : summaryVisible
                       ? "重新梳理"
                       : questionsVisible
-                        ? "重新分析目标"
-                        : "开始分析"}
+                        ? "重新梳理目标"
+                        : "开始梳理"}
             </span>
           </button>
         </div>
@@ -1084,7 +1084,7 @@ export function GuidedIntake({
             <p>本次分析是否完成还待确认。目标和材料已保留，不会自动重试。</p>
           </div>
           <p className="gi-recovery-next">
-            可以保留目标另开草稿，材料需重新添加。新草稿不会自动开始分析。
+            可以保留目标另开草稿，材料需重新添加。新草稿会等待你点击“开始梳理”。
           </p>
           <div className="gi-recovery-actions">
             <button
@@ -1368,7 +1368,7 @@ export function GuidedIntake({
             aria-expanded={advanced}
             onClick={() => setAdvanced(!advanced)}
           >
-            预算、时间与备选方案
+            {draft?.workflow === "clarification" ? "预算、时间与已有想法" : "预算、时间与备选方案"}
             <ChevronDown size={15} />
           </button>
           <DisclosureMotion open={advanced} id={`${id}-advanced`}>
@@ -1409,7 +1409,9 @@ export function GuidedIntake({
                 />
               </label>
               <label className="gi-wide">
-                已有备选方案（每行一个，最多三个）
+                {draft?.workflow === "clarification"
+                  ? "已有想法（每行一项，最多三项）"
+                  : "已有备选方案（每行一个，最多三个）"}
                 <textarea
                   rows={3}
                   maxLength={902}
@@ -1421,7 +1423,11 @@ export function GuidedIntake({
                 />
               </label>
             </div>
-            <p className="gi-hint">这里填写执行方案可用的金额和时间，模型调用费用另行记录。</p>
+            <p className="gi-hint">
+              {draft?.workflow === "clarification"
+                ? "这里填写成果可用的预算和时间，模型调用费用另行记录。"
+                : "这里填写执行方案可用的金额和时间，模型调用费用另行记录。"}
+            </p>
           </DisclosureMotion>
           <button
             type="button"

@@ -805,7 +805,8 @@ export function RouteStage({
 
   const board = (id: "A" | "B" | "C") => {
     const clarification = version.workflow === "clarification";
-    const run = shown.findLast((beat) => beat.clarificationRun?.role === id)?.clarificationRun;
+    const latest = shown.findLast((beat) => beat.clarificationRun?.role === id);
+    const run = latest?.clarificationRun;
     const strategy = version.strategies.find((s) => s.id === id);
     const present = clarification ? !!run : !!strategy && seen.has(`p:${id}`);
     const revision = latestShownRevision(shown, id)?.revision;
@@ -916,7 +917,10 @@ export function RouteStage({
               );
             })}
             <ol className="steps">
-              {(run ? clarificationLines(run).slice(0, 6) : view!.steps).map((step) => (
+              {(run
+                ? clarificationLines(run, latest?.clarificationAnswers).slice(0, 6)
+                : view!.steps
+              ).map((step) => (
                 <li key={step}>{step}</li>
               ))}
             </ol>

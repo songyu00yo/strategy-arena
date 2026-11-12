@@ -21,16 +21,17 @@ import "./console/paper-console.css";
 import "./console/press.css";
 
 function RecordedExampleEntry({
-  title,
+  metadata,
   version,
-  modelId,
   onStart,
 }: {
-  title: string;
+  metadata: RecordedExamplePayload["metadata"];
   version: ArenaVersion;
-  modelId: string;
   onStart: () => void;
 }) {
+  const { title, modelId } = metadata;
+  const clarification = version.workflow === "clarification";
+  const simulated = metadata.caseType === "simulated_real_model";
   const [paused, setPaused] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -81,12 +82,17 @@ function RecordedExampleEntry({
     animation.onfinish = onStart;
   };
   const { challenge } = version;
-  const fields = [
-    ["硬性限制", challenge.constraints],
-    ["偏好", challenge.preferences],
-    ["备选方案", challenge.options.join("\n")],
-    ["提供的材料", challenge.materials],
-  ].filter(([, value]) => value);
+  const originalGoal = clarification ? (version.intake?.originalGoal ?? "") : challenge.goal;
+  const fields = clarification
+    ? metadata.initialMaterials === undefined
+      ? []
+      : [["原始提交材料", metadata.initialMaterials || "原始提交未附材料。"]]
+    : [
+        ["硬性限制", challenge.constraints],
+        ["偏好", challenge.preferences],
+        ["备选方案", challenge.options.join("\n")],
+        ["提供的材料", challenge.materials],
+      ].filter(([, value]) => value);
   return (
     <div className="console-shell home recorded-entry-shell">
       <ClickFx />
@@ -94,12 +100,20 @@ function RecordedExampleEntry({
         <Link href="/?examples=open" className="text-button">
           <ArrowLeft size={16} /> 返回案例
         </Link>
-        <span>真实案例回放 · 新增用量为 0</span>
+        <span>
+          {simulated ? "真实模型运行的模拟案例 · 回看新增调用为 0" : "真实案例回放 · 新增用量为 0"}
+        </span>
       </header>
       <main className="recorded-entry-main">
-        <p className="recorded-entry-eyebrow">先看当时填写的内容</p>
+        <p className="recorded-entry-eyebrow">
+          {clarification ? "先看最初的模糊目标" : "先看当时填写的内容"}
+        </p>
         <h1>{title}</h1>
-        <p>接下来会自动触发“开始分析”，从第一步播放当时的真实推演。</p>
+        <p>
+          {clarification
+            ? "接下来从第一轮回看已保存的提问、模拟回答和模型审查记录。"
+            : "接下来会自动触发“开始分析”，从第一步播放当时的真实推演。"}
+        </p>
         <form
           ref={form}
           className="recorded-entry-form"
@@ -111,8 +125,8 @@ function RecordedExampleEntry({
           aria-busy={leaving}
         >
           <label className="recorded-entry-goal">
-            <span>你想解决什么问题？</span>
-            <textarea readOnly value={challenge.goal} rows={4} onFocus={() => setPaused(true)} />
+            <span>{clarification ? "你想做什么" : "你想解决什么问题？"}</span>
+            <textarea readOnly value={originalGoal} rows={4} onFocus={() => setPaused(true)} />
           </label>
           <dl className="recorded-entry-fields">
             {fields.map(([label, value], index) => (
@@ -122,7 +136,7 @@ function RecordedExampleEntry({
               </div>
             ))}
           </dl>
-          {(challenge.budget !== null || challenge.timeHours !== null) && (
+          {!clarification && (challenge.budget !== null || challenge.timeHours !== null) && (
             <p className="recorded-entry-limits">
               {challenge.budget !== null && <span>预算上限 ¥{challenge.budget}</span>}
               {challenge.timeHours !== null && <span>可用时间 {challenge.timeHours} 小时</span>}
@@ -145,11 +159,15 @@ function RecordedExampleEntry({
               className={`primary-button recorded-entry-start ${paused || hidden ? "is-paused" : ""}`}
               disabled={leaving}
             >
-              <ArrowRight size={17} /> 开始分析
+              <ArrowRight size={17} /> {clarification ? "开始回看" : "开始分析"}
             </button>
           </footer>
         </form>
-        <p className="recorded-entry-footnote">播放已保存的内容，新增模型调用与 Token 均为 0。</p>
+        <p className="recorded-entry-footnote">
+          {simulated
+            ? `用户回答由${metadata.simulationActor ?? "模拟答题方"}模拟提交，未执行任务，也没有真实执行反馈。回看新增模型调用与 Token 均为 0。`
+            : "播放已保存的内容，新增模型调用与 Token 均为 0。"}
+        </p>
       </main>
     </div>
   );
@@ -187,6 +205,8 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
     if (started) replayRoot.current?.focus({ preventScroll: true });
   }, [started]);
   const version = arena.versions.find((item) => item.id === versionId) ?? arena.versions[0];
+  const clarification = version?.workflow === "clarification";
+  const simulated = metadata.caseType === "simulated_real_model";
   const stepDraftKey = stepTarget
     ? supplementDraftKey(
         stepTarget.versionId,
@@ -211,9 +231,8 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
   if (!started)
     return (
       <RecordedExampleEntry
-        title={metadata.title}
+        metadata={metadata}
         version={version}
-        modelId={metadata.modelId}
         onStart={() => setStarted(true)}
       />
     );
@@ -226,7 +245,47 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
   });
   const usd = version.modelSelection?.currency === "USD";
   const cost = usd ? version.costUsd : version.costCny;
-  const estimate = cost == null ? "未记录" : `${usd ? "$" : "¥"}${cost.toFixed(6)}`;
+  const recordedUsd =
+    metadata.recordedCostUsd ??
+    (clarification && version.intake
+      ? (version.costUsd ?? 0) +
+        version.intake.usage.reduce((total, usage) => total + (usage.estimatedUsd ?? 0), 0)
+      : undefined);
+  const recordedCny =
+    metadata.recordedCostCny ??
+    (clarification && version.intake
+      ? version.costCny +
+        version.intake.usage.reduce((total, usage) => total + usage.estimatedCny, 0)
+      : undefined);
+  const recordedCosts = [
+    ["$", recordedUsd],
+    ["¥", recordedCny],
+  ] as const;
+  const positiveCosts = recordedCosts.filter(([, value]) => value !== undefined && value > 0);
+  const displayedCosts = positiveCosts.length
+    ? positiveCosts
+    : recordedCosts.filter(([, value]) => value !== undefined).slice(0, 1);
+  const estimate = displayedCosts.length
+    ? displayedCosts.map(([symbol, value]) => `${symbol}${value!.toFixed(6)}`).join(" · ")
+    : cost == null
+      ? "未记录"
+      : `${usd ? "$" : "¥"}${cost.toFixed(6)}`;
+  const simulatedAnswers =
+    version.clarification?.rounds
+      .flatMap((round, index, rounds) =>
+        round.answers
+          .filter(
+            (answer) =>
+              !rounds[index - 1]?.answers.some(
+                (prior) => JSON.stringify(prior) === JSON.stringify(answer),
+              ),
+          )
+          .map(
+            (answer) =>
+              `第 ${round.round} 轮前提交 · ${answer.question.title}\n${answer.state === "unknown" ? "不知道" : answer.state === "skipped" ? "跳过" : Array.isArray(answer.value) ? answer.value.join("、") : answer.value}\n${answer.confirmation === "confirmed" && !answer.needsReconfirmation ? "已确认" : "待确认"}`,
+          ),
+      )
+      .join("\n\n") || "未记录模拟回答。";
   const openEvidence = (attack: Attack) =>
     setEvidence({
       versionId: version.id,
@@ -249,14 +308,14 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
     <div className="console-shell recorded-replay-shell">
       <ClickFx />
       <a href="#recorded-replay" className="skip-link">
-        跳到推演记录
+        {clarification ? "跳到需求梳理记录" : "跳到推演记录"}
       </a>
       <main
         ref={replayRoot}
         id="recorded-replay"
         className="recorded-replay-main"
         tabIndex={-1}
-        aria-label="真实案例回放"
+        aria-label={simulated ? "需求梳理模拟案例回放" : "真实案例回放"}
       >
         <ArenaConsole
           key={version.id}
@@ -313,7 +372,9 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           }
           conditions={
             <div className="recorded-replay-meta">
-              <strong>真实生成记录 · 回看不调用模型</strong>
+              <strong>
+                {simulated ? "真实模型运行的模拟案例" : "真实生成记录 · 回看不调用模型"}
+              </strong>
               <span>
                 {metadata.modelId} · {date}
               </span>
@@ -342,13 +403,16 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
               ) : (
                 <span>原记录 V{version.number}</span>
               )}
-              <span>生成时的旧估算 {estimate}</span>
+              <span>
+                {clarification ? "原记录费用估算" : "生成时的旧估算"} {estimate}
+              </span>
             </div>
           }
           notices={
             <p className="recorded-replay-notice">
-              回放新增用量为
-              0。打开步骤后可以补充或质疑，也可以调整条件；确认重新推演才会产生模型费用。
+              {simulated
+                ? `回看新增调用为0。${metadata.simulationActor ?? "模拟答题方"}模拟用户回答，未执行任务，也没有真实执行反馈。原补充或调整入口只有明确提交后才创建你自己的需求草稿，模型调用由后续“开始梳理”触发。`
+                : "回放新增用量为0。打开步骤后可以补充或质疑，也可以调整条件；确认重新推演才会产生模型费用。"}
             </p>
           }
         />
@@ -415,14 +479,25 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
         />
       )}
       {details && (
-        <Modal title="原题与生成记录" trigger={details} onClose={() => setDetails(null)} wide>
+        <Modal
+          title={clarification ? "原始目标与需求梳理记录" : "原题与生成记录"}
+          trigger={details}
+          onClose={() => setDetails(null)}
+          wide
+        >
           <div className="recorded-source-details">
-            <p className="recorded-source-label">真实生成记录 · 回看不调用模型</p>
+            <p className="recorded-source-label">
+              {simulated ? "真实模型运行的模拟案例" : "真实生成记录 · 回看不调用模型"}
+            </p>
             <p>这里只播放已保存的内容，切换版本、查看证据和播放步骤都不会发起模型调用。</p>
             <dl>
               <div>
                 <dt>示例说明</dt>
-                <dd>示例问题为预设，方案来自真实模型。</dd>
+                <dd>
+                  {simulated
+                    ? `本案例由${metadata.simulationActor ?? "模拟答题方"}模拟用户提交回答，A/B/C输出来自真实模型调用。未执行任务，没有真实执行反馈。`
+                    : "示例问题为预设，方案来自真实模型。"}
+                </dd>
               </div>
               <div>
                 <dt>当时使用的模型</dt>
@@ -435,7 +510,11 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
               <div>
                 <dt>来源提交</dt>
                 <dd>
-                  <code>{metadata.sourceCommit}</code>
+                  <code>
+                    {clarification
+                      ? metadata.sourceCommits?.join(" → ") || metadata.sourceCommit
+                      : metadata.sourceCommit}
+                  </code>
                 </dd>
               </div>
               <div>
@@ -443,7 +522,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
                 <dd>{metadata.qualityNote}</dd>
               </div>
               <div>
-                <dt>生成时的旧估算</dt>
+                <dt>{clarification ? "原记录费用估算" : "生成时的旧估算"}</dt>
                 <dd>{estimate}，这是当时记录的估算，回看不会产生新的模型费用。</dd>
               </div>
               <div>
@@ -454,27 +533,41 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
                 </dd>
               </div>
               <div>
-                <dt>目标</dt>
-                <dd>{version.challenge.goal}</dd>
+                <dt>{clarification ? "最初的模糊目标" : "目标"}</dt>
+                <dd>
+                  {clarification
+                    ? version.intake?.originalGoal || "原始目标未记录"
+                    : version.challenge.goal}
+                </dd>
               </div>
               <div>
-                <dt>硬性限制</dt>
+                <dt>{clarification ? "本版本限制" : "硬性限制"}</dt>
                 <dd>{version.challenge.constraints || "未填写"}</dd>
               </div>
               <div>
-                <dt>偏好</dt>
+                <dt>{clarification ? "本版本偏好" : "偏好"}</dt>
                 <dd>{version.challenge.preferences || "未填写"}</dd>
               </div>
               <div>
-                <dt>备选方案</dt>
-                <dd>{version.challenge.options.join("\n") || "未填写"}</dd>
+                <dt>{clarification ? "Codex模拟回答" : "备选方案"}</dt>
+                <dd>
+                  {clarification
+                    ? simulatedAnswers
+                    : version.challenge.options.join("\n") || "未填写"}
+                </dd>
               </div>
               <div>
-                <dt>提供的材料</dt>
-                <dd>{version.challenge.materials || "未提供材料"}</dd>
+                <dt>{clarification ? "原始提交材料" : "提供的材料"}</dt>
+                <dd>
+                  {clarification
+                    ? metadata.initialMaterials === undefined
+                      ? "未记录原始材料"
+                      : metadata.initialMaterials || "原始提交未附材料。"
+                    : version.challenge.materials || "未提供材料"}
+                </dd>
               </div>
               <div>
-                <dt>预算与时间</dt>
+                <dt>{clarification ? "本版本资源约定" : "预算与时间"}</dt>
                 <dd>
                   {version.challenge.budget == null
                     ? "未填写预算"

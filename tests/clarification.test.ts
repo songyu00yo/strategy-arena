@@ -1204,6 +1204,135 @@ describe("explicit clarification workflow with model test doubles", () => {
     },
   );
 
+  function scopeWithPendingSummary(
+    pendingSummaryFields: NonNullable<IntakeDraft["confirmation"]>["pendingSummaryFields"] = [
+      "constraints",
+    ],
+    challengeGoal = "我想做一个个人网站，具体没想好。",
+    quote = "我想做一个个人网站",
+    reviewGap = false,
+  ) {
+    // Explicit test double for the saved original-goal scope source and aggregate pending shape.
+    const scope = {
+      ...item("site_type", "scope", "确认要制作的成果类型"),
+      sourceRefs: ["original_goal"],
+      provided: { sourceRef: "original_goal", quote },
+    };
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_decompose")
+        return response({
+          summary: "已知目标来源的测试替身",
+          items: [scope],
+          retired: [],
+          suggestions: [],
+        });
+      if (request.name === "clarification_options")
+        return response({
+          summary: "按当前待问事项排题",
+          questions: (request.input.questionableItems as DecisionItem[]).map((entry) =>
+            question(entry),
+          ),
+          conflicts: [],
+        });
+      return response({
+        summary: "独立检查摘要确认状态",
+        ready: !reviewGap,
+        coverage: ["scope", "function", "content", "flow", "style"].map((topic) => ({
+          topic,
+          applicable: topic === "scope",
+          reason: "测试目标来源覆盖",
+          decisionIds: topic === "scope" ? [scope.id] : [],
+        })),
+        gaps: reviewGap ? [scope] : [],
+        conflicts: [],
+      });
+    });
+    const draft = create("我想做一个个人网站，具体没想好。");
+    draft.challenge = ChallengeSchema.parse({ goal: challengeGoal, constraints: "已补充的内容" });
+    draft.confirmation = {
+      history: [],
+      summary: {
+        revision: draft.revision,
+        confirmedAt: new Date().toISOString(),
+        challenge: { ...draft.challenge, constraints: "上一版内容" },
+      },
+      pendingSummaryFields,
+    };
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(draft), draft.id);
+    return { draft, scope };
+  }
+
+  it.each([
+    { pending: ["constraints"] },
+    // The public simulation's round 8 marked goal dirty although all three goal values match.
+    { pending: ["goal", "constraints"] },
+    { pending: ["goal", "domain", "constraints"] },
+  ] as const)(
+    "does not reask unchanged scope while summary fields remain pending: %o",
+    async ({ pending }) => {
+      const seeded = scopeWithPendingSummary([...pending]);
+      let draft = await next(seeded.draft);
+      expect(draft.status).toBe("summary");
+      expect(draft.questions).toEqual([]);
+      expect(draft.clarification?.review?.ready).toBe(false);
+      expect(draft.clarification?.draftOnly).toBe(true);
+      expect(draft.confirmation?.pendingSummaryFields).toEqual([...pending]);
+      expect(draft.clarification?.executionPrompt).not.toContain(
+        `- ${seeded.scope.provided.quote}`,
+      );
+      expect(draft.clarification?.specification).toContain("要求的摘要修改尚待确认");
+      draft = await next(draft);
+      expect(draft.questions).toEqual([]);
+      expect(draft.clarification?.review?.ready).toBe(false);
+      const submitted = await submitClarificationIntake(draft.id, owner, {
+        revision: draft.revision,
+        challenge: draft.challenge!,
+        assumptions: draft.assumptions,
+      });
+      if (!("versions" in submitted)) throw new Error("Explicit summary submission should finish");
+      const version = submitted.versions.find((entry) => entry.id === submitted.activeVersionId)!;
+      expect(version.clarification?.review?.ready).toBe(true);
+      expect(version.clarification?.executionPrompt).toContain(`- ${seeded.scope.provided.quote}`);
+    },
+  );
+
+  it.each([
+    { pending: ["constraints"], goal: "我想做一个个人网站，具体没想好。", quote: "具体没想好" },
+    { pending: ["goal", "constraints"], goal: "我想做一个个人网站，改为销售产品" },
+    { pending: ["domain", "constraints"], changedDomain: "work" },
+    { pending: ["constraints"], goal: "改为制作一份用于汇报的PPT" },
+    { pending: ["goal", "constraints"], withoutSummary: true },
+    { pending: ["domain", "constraints"], withoutSummary: true },
+    { pending: ["goal", "constraints"], confirmedGoal: "上一版是制作一份演示文稿" },
+  ] as const)("still asks when the current goal is unknown or changed: %o", async (entry) => {
+    const { draft, scope } = scopeWithPendingSummary(
+      [...entry.pending],
+      "goal" in entry ? entry.goal : undefined,
+      "quote" in entry ? entry.quote : undefined,
+    );
+    if ("changedDomain" in entry && entry.changedDomain)
+      draft.challenge!.domain = entry.changedDomain;
+    if ("withoutSummary" in entry) delete draft.confirmation!.summary;
+    if ("confirmedGoal" in entry && entry.confirmedGoal)
+      draft.confirmation!.summary!.challenge.goal = entry.confirmedGoal;
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(draft), draft.id);
+    const result = await next(draft);
+    expect(result.status).toBe("questions");
+    expect(result.questions.map((question) => question.id)).toContain(scope.id);
+    expect(result.clarification?.review?.ready ?? false).toBe(false);
+  });
+
+  it("still asks C's concrete gap even when the original goal is otherwise known", async () => {
+    const { draft, scope } = scopeWithPendingSummary(undefined, undefined, undefined, true);
+    const result = await next(draft);
+    expect(result.questions.map((question) => question.id)).toContain(scope.id);
+    expect(
+      result.clarification?.items.find((item) => item.id === scope.id)?.provided,
+    ).toBeUndefined();
+    expect(result.clarification?.runs.map((run) => run.role)).toEqual(["A", "B", "C", "B"]);
+    expect(result.clarification?.review?.ready).toBe(false);
+  });
+
   it("keeps a newer saved answer when a prior A response returns after the draft revision changed", async () => {
     let resolve!: (value: ReturnType<typeof response>) => void;
     fixture.generate.mockImplementationOnce(

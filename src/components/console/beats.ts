@@ -13,6 +13,8 @@ import type {
 import { attackMeta } from "@/components/status";
 import { strategyChanges } from "@/components/text-diff";
 import type { ClarificationRun } from "@/lib/clarification-contracts";
+import type { RecordedAnswer } from "@/lib/intake-contracts";
+import { clarificationAnswersForRun, clarificationQuestionText } from "@/lib/step-context";
 
 export const CLARIFICATION_ROLES = {
   A: "需求拆解",
@@ -37,7 +39,10 @@ const TOPIC_LABELS = {
   authorization: "授权",
 } as const;
 
-export function clarificationLines(run: ClarificationRun): string[] {
+export function clarificationLines(
+  run: ClarificationRun,
+  answers: readonly RecordedAnswer[] = [],
+): string[] {
   const output = run.output;
   if ("error" in output) return [output.error];
   if ("items" in output)
@@ -51,9 +56,11 @@ export function clarificationLines(run: ClarificationRun): string[] {
     ];
   if ("questions" in output)
     return [
-      ...output.questions.map(
-        (question) =>
-          `${question.title}${question.options.length ? `（候选 ${question.options.join(" / ")}）` : ""}`,
+      ...output.questions.map((question) =>
+        clarificationQuestionText(
+          question,
+          answers.find((answer) => answer.questionId === question.id),
+        ),
       ),
       ...output.conflicts.map((conflict) => `需核对 ${conflict.description}`),
     ];
@@ -100,6 +107,7 @@ export type Beat = {
   changes?: string[];
   verdict?: Verdict;
   clarificationRun?: ClarificationRun;
+  clarificationAnswers?: RecordedAnswer[];
 };
 
 /** Read only the playback section already revealed to the user. */
@@ -117,6 +125,9 @@ export function beatsOf(version: ArenaVersion): Beat[] {
       title: `${CLARIFICATION_ROLES[run.role]} · 第 ${run.round} 轮`,
       plain: run.summary,
       clarificationRun: run,
+      ...(run.role === "B"
+        ? { clarificationAnswers: clarificationAnswersForRun(version, run) }
+        : {}),
     }));
   }
   const beats: Beat[] = [];

@@ -88,7 +88,7 @@ test("real identity bootstrap blocks draft creation and history, then one blur a
   try {
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect.poll(() => identities).toBe(1);
-    const input = page.getByLabel("你想解决什么问题？", { exact: true });
+    const input = page.getByLabel("你想做什么", { exact: true });
     const history = page.getByRole("banner").getByRole("button", { name: "我的历史", exact: true });
     await expect(input).toBeVisible();
     await expect(input).toBeDisabled();
@@ -164,11 +164,11 @@ test("real Web Locks serialize first identity creation across two browser tabs",
     await expect.poll(() => identities).toBe(1);
     await page.waitForTimeout(200);
     expect(identities).toBe(1);
-    await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toBeDisabled();
-    await expect(other.getByLabel("你想解决什么问题？", { exact: true })).toBeDisabled();
+    await expect(page.getByLabel("你想做什么", { exact: true })).toBeDisabled();
+    await expect(other.getByLabel("你想做什么", { exact: true })).toBeDisabled();
     initialization.release();
-    await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toBeEditable();
-    await expect(other.getByLabel("你想解决什么问题？", { exact: true })).toBeEditable();
+    await expect(page.getByLabel("你想做什么", { exact: true })).toBeEditable();
+    await expect(other.getByLabel("你想做什么", { exact: true })).toBeEditable();
     expect(identities).toBe(2);
     expect(maxInFlight).toBe(1);
     expect(tags).toHaveLength(2);
@@ -200,7 +200,7 @@ test("real access unlock waits for identity bootstrap before allowing history or
     await page.getByLabel("访问码", { exact: true }).fill("e2e-only-access-code");
     await page.getByRole("button", { name: "验证访问码", exact: true }).click();
     await expect.poll(() => identities).toBe(1);
-    const input = page.getByLabel("你想解决什么问题？", { exact: true });
+    const input = page.getByLabel("你想做什么", { exact: true });
     await expect(input).toBeDisabled();
     await expect(
       page.getByRole("banner").getByRole("button", { name: "我的历史", exact: true }),

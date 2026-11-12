@@ -38,16 +38,16 @@ for (const viewport of [
         });
       });
       await page.goto("/");
-      await expect(page.getByRole("heading", { name: "你想解决什么问题？" })).toBeVisible();
-      const input = page.getByLabel("你想解决什么问题？", { exact: true });
+      await expect(page.getByRole("heading", { name: "你想做什么" })).toBeVisible();
+      const input = page.getByLabel("你想做什么", { exact: true });
       await expect(input).toBeEditable();
       // No suggestions and no tools before the visitor writes.
       await expect(page.getByRole("group", { name: "选择一个合成场景" })).toBeHidden();
-      await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeHidden();
+      await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeHidden();
       await input.fill("我想比较一个自己提出的其他选择，可以继续自由输入。");
       await expect(input).toHaveValue("我想比较一个自己提出的其他选择，可以继续自由输入。");
       expect(unexpected).toEqual([]);
-      await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeInViewport();
+      await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeInViewport();
       await page.screenshot({
         path: `test-results/choices-home-${viewport.width}.png`,
         fullPage: true,

@@ -90,7 +90,10 @@ const WALL_LIMIT = 24;
 function linesOf(version: ArenaVersion, beat: Beat): string[] {
   let lines: string[] = [];
   if (beat.clarificationRun)
-    return [beat.clarificationRun.summary, ...clarificationLines(beat.clarificationRun)];
+    return [
+      beat.clarificationRun.summary,
+      ...clarificationLines(beat.clarificationRun, beat.clarificationAnswers),
+    ];
   if (beat.strategy) {
     const s = beat.strategy;
     lines = [
@@ -339,7 +342,8 @@ export function RecordWall({
 
 /** The record behind the step in front, so the card carries substance and not only a caption. */
 function detailsOf(version: ArenaVersion, beat: Beat): string[] {
-  if (beat.clarificationRun) return clarificationLines(beat.clarificationRun).slice(0, 3);
+  if (beat.clarificationRun)
+    return clarificationLines(beat.clarificationRun, beat.clarificationAnswers).slice(0, 3);
   if (beat.strategy)
     return beat.strategy.claims
       .slice(0, 3)

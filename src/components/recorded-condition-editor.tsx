@@ -16,6 +16,7 @@ import type { Health } from "./use-arena";
 import { ConditionEditor } from "./condition-editor";
 import { Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
+import { prepareRecordedIntake } from "./recorded-intake";
 import "./recorded-challenge.css";
 
 export function RecordedConditionEditor({
@@ -29,6 +30,7 @@ export function RecordedConditionEditor({
   trigger: HTMLElement | null;
   onClose: () => void;
 }) {
+  const clarification = version.workflow === "clarification";
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState("");
   const [error, setError] = useState("");
@@ -65,7 +67,11 @@ export function RecordedConditionEditor({
       })
       .catch(() => {
         if (live.current && !controller.signal.aborted)
-          setHealthError("暂时无法检查模型配置，请关闭后重试。");
+          setHealthError(
+            clarification
+              ? "暂时无法连接草稿服务，请关闭后重试。"
+              : "暂时无法检查模型配置，请关闭后重试。",
+          );
       })
       .finally(() => controllers.current.delete(controller));
     const dialog = root.current?.closest("dialog");
@@ -84,16 +90,63 @@ export function RecordedConditionEditor({
       dialog?.removeEventListener("click", cancel, true);
       dialog?.removeEventListener("cancel", cancel, true);
     };
-  }, []);
+  }, [clarification]);
   const blocked =
     healthError ||
     (!health
-      ? "正在检查模型配置…"
+      ? clarification
+        ? "正在检查草稿服务…"
+        : "正在检查模型配置…"
       : health.requiresAccessCode && !health.accessGranted
-        ? "请先返回首页输入访问口令，再开始真实推演。"
+        ? clarification
+          ? "请先返回首页输入访问口令，再准备需求草稿。"
+          : "请先返回首页输入访问口令，再开始真实推演。"
         : "");
   async function submit(challenge: Challenge, reason: string, selectedMode: ModelMode) {
     if (!live.current || locked.current || blocked || !health) return;
+    if (clarification) {
+      locked.current = true;
+      setPending(true);
+      setError("");
+      const controller = new AbortController();
+      controllers.current.add(controller);
+      let handedOff = false;
+      try {
+        const goal = [
+          challenge.goal,
+          challenge.constraints && `本次确认的限制\n${challenge.constraints}`,
+          challenge.preferences && `本次确认的偏好\n${challenge.preferences}`,
+          challenge.options.length && `本次提供的想法\n${challenge.options.join("\n")}`,
+          challenge.budget !== null && `可用预算 ${challenge.budget} 元`,
+          challenge.timeHours !== null && `可用时间 ${challenge.timeHours} 小时`,
+        ]
+          .filter((value) => typeof value === "string" && value.length > 0)
+          .join("\n\n");
+        await prepareRecordedIntake({
+          goal,
+          modelMode: selectedMode,
+          metadata,
+          version,
+          materials: challenge.materials,
+          signal: controller.signal,
+        });
+        if (!live.current || controller.signal.aborted) return;
+        // A fresh homepage restores the newly saved intake pointer before any older arena.
+        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+        window.location.assign("/");
+        handedOff = true;
+      } catch (failure) {
+        if (live.current && !controller.signal.aborted)
+          setError(failure instanceof Error ? failure.message : "未能准备需求草稿，请稍后重试。");
+      } finally {
+        controllers.current.delete(controller);
+        if (live.current && !controller.signal.aborted && !handedOff) {
+          locked.current = false;
+          setPending(false);
+        }
+      }
+      return;
+    }
     const oldVerdict = stepContext(version, "judge");
     const materials = `${challenge.materials}\n\n--- 历史案例来源，旧模型意见待复核 ---\n来源案例：${metadata.slug}\n原版本：${version.id}（V${version.number}）\n来源提交：${metadata.sourceCommit}\n本次条件变化：${reason}\n以下是旧模型意见，不是已证实事实；请按本次条件重新判断。${oldVerdict ? `\n${oldVerdict.title}\n${oldVerdict.quote}` : "\n原记录没有完整裁决。"}`;
     const prepared = CreateArenaRequestSchema.safeParse({
@@ -170,6 +223,7 @@ export function RecordedConditionEditor({
           pending={pending}
           disabled={!!blocked}
           demo={false}
+          workflow={clarification ? "clarification" : undefined}
           onCancel={() => {
             cancelRequests();
             if (!motion.current?.close()) close();

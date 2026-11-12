@@ -1,9 +1,59 @@
 import type { ArenaVersion } from "./contracts";
+import type { ClarificationRun } from "./clarification-contracts";
+import type { IntakeQuestion, RecordedAnswer } from "./intake-contracts";
 
 export interface StepContext {
   stepId: string;
   title: string;
   quote: string;
+}
+
+/** Bind a question to the following saved input snapshot, never to a later edited answer. */
+export function clarificationAnswersForRun(
+  version: ArenaVersion,
+  run: ClarificationRun,
+): RecordedAnswer[] {
+  if (run.role !== "B" || !("questions" in run.output)) return [];
+  const rounds = version.clarification?.rounds ?? [];
+  const index = rounds.findIndex((round) => round.runIds.includes(run.id));
+  if (index < 0 || !rounds[index + 1]) return [];
+  const sourceQuestions = run.output.questions;
+  const questionKey = (question: IntakeQuestion) =>
+    JSON.stringify([
+      question.id,
+      question.title,
+      question.type,
+      question.options,
+      question.unit,
+      question.authorization ?? "",
+    ]);
+  const shown = new Set(rounds[index].questions.map(questionKey));
+  const asked = new Set(sourceQuestions.map(questionKey).filter((key) => shown.has(key)));
+  return rounds[index + 1].answers.filter((answer) => asked.has(questionKey(answer.question)));
+}
+
+export function clarificationQuestionText(
+  question: IntakeQuestion,
+  answer?: RecordedAnswer,
+): string {
+  const value =
+    answer && (Array.isArray(answer.value) ? answer.value.join("、") : answer.value.trim());
+  const response =
+    !answer || (answer.state === "answered" && !value)
+      ? "尚未回答（未确认）"
+      : answer.state === "unknown"
+        ? "不知道（未决）"
+        : answer.state === "skipped"
+          ? "已跳过（未决）"
+          : `${value}${question.unit ? ` ${question.unit}` : ""}（${answer.needsReconfirmation ? "待重新确认" : answer.confirmation === "confirmed" ? "已确认" : answer.confirmation === "pending" ? "待确认" : "确认状态未记录"}）`;
+  return [
+    question.title,
+    question.options.length ? `候选选项 — ${question.options.join(" / ")}` : "",
+    question.authorization ? `单项授权范围 — ${question.authorization}` : "",
+    `已记录回答 — ${response}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** Canonical persisted step text shared by the reader and the source check. No generated explanation. */
@@ -12,12 +62,21 @@ export function stepContext(version: ArenaVersion, stepId: string): StepContext 
     const run = version.clarification?.runs.find((entry) => `clarification:${entry.id}` === stepId);
     if (!run) return null;
     const title = `${run.role} · 第 ${run.round} 轮需求审查`;
+    const answers = clarificationAnswersForRun(version, run);
     return {
       stepId,
       title,
       quote: [
         title,
         run.summary,
+        ...("questions" in run.output
+          ? run.output.questions.map((question) =>
+              clarificationQuestionText(
+                question,
+                answers.find((answer) => answer.questionId === question.id),
+              ),
+            )
+          : []),
         `记录 ${run.id}`,
         `调用 ${run.operationId}`,
         `依据修订 ${run.basedOnRevision}`,

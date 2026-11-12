@@ -193,12 +193,12 @@ async function createSecondDraft(context: BrowserContext) {
   const page = await context.newPage();
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  await expect(page.getByLabel("你想解决什么问题？", { exact: true })).not.toHaveValue("");
+  await expect(page.getByLabel("你想做什么", { exact: true })).not.toHaveValue("");
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
   await page
-    .getByLabel("你想解决什么问题？", { exact: true })
+    .getByLabel("你想做什么", { exact: true })
     .fill(questionDraft(secondId, secondQuestion).goal);
-  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await page.getByRole("button", { name: "开始梳理", exact: true }).click();
   await expect(page.getByRole("textbox", { name: secondQuestion, exact: true })).toBeVisible();
   expect(await pointers(page)).toEqual({ tab: secondId, shared: secondId });
   return page;
@@ -238,12 +238,12 @@ test("explicit UI fixture: starting over clears only the current tab's draft, pr
   await page.getByRole("textbox", { name: firstQuestion, exact: true }).fill(unsentAnswer);
   const other = await createSecondDraft(context);
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
-  await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("你想做什么", { exact: true })).toHaveValue("");
   // Empty owned pointer suppresses the legacy fallback on this tab's next refresh.
   expect(await pointers(page)).toEqual({ tab: "", shared: secondId });
   expect(await page.evaluate((key) => sessionStorage.getItem(key), ANSWER_JOURNAL_KEY)).toBeNull();
   await page.reload();
-  await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("你想做什么", { exact: true })).toHaveValue("");
   expect(await pointers(page)).toEqual({ tab: "", shared: secondId });
   await other.reload();
   await expect(other.getByRole("textbox", { name: secondQuestion, exact: true })).toBeVisible();
@@ -341,8 +341,8 @@ async function arenaPointers(page: Page) {
   );
 }
 async function submitNewDiscussion(page: Page, goal: string, arenaId: string) {
-  await page.getByLabel("你想解决什么问题？", { exact: true }).fill(goal);
-  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await page.getByLabel("你想做什么", { exact: true }).fill(goal);
+  await page.getByRole("button", { name: "开始梳理", exact: true }).click();
   await expect(page.getByRole("button", { name: "确认摘要并开始推演", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
   await expect(page.getByRole("heading", { name: goal, exact: true })).toBeVisible();
@@ -393,10 +393,10 @@ test("explicit UI fixture: clearing one submitted discussion cannot clear anothe
   const { fixture, other } = await submitTwoDiscussions(page, context);
   const before = fixture.requestsFrom(page).length;
   await page.getByRole("button", { name: "新问题", exact: true }).click();
-  await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("你想做什么", { exact: true })).toHaveValue("");
   expect(await arenaPointers(page)).toEqual({ tab: "", shared: secondArenaId });
   await page.reload();
-  await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("你想做什么", { exact: true })).toHaveValue("");
   expect(await arenaPointers(page)).toEqual({ tab: "", shared: secondArenaId });
   const restored = fixture.requestsFrom(page).slice(before);
   expect(restored.some((entry) => entry.startsWith(`GET /api/arenas/${secondArenaId}`))).toBe(
@@ -487,7 +487,7 @@ test("explicit UI fixture: unsynced summaries survive another tab's edits and st
     secondJournal,
   );
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
-  await expect(page.getByLabel("你想解决什么问题？", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("你想做什么", { exact: true })).toHaveValue("");
   expect(
     await page.evaluate((key) => sessionStorage.getItem(key), SUMMARY_TAB_JOURNAL_KEY),
   ).toBeNull();

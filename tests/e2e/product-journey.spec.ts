@@ -219,7 +219,7 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
   });
 
   await page.goto("/");
-  await page.getByRole("textbox", { name: "你想解决什么问题？", exact: true }).fill(goal);
+  await page.getByRole("textbox", { name: "你想做什么", exact: true }).fill(goal);
   await page.getByLabel("选择参考材料", { exact: true }).setInputFiles({
     name: source.filename,
     mimeType: "text/plain",
@@ -228,7 +228,7 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
   await expect(page.getByText("文字已提取", { exact: true })).toBeVisible();
   expect(analyses).toEqual([]);
   expect(submitted).toEqual([]);
-  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await page.getByRole("button", { name: "开始梳理", exact: true }).click();
   await page
     .getByRole("group", { name: question.title, exact: true })
     .getByRole("radio", { name: "独立完成，不买设备", exact: true })

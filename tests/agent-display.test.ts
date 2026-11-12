@@ -4,8 +4,10 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ArenaVersion } from "../src/lib/contracts";
 import type { ClarificationRun } from "../src/lib/clarification-contracts";
+import type { IntakeQuestion, RecordedAnswer } from "../src/lib/intake-contracts";
 import { AGENT_LIMITS, AGENT_PROTOCOL } from "../src/lib/agent-contracts";
-import { beatsOf, latestShownRevision } from "../src/components/console/beats";
+import { beatsOf, clarificationLines, latestShownRevision } from "../src/components/console/beats";
+import { StepCard } from "../src/components/console/StepCard";
 import { RouteChart } from "../src/components/console/RouteChart";
 import { RouteStage } from "../src/components/console/RouteStage";
 import { ArenaConsole } from "../src/components/console/ArenaConsole";
@@ -402,5 +404,211 @@ describe("clarification repair display", () => {
     expect(stageClass(version)).toMatch(/\bbad\b/);
     expect(stageClass(version)).not.toMatch(/\bdone\b/);
     expect(uncertain.status).toBe("uncertain");
+  });
+});
+
+describe("saved clarification answers in round playback", () => {
+  function playbackVersion() {
+    const version = fixtureSnapshot().versions[0];
+    const style: IntakeQuestion = {
+      id: "style",
+      decisionId: "style",
+      title: "选择呈现风格",
+      reason: "明确标注的显示测试替身",
+      placeholder: "",
+      type: "single",
+      options: ["简洁正式", "活泼明亮", "杂志排版", "朴素文档", "学院风", "自定义描述"],
+      unit: "",
+    };
+    const purpose: IntakeQuestion = {
+      ...style,
+      id: "purpose",
+      decisionId: "purpose",
+      title: "是否允许公开资料？",
+      options: ["允许", "仅本人查看"],
+    };
+    const materials: IntakeQuestion = {
+      ...style,
+      id: "materials",
+      decisionId: "materials",
+      title: "补充附件说明",
+      type: "text",
+      options: [],
+    };
+    const original: RecordedAnswer = {
+      questionId: style.id,
+      question: style,
+      state: "answered",
+      value: "简洁正式",
+      confirmation: "confirmed",
+      confirmedRevision: 3,
+    };
+    const unknown: RecordedAnswer = {
+      questionId: purpose.id,
+      question: purpose,
+      state: "unknown",
+      value: "",
+    };
+    const skipped: RecordedAnswer = {
+      questionId: materials.id,
+      question: materials,
+      state: "skipped",
+      value: "",
+    };
+    const changed: RecordedAnswer = { ...original, value: "活泼明亮", confirmedRevision: 6 };
+    const run = (id: string, round: number, questions: IntakeQuestion[]): ClarificationRun => ({
+      id,
+      operationId: `operation-${id}`,
+      role: "B",
+      round,
+      basedOnRevision: round,
+      status: "completed",
+      summary: "【合成回放数据】依据当前回答生成选项",
+      output: {
+        summary: "【合成回放数据】选项审查",
+        questions: questions.map((question) => ({ ...question, decisionId: question.decisionId! })),
+        conflicts: [],
+      },
+      usage: [],
+      createdAt: "2026-11-12T00:00:00.000Z",
+    });
+    const first = run("playback-b-one", 1, [style, purpose, materials]);
+    const second = run("playback-b-two", 2, [style]);
+    const final = run("playback-b-submit", 3, []);
+    version.workflow = "clarification";
+    version.clarification = {
+      protocol: "clarification-1",
+      items: [],
+      retiredIds: [],
+      runs: [first, second, final],
+      rounds: [
+        {
+          round: 1,
+          revision: 1,
+          questions: [style, purpose, materials].map((question) => ({
+            ...question,
+            decisionId: question.decisionId!,
+          })),
+          answers: [],
+          changes: { added: [], retired: [], changed: [], triggerAnswerIds: [] },
+          runIds: [first.id],
+          createdAt: first.createdAt,
+        },
+        {
+          round: 2,
+          revision: 4,
+          questions: [{ ...style, decisionId: style.id }],
+          answers: [original, unknown, skipped],
+          changes: { added: [], retired: [], changed: [], triggerAnswerIds: [style.id] },
+          runIds: [second.id],
+          createdAt: second.createdAt,
+        },
+        {
+          round: 3,
+          revision: 7,
+          questions: [],
+          answers: [changed, unknown, skipped],
+          changes: { added: [], retired: [], changed: [], triggerAnswerIds: [style.id] },
+          runIds: [final.id],
+          createdAt: final.createdAt,
+        },
+      ],
+      suggestions: [],
+      conflicts: [],
+      review: null,
+      next: "completed",
+      draftOnly: false,
+      specification: "【合成数据】确认后的说明",
+      executionPrompt: "【合成数据】执行提示词",
+    };
+    return version;
+  }
+
+  it("binds each B step to the next actual saved answer snapshot including the submission round", () => {
+    const version = playbackVersion();
+    const beats = beatsOf(version);
+    expect(
+      beats[0].clarificationAnswers?.find((answer) => answer.questionId === "style")?.value,
+    ).toBe("简洁正式");
+    expect(
+      beats[1].clarificationAnswers?.find((answer) => answer.questionId === "style")?.value,
+    ).toBe("活泼明亮");
+    const firstText = clarificationLines(
+      beats[0].clarificationRun!,
+      beats[0].clarificationAnswers,
+    ).join("\n");
+    expect(firstText).toContain("简洁正式 / 活泼明亮 / 杂志排版 / 朴素文档 / 学院风 / 自定义描述");
+    expect(firstText).toContain("已记录回答 — 简洁正式（已确认）");
+    expect(firstText).toContain("不知道（未决）");
+    expect(firstText).toContain("已跳过（未决）");
+    expect(firstText).not.toContain("已记录回答 — 活泼明亮");
+    expect(stepContext(version, beats[0].id)?.quote).toContain("已记录回答 — 简洁正式（已确认）");
+    expect(stepContext(version, beats[1].id)?.quote).toContain("已记录回答 — 活泼明亮（已确认）");
+    expect(stepContext(version, beats[0].id)!.quote.length).toBeLessThan(30000);
+    expect(version.clarification?.runs).toHaveLength(3);
+  });
+
+  it("shows unanswered when there is no following snapshot instead of borrowing a later answer", () => {
+    const version = playbackVersion();
+    version.clarification!.rounds.pop();
+    const beats = beatsOf(version);
+    expect(beats[1].clarificationAnswers).toEqual([]);
+    expect(
+      clarificationLines(beats[1].clarificationRun!, beats[1].clarificationAnswers).join("\n"),
+    ).toContain("已记录回答 — 尚未回答（未确认）");
+  });
+
+  it("keeps answers scoped to the actual question text and options that were presented", () => {
+    const version = playbackVersion();
+    version.clarification!.rounds[0].questions[0].options = ["已更换的选项一", "已更换的选项二"];
+    const first = beatsOf(version)[0];
+    expect(
+      first.clarificationAnswers?.find((answer) => answer.questionId === "style"),
+    ).toBeUndefined();
+    expect(
+      clarificationLines(first.clarificationRun!, first.clarificationAnswers).join("\n"),
+    ).toContain("已记录回答 — 尚未回答（未确认）");
+  });
+
+  it("renders saved answers inside the original step-card and three-role text fields", () => {
+    const version = playbackVersion();
+    const beats = beatsOf(version);
+    const stage = renderToStaticMarkup(
+      React.createElement(RouteStage, {
+        version,
+        demo: false,
+        beats,
+        index: 0,
+        speed: 1,
+        directed: false,
+        camera: false,
+        lead: 0,
+        reviewing: true,
+        onStep: () => {},
+        onEvidence: () => {},
+        entering: false,
+        readOnly: true,
+        onClaim: () => {},
+      }),
+    );
+    expect(stage.match(/data-board="[ABC]"/g)).toHaveLength(3);
+    expect(stage).toContain("已记录回答 — 简洁正式（已确认）");
+    const card = renderToStaticMarkup(
+      React.createElement(StepCard, {
+        version,
+        beats,
+        index: 0,
+        last: beats.length - 1,
+        reviewing: true,
+        onOpen: () => {},
+        onStage: () => {},
+        onEvidence: () => {},
+        onClose: () => {},
+      }),
+    );
+    expect(card).toContain("已记录回答 — 简洁正式（已确认）");
+    expect(card).toContain("不知道（未决）");
+    expect(card).toContain("自定义描述");
+    expect(card).not.toContain("已记录回答 — 活泼明亮");
   });
 });

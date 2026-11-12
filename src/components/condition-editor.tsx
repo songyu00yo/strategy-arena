@@ -31,6 +31,7 @@ export function ConditionEditor({
   pending,
   disabled = false,
   demo = false,
+  workflow,
   initialFocus = "budget",
   onCancel,
   onSubmit,
@@ -41,6 +42,7 @@ export function ConditionEditor({
   pending: boolean;
   disabled?: boolean;
   demo?: boolean;
+  workflow?: "clarification";
   initialFocus?: "budget" | "timeHours" | "constraints" | "preferences";
   onCancel: () => void;
   onSubmit: (challenge: Challenge, reason: string, modelMode: ModelMode) => void;
@@ -70,6 +72,7 @@ export function ConditionEditor({
   const route = routeModel(value, modelMode);
   const previousRoute = routeModel(initial, initialModelMode);
   const modelUnavailable =
+    workflow !== "clarification" &&
     !demo &&
     (
       modelProviders?.find((model) => model.id === route.modelId) ??
@@ -394,7 +397,11 @@ export function ConditionEditor({
       </div>
       <div className="condition-editor-bottom">
         <p className="form-assurance">
-          {demo ? "演示模式，不调用模型，不计费。" : "确认后新建真实推演并计费，原记录保留。"}
+          {workflow === "clarification"
+            ? "确认后创建需求草稿，回到首页点击“开始梳理”才调用模型。原记录保留。"
+            : demo
+              ? "演示模式，不调用模型，不计费。"
+              : "确认后新建真实推演并计费，原记录保留。"}
         </p>
         <div className="submit-actions">
           <button type="button" className="secondary-button" onClick={onCancel}>
@@ -405,7 +412,13 @@ export function ConditionEditor({
             className="primary-button"
             disabled={busy || modelUnavailable || !changed}
           >
-            {pending ? "正在开始新一轮…" : "按新条件重新推演"}
+            {pending
+              ? workflow === "clarification"
+                ? "正在准备草稿…"
+                : "正在开始新一轮…"
+              : workflow === "clarification"
+                ? "按这些条件准备草稿"
+                : "按新条件重新推演"}
             <ArrowRight size={16} aria-hidden="true" />
           </button>
         </div>

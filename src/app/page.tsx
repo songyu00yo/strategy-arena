@@ -364,7 +364,9 @@ export default function Page() {
               : configured === false
                 ? "模型待配置"
                 : arena.health
-                  ? "真实模型推演"
+                  ? !arena.snapshot || selected?.workflow === "clarification"
+                    ? "真实模型梳理"
+                    : "真实模型推演"
                   : "连接服务中"}
             <Settings2 size={13} />
           </button>
@@ -404,9 +406,9 @@ export default function Page() {
         {!arena.snapshot ? (
           <>
             <div className="goal-landing">
-              <section className="goal-landing-center" aria-label="开始一次方案推演">
+              <section className="goal-landing-center" aria-label="开始一次需求梳理">
                 <div className="home-intro">
-                  <h1>你想解决什么问题？</h1>
+                  <h1>你想做什么</h1>
                 </div>
                 <GoalFocusStage>
                   <div className="h-form">
@@ -449,7 +451,7 @@ export default function Page() {
                           <p>
                             {arena.healthError
                               ? "连接恢复后刷新页面即可继续。"
-                              : "你可以先看已有示例。配置完成前，新的推演不会发起收费调用。"}
+                              : "你可以先看需求梳理示例。模型配置完成后才能开始新的梳理。"}
                           </p>
                           <button
                             type="button"
@@ -683,7 +685,11 @@ export default function Page() {
                       </label>
                       <span className={`run-status ${selected.status}`} role="status">
                         {selected.status === "running" && <span className="working-dot" />}
-                        {selected.waitingForIntake ? "等待回答" : statusLabels[selected.status]}
+                        {selected.waitingForIntake
+                          ? "等待回答"
+                          : selected.workflow === "clarification" && selected.status === "completed"
+                            ? "需求记录已生成"
+                            : statusLabels[selected.status]}
                       </span>
                       {historical && <span className="historical-tag">只读</span>}
                     </div>
@@ -904,13 +910,17 @@ export default function Page() {
               <p>
                 {demo
                   ? "演示中的路线、证据、裁决、Token 数和费用都是预设的，实际费用为 0。"
-                  : "AI 分析问题、读图和推演方案时，都会调用所选模型。费用取决于问题长度、材料和推演步骤。运行时会根据已记录的用量估算费用，按所选模型的原始币种显示。"}
+                  : !selected || selected.workflow === "clarification"
+                    ? "梳理需求时，A、B、C分别调用所选模型。需要模型解读材料时，也会计入用量。费用按保存的调用记录估算，按原始币种显示。等待你回答和回看已有记录不会新增模型调用。"
+                    : "AI 分析问题、读图和推演方案时，都会调用所选模型。费用取决于问题长度、材料和推演步骤。运行时会根据已记录的用量估算费用，按所选模型的原始币种显示。"}
               </p>
             </div>
             <p className="muted">
               {demo
                 ? "演示内容用于体验界面和流程，不能证明模型效果。"
-                : "同一版本的不同思路由同一个选定模型分角色生成，不代表不同模型的独立意见。"}
+                : !selected || selected.workflow === "clarification"
+                  ? "A负责拆解需求，B给出选项并核对依赖，C检查遗漏。你的确认与模型建议分别保存。"
+                  : "同一版本的不同思路由同一个选定模型分角色生成，不代表不同模型的独立意见。"}
             </p>
           </div>
         </Modal>

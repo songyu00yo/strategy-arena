@@ -36,11 +36,11 @@ test("explicit UI fixture: floating picker keeps form geometry, arrows only focu
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto("/");
   // Tools appear once there is text; one character does not start a draft.
-  await page.getByLabel("你想解决什么问题？", { exact: true }).fill("测");
+  await page.getByLabel("你想做什么", { exact: true }).fill("测");
   const trigger = page.getByRole("button", { name: /^选择模型，当前/ });
   await expect(trigger).toBeEnabled();
   // Resize the goal as a real user can, forcing a menu above the source with limited height.
-  const textarea = await page.getByLabel("你想解决什么问题？", { exact: true }).boundingBox();
+  const textarea = await page.getByLabel("你想做什么", { exact: true }).boundingBox();
   await page.mouse.move(textarea!.x + textarea!.width - 4, textarea!.y + textarea!.height - 4);
   await page.mouse.down();
   await page.mouse.move(textarea!.x + textarea!.width - 4, textarea!.y + textarea!.height + 106, {
@@ -105,7 +105,7 @@ test("explicit UI fixture: floating picker keeps form geometry, arrows only focu
   expect(bounds!.y).toBeGreaterThanOrEqual(10);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(380);
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(834);
-  const goal = page.getByLabel("你想解决什么问题？", { exact: true });
+  const goal = page.getByLabel("你想做什么", { exact: true });
   // The centered mobile composer is behind the picker. Click its exposed left padding.
   await goal.click({ position: { x: 8, y: 16 } });
   await expect(listbox).toBeHidden();

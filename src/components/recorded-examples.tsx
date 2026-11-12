@@ -2,14 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  ArrowRight,
-  ArrowUpRight,
-  BookOpen,
-  BriefcaseBusiness,
-  Clapperboard,
-  Code2,
-} from "lucide-react";
+import { ArrowRight, ArrowUpRight, BookOpen, BriefcaseBusiness, Code2 } from "lucide-react";
 import { RECORDED_EXAMPLES } from "@/lib/recorded-examples";
 import { MODEL_CATALOG } from "@/lib/model-catalog";
 import { examplePickerRequested } from "@/lib/example-navigation";
@@ -17,10 +10,9 @@ import { Modal } from "./modal";
 import "./recorded-examples.css";
 
 const ICONS: Record<string, typeof BookOpen> = {
-  learning: BookOpen,
-  career: BriefcaseBusiness,
-  creation: Clapperboard,
-  "course-site": Code2,
+  "personal-website": Code2,
+  presentation: BriefcaseBusiness,
+  "user-guide": BookOpen,
 };
 
 function ExampleGallery() {
@@ -73,12 +65,12 @@ function ExampleGallery() {
     };
   }, []);
   return (
-    <section ref={section} className="recorded-examples in-dialog" aria-label="选择真实案例">
+    <section ref={section} className="recorded-examples in-dialog" aria-label="选择需求梳理示例">
       <header className="recorded-examples-heading">
         <div>
-          <p>从填写目标开始，看三条路线如何提案、质疑和修订。</p>
+          <p>从模糊目标开始，看提问、模拟回答、查漏和需求交接。</p>
         </div>
-        <p>已保存的真实记录 · 回放新增用量为 0</p>
+        <p>真实模型运行的模拟案例 · 回看新增调用为 0</p>
       </header>
       <div className="recorded-examples-grid">
         {RECORDED_EXAMPLES.map((example) => {
@@ -88,7 +80,7 @@ function ExampleGallery() {
               key={example.slug}
               href={`/examples/${example.slug}`}
               className="recorded-example-card"
-              aria-label={`播放${example.direction}案例：${example.title}`}
+              aria-label={`回看${example.direction}需求梳理示例：${example.title}`}
             >
               <div className="recorded-card-top">
                 <span>{example.direction}</span>
@@ -131,10 +123,10 @@ export function RecordedExamples() {
         aria-expanded={!!trigger}
         onClick={(event) => setTrigger(event.currentTarget)}
       >
-        先看真实案例 <ArrowRight size={14} />
+        先看需求梳理示例 <ArrowRight size={14} />
       </button>
       {trigger && (
-        <Modal title="先看一场真实推演" trigger={trigger} onClose={() => setTrigger(null)} wide>
+        <Modal title="先看需求梳理示例" trigger={trigger} onClose={() => setTrigger(null)} wide>
           <ExampleGallery />
         </Modal>
       )}

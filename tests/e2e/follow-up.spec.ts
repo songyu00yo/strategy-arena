@@ -230,52 +230,41 @@ async function openSource(page: Page, number: number) {
   return supplement;
 }
 
-for (const recorded of [false, true]) {
-  test(`explicit UI fixture: ${recorded ? "recorded" : "live"} supplement survives a conditions handoff and stays scoped to its source`, async ({
-    page,
-  }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    const snapshot = completedSnapshot();
-    let posts = 0;
-    await interceptAllApis(page, snapshot, async (route) => {
-      posts++;
-      await route.fulfill({
-        status: 500,
-        json: { error: "This recovery fixture must not submit." },
-      });
+test("explicit legacy-task fixture: supplement survives a conditions handoff and stays scoped to its source", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const snapshot = completedSnapshot();
+  let posts = 0;
+  await interceptAllApis(page, snapshot, async (route) => {
+    posts++;
+    await route.fulfill({
+      status: 500,
+      json: { error: "This recovery fixture must not submit." },
     });
-    await page.goto(recorded ? "/examples/career" : `/?arena=${snapshot.id}`);
-    if (recorded) await page.getByRole("button", { name: "开始分析", exact: true }).click();
-    const text = "测试：保留我已写下、尚未确认的补充，先去调整条件。";
-    let supplement = await openSource(page, 1);
-    await supplement.getByRole("textbox").fill(text);
-    if (recorded) {
-      await supplement.getByRole("button", { name: /^选择模型，当前/ }).click();
-      await page.getByRole("option", { name: "GPT 6.1 Sol", exact: true }).click();
-    }
-    await supplement.getByRole("button", { name: "调整条件", exact: true }).click();
-    const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
-    await expect(conditions).toBeVisible();
-    await conditions.getByLabel("预算上限", { exact: false }).fill("150");
-    await conditions.getByRole("button", { name: "取消", exact: true }).click();
-    await expect(conditions).toBeHidden();
-    supplement = await openSource(page, 1);
-    await expect(supplement.getByRole("textbox")).toHaveValue(text);
-    if (recorded)
-      await expect(
-        supplement.getByRole("button", { name: "选择模型，当前GPT 6.1 Sol", exact: true }),
-      ).toBeVisible();
-    await supplement.getByRole("button", { name: "取消", exact: true }).click();
-    await expect(supplement).toBeHidden();
-    supplement = await openSource(page, 2);
-    await expect(supplement.getByRole("textbox")).toHaveValue("");
-    await supplement.getByRole("button", { name: "取消", exact: true }).click();
-    await expect(supplement).toBeHidden();
-    supplement = await openSource(page, 1);
-    await expect(supplement.getByRole("textbox")).toHaveValue(text);
-    expect(posts).toBe(0);
   });
-}
+  await page.goto(`/?arena=${snapshot.id}`);
+  const text = "测试：保留我已写下、尚未确认的补充，先去调整条件。";
+  let supplement = await openSource(page, 1);
+  await supplement.getByRole("textbox").fill(text);
+  await supplement.getByRole("button", { name: "调整条件", exact: true }).click();
+  const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+  await expect(conditions).toBeVisible();
+  await conditions.getByLabel("预算上限", { exact: false }).fill("150");
+  await conditions.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(conditions).toBeHidden();
+  supplement = await openSource(page, 1);
+  await expect(supplement.getByRole("textbox")).toHaveValue(text);
+  await supplement.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(supplement).toBeHidden();
+  supplement = await openSource(page, 2);
+  await expect(supplement.getByRole("textbox")).toHaveValue("");
+  await supplement.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(supplement).toBeHidden();
+  supplement = await openSource(page, 1);
+  await expect(supplement.getByRole("textbox")).toHaveValue(text);
+  expect(posts).toBe(0);
+});
 
 for (const [label, field, value, key] of [
   ["budget", "预算上限", "150", "budget"],
@@ -681,25 +670,24 @@ test("explicit UI fixture: compact input drawers preserve desktop context and fi
   expect(posts).toEqual([]);
 });
 
-test("explicit UI fixture: recorded conditions stay free until explicit confirmation creates a sourced real task", async ({
+test("explicit legacy-task fixture: condition edits create a version only after confirmation", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const snapshot = completedSnapshot();
-  snapshot.id = "fixture-recorded-conditions";
   const payload = JSON.parse(
-    readFileSync("public/recorded-examples/career.json", "utf8"),
+    readFileSync("tests/fixtures/legacy-recordings/career.json", "utf8"),
   ) as RecordedExamplePayload;
-  const original = payload.arena.versions[0].challenge;
-  const posts: { path: string; body: Challenge & { modelMode: ModelMode } }[] = [];
+  const snapshot = configureFixtureModels(structuredClone(payload.arena));
+  snapshot.id = "fixture-legacy-conditions";
+  const original = snapshot.versions[0].challenge;
+  const posts: { path: string; body: VersionBody }[] = [];
   await interceptAllApis(page, snapshot, async (route) => {
-    const body = route.request().postDataJSON() as Challenge & { modelMode: ModelMode };
+    const body = route.request().postDataJSON() as VersionBody;
     posts.push({ path: new URL(route.request().url()).pathname, body });
-    snapshot.versions[0].challenge = body;
+    appendCompletedVersion(snapshot, body);
     await route.fulfill({ json: snapshot });
   });
-  await page.goto("/examples/career");
-  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await page.goto(`/?arena=${snapshot.id}`);
   await page.getByRole("button", { name: "调整条件", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "调整条件", exact: true });
   await expect(
@@ -714,12 +702,12 @@ test("explicit UI fixture: recorded conditions stay free until explicit confirma
   await page.getByRole("button", { name: "调整条件", exact: true }).click();
   await dialog.getByLabel("预算上限", { exact: false }).fill("150");
   await dialog.getByRole("button", { name: "按新条件重新推演", exact: true }).click();
-  await expect(page).toHaveURL(/\/\?arena=fixture-recorded-conditions$/);
+  await expect(page).toHaveURL(/\/\?arena=fixture-legacy-conditions$/);
   expect(posts).toHaveLength(1);
-  expect(posts[0].path).toBe("/api/arenas");
+  expect(posts[0].path).toBe(`/api/arenas/${snapshot.id}/versions`);
   const { materials, ...fields } = original;
-  expect(posts[0].body).toMatchObject({ ...fields, budget: 150 });
-  expect(posts[0].body.materials).toContain(materials);
-  expect(posts[0].body.materials).toContain(payload.metadata.sourceCommit);
-  expect(posts[0].body.materials).toContain("待复核");
+  expect(posts[0].body.challenge).toMatchObject({ ...fields, budget: 150 });
+  expect(posts[0].body.challenge.materials).toContain(materials);
+  expect(snapshot.versions).toHaveLength(2);
+  expect(snapshot.versions[1].parentVersionId).toBe(snapshot.versions[0].id);
 });

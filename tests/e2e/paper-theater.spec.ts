@@ -169,3 +169,80 @@ test("paper theater: an explicitly injected frame delay keeps active playback ti
   expect(activeTime).toBeGreaterThanOrEqual((sample.after.at - sample.before.at) * 1.8 * 0.8);
   expect(blocked).toEqual([]);
 });
+
+test("paper theater: the mobile conclusion seal stays inside the viewport throughout its visible press", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const blocked: string[] = [];
+  await page.route("**/api/**", (route) => {
+    blocked.push(route.request().method() + " " + new URL(route.request().url()).pathname);
+    return route.abort();
+  });
+  await page.goto("/examples/personal-website");
+  await page.getByRole("button", { name: "暂停自动开始", exact: true }).click();
+  await page.getByRole("button", { name: "开始回看", exact: true }).click();
+  await page.getByRole("button", { name: `第 ${steps.length - 1} 步`, exact: true }).click();
+  await expect(page.locator(".initial-paper-transfer")).toHaveCount(0);
+  const sampling = page.evaluate(
+    () =>
+      new Promise<{
+        frames: Array<{
+          at: number;
+          opacity: number;
+          left: number;
+          top: number;
+          right: number;
+          bottom: number;
+        }>;
+        width: number;
+        height: number;
+      }>((resolve) => {
+        const frames: Array<{
+          at: number;
+          opacity: number;
+          left: number;
+          top: number;
+          right: number;
+          bottom: number;
+        }> = [];
+        const began = performance.now();
+        let seen = false;
+        const tick = () => {
+          const seal = document.querySelector<HTMLElement>(".c-seal");
+          if (seal) {
+            seen = true;
+            const rect = seal.getBoundingClientRect();
+            frames.push({
+              at: performance.now() - began,
+              opacity: Number(getComputedStyle(seal).opacity),
+              left: rect.left,
+              top: rect.top,
+              right: rect.right,
+              bottom: rect.bottom,
+            });
+          }
+          if ((!seen || seal) && performance.now() - began < 14000) requestAnimationFrame(tick);
+          else resolve({ frames, width: innerWidth, height: innerHeight });
+        };
+        requestAnimationFrame(tick);
+      }),
+  );
+  await page.getByRole("button", { name: "继续放映", exact: true }).click();
+  const sample = await sampling;
+  await testInfo.attach("mobile-conclusion-seal-frames", {
+    body: JSON.stringify(sample),
+    contentType: "application/json",
+  });
+  const visible = sample.frames.filter((frame) => frame.opacity > 0.6);
+  expect(visible.length).toBeGreaterThanOrEqual(3);
+  for (const frame of visible) {
+    expect(frame.left).toBeGreaterThanOrEqual(0);
+    expect(frame.top).toBeGreaterThanOrEqual(0);
+    expect(frame.right).toBeLessThanOrEqual(sample.width);
+    expect(frame.bottom).toBeLessThanOrEqual(sample.height);
+  }
+  await expect(page.locator(".c-root")).toHaveClass(/at-result/);
+  expect(blocked).toEqual([]);
+});

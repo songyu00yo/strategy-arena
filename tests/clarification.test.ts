@@ -8,7 +8,7 @@ import {
   type HandoffReview,
 } from "../src/lib/clarification-contracts";
 import { toStrictToolSchema } from "../src/lib/server/strict-schema";
-import type { IntakeDraft, IntakeQuestion } from "../src/lib/intake-contracts";
+import type { IntakeDraft, IntakeQuestion, RecordedAnswer } from "../src/lib/intake-contracts";
 import { closeDb, db } from "../src/lib/server/db";
 import { createArena, newVersion, refreshRequirements } from "../src/lib/server/runtime";
 import {
@@ -1082,6 +1082,127 @@ describe("explicit clarification workflow with model test doubles", () => {
     );
     expect(draft.clarification?.executionPrompt).toContain("展示个人作品");
   });
+
+  async function crossDecisionReference(
+    sourceRef = "html_file",
+    sourceConfirmation: "confirmed" | "pending" = "confirmed",
+    needsReconfirmation = false,
+  ) {
+    // Reproduces the saved shape of the 14-round real-model simulation, using test doubles only.
+    const quote = "明确授权执行者在已确认范围内决定具体色值、字号和间距。";
+    const source = {
+      ...item("html_file", "scope", "希望保存为什么文件名？"),
+      provided: { sourceRef: "", quote: "" },
+    };
+    const authorization = {
+      ...item("implementation_authorization", "authorization", "哪些实现细节由执行者决定？", [
+        source.id,
+      ]),
+      sourceRefs: [sourceRef],
+      provided: { sourceRef, quote },
+    };
+    fixture.generate.mockImplementation(async (request) => {
+      const hasAnswer = (request.input.answers as RecordedAnswer[]).some(
+        (entry) => entry.questionId === source.id,
+      );
+      if (request.name === "clarification_decompose")
+        return response({
+          summary: "跨事项实际回答引用复现",
+          items: hasAnswer ? [source, authorization] : [source],
+          retired: [],
+          suggestions: [],
+        });
+      if (request.name === "clarification_options")
+        return response({
+          summary: "仅询问真正待决定的事项",
+          questions: (request.input.questionableItems as DecisionItem[]).map((entry) =>
+            question(entry),
+          ),
+          conflicts: [],
+        });
+      return response({
+        summary: "独立查漏意见",
+        ready: true,
+        coverage: ["scope", "function", "content", "flow", "style", "authorization"].map(
+          (topic) => ({
+            topic,
+            applicable: topic === "scope" || topic === "authorization",
+            reason: "依据已保存的实际确认检查",
+            decisionIds:
+              topic === "scope" ? [source.id] : topic === "authorization" ? [authorization.id] : [],
+          }),
+        ),
+        gaps: [],
+        conflicts: [],
+      });
+    });
+    let draft = await next(
+      create("【明确标注的模拟案例】准备一个本地展示的静态成果，具体实现要求逐项确认。"),
+    );
+    draft = answer(draft, { html_file: `文件名为 demo-portfolio.html。${quote}` });
+    const row = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+      body: string;
+    };
+    const saved = JSON.parse(row.body) as IntakeDraft;
+    saved.confirmation = {
+      history: [],
+      summary: {
+        revision: 1,
+        confirmedAt: new Date().toISOString(),
+        challenge: ChallengeSchema.parse({ goal: saved.goal, constraints: quote }),
+      },
+      pendingSummaryFields: ["constraints"],
+    };
+    saved.answers[0].confirmation = sourceConfirmation;
+    saved.answers[0].needsReconfirmation = needsReconfirmation;
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(saved), saved.id);
+    return { draft: await next(draft), quote };
+  }
+
+  it("accepts a verbatim cross-decision confirmed answer despite pending aggregate summary confirmation", async () => {
+    const referenced = await crossDecisionReference();
+    let { draft } = referenced;
+    const { quote } = referenced;
+    expect(draft.status).toBe("summary");
+    expect(draft.questions).toEqual([]);
+    expect(draft.clarification?.draftOnly).toBe(true);
+    expect(draft.clarification?.review?.ready).toBe(false);
+    expect(draft.confirmation?.pendingSummaryFields).toContain("constraints");
+    expect(draft.answers.find((entry) => entry.questionId === "html_file")).toMatchObject({
+      confirmation: "confirmed",
+      needsReconfirmation: false,
+    });
+    expect(draft.clarification?.executionPrompt).toContain(`- ${quote}`);
+    draft = await next(draft);
+    expect(draft.questions).toEqual([]);
+    expect(draft.clarification?.review?.ready).toBe(false);
+    const submitted = await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    if (!("versions" in submitted))
+      throw new Error("Explicit summary confirmation should complete the test handoff");
+    const version = submitted.versions.find((entry) => entry.id === submitted.activeVersionId)!;
+    expect(version.clarification?.review?.ready).toBe(true);
+    expect(version.status).toBe("completed");
+  });
+
+  it.each([
+    { sourceRef: "html_file", confirmation: "pending" as const, invalidated: false },
+    { sourceRef: "html_file", confirmation: "confirmed" as const, invalidated: true },
+    { sourceRef: "confirmed_summary", confirmation: "confirmed" as const, invalidated: false },
+  ])(
+    "continues to protect invalidated answer or pending-summary sources: %o",
+    async ({ sourceRef, confirmation, invalidated }) => {
+      const { draft, quote } = await crossDecisionReference(sourceRef, confirmation, invalidated);
+      expect(draft.status).toBe("questions");
+      expect(draft.questions.length).toBeGreaterThan(0);
+      expect(draft.clarification?.review?.ready ?? false).toBe(false);
+      expect(draft.clarification?.draftOnly).toBe(true);
+      expect(draft.clarification?.executionPrompt).not.toContain(`- ${quote}`);
+    },
+  );
 
   it("keeps a newer saved answer when a prior A response returns after the draft revision changed", async () => {
     let resolve!: (value: ReturnType<typeof response>) => void;

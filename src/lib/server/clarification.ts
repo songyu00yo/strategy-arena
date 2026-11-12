@@ -133,6 +133,7 @@ function resolved(
   if (!item.provided.sourceRef.trim() || !concreteProvidedQuote(item.provided.quote)) return false;
   if (
     !submission &&
+    ["original_goal", "confirmed_summary"].includes(item.provided.sourceRef) &&
     SUMMARY_FIELDS_BY_TOPIC[item.topic].some((field) =>
       draft.confirmation?.pendingSummaryFields?.includes(field),
     )

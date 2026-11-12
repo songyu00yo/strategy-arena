@@ -733,7 +733,10 @@ export function ArenaConsole({
                       className={`${i === list.length - 1 ? "hot" : ""} ${/fail|uncertain/.test(event.type) ? "bad" : ""}`}
                     >
                       <b>{clock(event.createdAt)}</b> {event.message}
-                      {usage && ` ${usage.inputTokens}/${usage.outputTokens}`}
+                      {usage &&
+                        Number.isFinite(usage.inputTokens) &&
+                        Number.isFinite(usage.outputTokens) &&
+                        ` ${usage.inputTokens}/${usage.outputTokens}`}
                     </div>
                   );
                 })}

@@ -36,6 +36,7 @@ describe("completed real-model clarification simulations", () => {
     );
     for (const slug of ["learning", "career", "creation", "course-site"])
       expect(existsSync(resolve("public/recorded-examples", `${slug}.json`))).toBe(false);
+    expect(readRecording("personal-website").metadata.qualityNote).toContain("第8轮的一次冗余确认");
   });
 
   it("preserves complete questions, simulated answers, real role usage and a confirmed handoff", () => {

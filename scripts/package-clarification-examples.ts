@@ -153,8 +153,21 @@ export function packageExample(
   definition: (typeof NEW_EXAMPLES)[number],
   sourceFile: string,
   sourceFileSha256: string,
+  observedRedundantQuestions: { round: number; id: string }[] = [],
 ): RecordedExamplePayload {
   const original = completedVersion(record);
+  for (const observation of observedRedundantQuestions)
+    if (
+      !original.clarification!.rounds.some(
+        (round) =>
+          round.round === observation.round &&
+          round.questions.some((question) => question.id === observation.id),
+      )
+    )
+      throw new Error("冗余问题说明未关联到实际记录。");
+  const recordingNotes = observedRedundantQuestions.map(
+    ({ round }) => `本记录保留第${round}轮的一次冗余确认，完整过程未删减。`,
+  );
   const arena = publicSnapshot(record.snapshot);
   const version = arena.versions.find((item) => item.id === arena.activeVersionId)!;
   if (currentFingerprint(version) !== original.clarification!.review!.fingerprint)
@@ -175,7 +188,8 @@ export function packageExample(
     sourceCommit: record.sourceCommit,
     sourceCommits: record.sourceCommits ?? [record.sourceCommit],
     qualityNote:
-      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。",
+      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。" +
+      recordingNotes.join(""),
     versionCount: arena.versions.length,
     sourceFile,
     sourceFileSha256,
@@ -208,11 +222,16 @@ export function publishExamples(recordsDirectory: string, root: string) {
   const payloads = NEW_EXAMPLES.map((definition) => {
     const file = join(recordsDirectory, definition.folder, "completed-record.json");
     const bytes = readFileSync(file);
+    const contextFile = join(recordsDirectory, definition.folder, "trial-context.json");
+    const observations = existsSync(contextFile)
+      ? (JSON.parse(readFileSync(contextFile, "utf8")).observedRedundantQuestions ?? [])
+      : [];
     return packageExample(
       JSON.parse(bytes.toString()) as CompletedCaseRecord,
       definition,
       relative(root, file),
       digest(bytes),
+      observations,
     );
   });
   for (const payload of payloads)

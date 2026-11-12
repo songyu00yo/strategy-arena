@@ -4,6 +4,9 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { prepareRecordedIntake } from "../src/components/recorded-intake";
 import { RecordedExampleViewer } from "../src/components/recorded-example-viewer";
+import { RecordedChallenge } from "../src/components/recorded-challenge";
+import { ArenaConsole } from "../src/components/console/ArenaConsole";
+import type { ModelUsage } from "../src/lib/contracts";
 import { readIntakeDraftPointer } from "../src/components/intake-draft-pointer";
 import { RECORDED_EXAMPLES } from "../src/lib/recorded-examples";
 import { fixtureIntake } from "./e2e/intake.fixture";
@@ -138,6 +141,75 @@ describe("recorded clarification draft preparation", () => {
 });
 
 describe("recorded clarification original entry", () => {
+  it("names the restored supplement field from its label text alone", () => {
+    const restored = "【合成测试数据】保留上次输入的补充要求。";
+    const html = renderToStaticMarkup(
+      React.createElement(RecordedChallenge, {
+        metadata,
+        version: version(),
+        target: {
+          context: {
+            stepId: "fixture-step",
+            title: "【合成测试数据】需求拆解",
+            quote: "【合成测试数据】需要补充内容。",
+          },
+          trigger: null,
+        },
+        initialDraft: { text: restored, modelMode: "auto" },
+        onClose: () => {},
+      }),
+    );
+    const labelId = html.match(/<textarea aria-labelledby="([^"]+)"/)?.[1];
+    expect(labelId).toBeTruthy();
+    expect(html).toContain(`<span id="${labelId}">你想补充或询问什么？</span>`);
+    expect(html).toContain(restored);
+  });
+
+  it("keeps scalar usage text and omits invalid scalar formatting for array usage records", () => {
+    const usage: ModelUsage = {
+      inputTokens: 19,
+      outputTokens: 7,
+      cachedInputTokens: 0,
+      estimatedCny: 0,
+      model: "fixture-model",
+      responseId: "fixture-response",
+      durationMs: 1,
+    };
+    const render = (record: ModelUsage | ModelUsage[]) => {
+      const current = version();
+      return renderToStaticMarkup(
+        React.createElement(ArenaConsole, {
+          version: current,
+          steps: [],
+          events: [
+            {
+              seq: 1,
+              arenaId: "fixture-arena",
+              versionId: current.id,
+              type: "fixture-model-completed",
+              stage: "propose",
+              actor: "A",
+              message: "【合成测试数据】模型调用记录。",
+              data: { usage: record },
+              createdAt: "2026-11-12T00:00:00.000Z",
+            },
+          ],
+          demo: false,
+          slate: null,
+          notices: null,
+          conditions: null,
+          historical: false,
+          busy: false,
+          onEvidence: () => {},
+          onClaim: () => {},
+        }),
+      );
+    };
+    expect(render(usage)).toContain("19/7");
+    expect(render([usage])).not.toContain("undefined/undefined");
+    expect(render([])).not.toContain("undefined/undefined");
+  });
+
   it("shows the vague original goal and initial submission without revealing final answers", () => {
     const arena = fixtureSnapshot();
     arena.versions = [version()];

@@ -52,7 +52,7 @@ export const RECORDED_EXAMPLES: RecordedExample[] = [
     sourceCommit: "bd8c2da0e1db7e97669590249199577cbe378867",
     sourceCommits: ["bd8c2da0e1db7e97669590249199577cbe378867"],
     qualityNote:
-      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。",
+      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。本记录保留第8轮的一次冗余确认，完整过程未删减。",
     versionCount: 1,
     sourceFile: "work/new-clarification-examples/personal-site/completed-record.json",
     sourceFileSha256: "74f2df612321d2ff150c7ef5edf74d72dc8ffa76a70853c6e33bd4772cdb7041",

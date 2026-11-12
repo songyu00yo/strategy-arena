@@ -47,6 +47,7 @@ export function RecordedChallenge({
   const clarification = version.workflow === "clarification";
   const quoteId = useId();
   const goalId = useId();
+  const inputLabelId = useId();
   const [showQuote, setShowQuote] = useState(false);
   const [showGoal, setShowGoal] = useState(false);
   const [text, setText] = useState(initialDraft?.text ?? "");
@@ -281,7 +282,7 @@ export function RecordedChallenge({
           </DisclosureMotion>
         </div>
         <label className="field">
-          <span>
+          <span id={inputLabelId}>
             {clarification
               ? "你想补充或询问什么？"
               : target.context
@@ -289,6 +290,7 @@ export function RecordedChallenge({
                 : "你认为哪里有问题？"}
           </span>
           <textarea
+            aria-labelledby={inputLabelId}
             value={text}
             onChange={(event) => {
               setText(event.target.value);

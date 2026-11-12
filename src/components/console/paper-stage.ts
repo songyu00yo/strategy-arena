@@ -87,3 +87,18 @@ export const CLARIFICATION_SEAL_FRAMES: Keyframe[] = [
   { transform: "translate(-50%,-50%) rotate(-7deg) scale(.98)", opacity: 1, offset: 0.45 },
   { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1 },
 ];
+
+/** Keep the whole impression inside the viewport, including its largest rotated entry. */
+export function paperSealPosition(
+  anchor: { x: number; y: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+) {
+  const angle = (10 * Math.PI) / 180;
+  const halfWidth = (size.width * Math.cos(angle) + size.height * Math.sin(angle)) * 0.8;
+  const halfHeight = (size.height * Math.cos(angle) + size.width * Math.sin(angle)) * 0.8;
+  return {
+    x: Math.max(halfWidth + 12, Math.min(viewport.width - halfWidth - 12, anchor.x)),
+    y: Math.max(halfHeight + 12, Math.min(viewport.height - halfHeight - 12, anchor.y)),
+  };
+}

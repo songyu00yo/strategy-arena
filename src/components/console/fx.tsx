@@ -30,7 +30,12 @@ import { verdictLabel } from "@/lib/verdict-label";
 
 import { createMotionLoop, createMotionScope, useReducedMotion } from "./motion-runtime";
 import type { PlaybackTimeline } from "./use-playback-progress";
-import { CLARIFICATION_SEAL_FRAMES, paperBackgroundIndex, PAPER_MOTION } from "./paper-stage";
+import {
+  CLARIFICATION_SEAL_FRAMES,
+  paperBackgroundIndex,
+  paperSealPosition,
+  PAPER_MOTION,
+} from "./paper-stage";
 import "./paper-stage.css";
 
 const reduced = reducedMotion;
@@ -70,8 +75,19 @@ export function VerdictFilm({
     }
     const board = target?.getBoundingClientRect();
     if (!el || !board || reducedMotion()) return onDone();
-    el.style.left = `${board.left + board.width * 0.62}px`;
-    el.style.top = `${board.top + Math.min(board.height * 0.42, 150)}px`;
+    const anchor = {
+      x: board.left + board.width * 0.62,
+      y: board.top + Math.min(board.height * 0.42, 150),
+    };
+    const position = clarification
+      ? paperSealPosition(
+          anchor,
+          { width: el.offsetWidth, height: el.offsetHeight },
+          { width: innerWidth, height: innerHeight },
+        )
+      : anchor;
+    el.style.left = `${position.x}px`;
+    el.style.top = `${position.y}px`;
     const scope = createMotionScope();
     const press = scope.animate(
       el,

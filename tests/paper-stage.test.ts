@@ -12,6 +12,7 @@ import {
   CLARIFICATION_SEAL_FRAMES,
   nextRecordedRole,
   paperBackgroundIndex,
+  paperSealPosition,
   paperTransferPath,
   PAPER_MOTION,
 } from "../src/components/console/paper-stage";
@@ -77,6 +78,28 @@ describe("paper theatre handoffs", () => {
     expect(CLARIFICATION_SEAL_FRAMES[1].transform).toContain("scale(.98)");
     expect(CLARIFICATION_SEAL_FRAMES.at(-1)).toMatchObject({ opacity: 1 });
     expect(CLARIFICATION_SEAL_FRAMES.at(-1)?.transform).toContain("scale(1)");
+  });
+
+  it("keeps the largest rotated seal inside the mobile viewport", () => {
+    const size = { width: 164, height: 52 };
+    const viewport = { width: 390, height: 844 };
+    const angle = (10 * Math.PI) / 180;
+    const halfWidth = (size.width * Math.cos(angle) + size.height * Math.sin(angle)) * 0.8;
+    const halfHeight = (size.height * Math.cos(angle) + size.width * Math.sin(angle)) * 0.8;
+    for (const anchor of [
+      { x: 235, y: 26 },
+      { x: 390, y: 844 },
+    ]) {
+      const position = paperSealPosition(anchor, size, viewport);
+      expect(position.x - halfWidth).toBeGreaterThanOrEqual(12);
+      expect(position.y - halfHeight).toBeGreaterThanOrEqual(12);
+      expect(position.x + halfWidth).toBeLessThanOrEqual(viewport.width - 12);
+      expect(position.y + halfHeight).toBeLessThanOrEqual(viewport.height - 12);
+    }
+    expect(paperSealPosition({ x: 720, y: 450 }, size, { width: 1440, height: 900 })).toEqual({
+      x: 720,
+      y: 450,
+    });
   });
 
   it("follows actual role calls and waits for user actions between B and a later model", () => {

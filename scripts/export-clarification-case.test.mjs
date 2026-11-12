@@ -53,6 +53,7 @@ function fixture({ answers = true, calls = true, feedback = false } = {}) {
         {
           id: "run-private",
           operationId: "operation-private",
+          repairOf: "call-private",
           role: "A",
           round: 1,
           basedOnRevision: 1,
@@ -156,6 +157,7 @@ test("exports saved questions, answers and model roles without changing SQLite o
     assert.equal(record.humanIdentityVerifiedByExporter, false);
     assert.equal(record.drafts[0].answers[0].value, "简洁正式");
     assert.equal(record.drafts[0].clarification.runs[0].role, "A");
+    assert.equal(record.drafts[0].clarification.runs[0].repairOf, record.calls[0].id);
     assert.equal(record.calls[0].usage.inputTokens, 12);
     const text = JSON.stringify(record);
     for (const privateValue of [

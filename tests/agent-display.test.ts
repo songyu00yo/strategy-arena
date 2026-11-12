@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ArenaVersion } from "../src/lib/contracts";
+import type { ClarificationRun } from "../src/lib/clarification-contracts";
 import { AGENT_LIMITS, AGENT_PROTOCOL } from "../src/lib/agent-contracts";
 import { beatsOf, latestShownRevision } from "../src/components/console/beats";
 import { RouteChart } from "../src/components/console/RouteChart";
 import { RouteStage } from "../src/components/console/RouteStage";
+import { ArenaConsole } from "../src/components/console/ArenaConsole";
 import { stepContext } from "../src/lib/step-context";
 import { advanceFixture, fixtureSnapshot } from "./e2e/ui.fixture";
 
@@ -257,5 +259,148 @@ describe("multi-round recorded display", () => {
     expect(render(5)).not.toContain("第二轮A路线");
     expect(render(8)).toContain("第二轮A路线");
     expect(render(8)).toContain("已修订");
+  });
+});
+
+describe("clarification repair display", () => {
+  function recordedRun(overrides: Partial<ClarificationRun> = {}): ClarificationRun {
+    return {
+      id: "fixture-failed-review",
+      operationId: "fixture-operation",
+      role: "B",
+      round: 2,
+      basedOnRevision: 7,
+      status: "failed",
+      summary: "【合成测试数据】初次选项输出超出结构上限。",
+      output: { error: "【合成测试数据】七个选项超过六个选项上限。" },
+      usage: [],
+      callIds: ["fixture-first-call"],
+      createdAt: "2026-11-12T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function recordedVersion(runs: ClarificationRun[]) {
+    const version = fixtureSnapshot().versions[0];
+    version.workflow = "clarification";
+    version.status = "completed";
+    version.clarification = {
+      protocol: "clarification-1",
+      items: [],
+      retiredIds: [],
+      runs,
+      rounds: [],
+      suggestions: [],
+      conflicts: [],
+      review: null,
+      next: "completed",
+      draftOnly: false,
+      specification: "【合成测试数据】报告。",
+      executionPrompt: "【合成测试数据】执行提示词。",
+    };
+    return version;
+  }
+
+  function stageClass(version: ArenaVersion) {
+    const html = renderToStaticMarkup(
+      React.createElement(ArenaConsole, {
+        version,
+        steps: [],
+        events: [],
+        demo: false,
+        slate: null,
+        notices: null,
+        conditions: null,
+        historical: false,
+        busy: false,
+        onEvidence: () => {},
+        onClaim: () => {},
+      }),
+    );
+    return html.match(/class="(seg [^"]*)"[^>]*><span>选项与执行审查<\/span>/)?.[1];
+  }
+
+  it("shows a successful linked repair as recovered while retaining the failed record and both steps", () => {
+    const failed = recordedRun();
+    const repaired = recordedRun({
+      id: "fixture-repaired-review",
+      repairOf: failed.id,
+      status: "completed",
+      summary: "【合成测试数据】修复后选项结构通过。",
+      output: { summary: "【合成测试数据】选项审查通过。", questions: [], conflicts: [] },
+      callIds: ["fixture-second-call"],
+    });
+    const version = recordedVersion([failed, repaired]);
+    expect(stageClass(version)).toMatch(/\bdone\b/);
+    expect(stageClass(version)).not.toMatch(/\bbad\b/);
+    const beats = beatsOf(version);
+    expect(beats.map((beat) => beat.id)).toEqual([
+      `clarification:${failed.id}`,
+      `clarification:${repaired.id}`,
+    ]);
+    expect(beats[0].clarificationRun?.status).toBe("failed");
+    expect(beats[1].clarificationRun?.status).toBe("completed");
+    expect(stepContext(version, beats[0].id)?.quote).toContain(failed.summary);
+    expect(failed.status).toBe("failed");
+    expect(failed.output).toEqual({ error: "【合成测试数据】七个选项超过六个选项上限。" });
+  });
+
+  it.each(["failed", "uncertain"] as const)("keeps a %s repair unresolved", (status) => {
+    const failed = recordedRun();
+    const repair = recordedRun({
+      id: "fixture-unsuccessful-repair",
+      repairOf: failed.id,
+      status,
+      callIds: ["fixture-second-call"],
+    });
+    const version = recordedVersion([failed, repair]);
+    expect(stageClass(version)).toMatch(/\bbad\b/);
+    expect(stageClass(version)).not.toMatch(/\bdone\b/);
+    expect(version.clarification?.runs).toHaveLength(2);
+    expect(failed.status).toBe("failed");
+  });
+
+  it("preserves an unlinked failure when another call succeeds", () => {
+    const version = recordedVersion([
+      recordedRun(),
+      recordedRun({
+        id: "fixture-unlinked-success",
+        status: "completed",
+        output: { summary: "【合成测试数据】另一条合法输出。", questions: [], conflicts: [] },
+      }),
+    ]);
+    expect(stageClass(version)).toMatch(/\bbad\b/);
+    expect(stageClass(version)).not.toMatch(/\bdone\b/);
+  });
+
+  it.each([{ role: "A" as const }, { round: 3 }, { basedOnRevision: 8 }])(
+    "does not recover a failure when linked repair metadata differs by %o",
+    (changed) => {
+      const failed = recordedRun();
+      const repaired = recordedRun({
+        id: "fixture-mismatched-repair",
+        repairOf: failed.id,
+        status: "completed",
+        output: { summary: "【合成测试数据】修复输出。", questions: [], conflicts: [] },
+        ...changed,
+      });
+      const version = recordedVersion([failed, repaired]);
+      expect(stageClass(version)).toMatch(/\bbad\b/);
+      expect(stageClass(version)).not.toMatch(/\bdone\b/);
+    },
+  );
+
+  it("keeps an uncertain original request unresolved even when a completed record claims to repair it", () => {
+    const uncertain = recordedRun({ status: "uncertain" });
+    const repaired = recordedRun({
+      id: "fixture-claimed-repair",
+      repairOf: uncertain.id,
+      status: "completed",
+      output: { summary: "【合成测试数据】后续输出。", questions: [], conflicts: [] },
+    });
+    const version = recordedVersion([uncertain, repaired]);
+    expect(stageClass(version)).toMatch(/\bbad\b/);
+    expect(stageClass(version)).not.toMatch(/\bdone\b/);
+    expect(uncertain.status).toBe("uncertain");
   });
 });

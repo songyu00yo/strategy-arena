@@ -1095,6 +1095,120 @@ describe("explicit clarification workflow with model test doubles", () => {
     expect(saved.answers).toEqual([]);
   });
 
+  it("repairs the recorded seven-option B format failure once without rerunning A or truncating choices", async () => {
+    // Reproduction of the real simulated-input failure. These calls are explicit test doubles.
+    let draft = await next(create());
+    const feedback = "questions.1.options: too_big（最多6项；maximum=6；实收7项）";
+    let rejectedOutput = "";
+    fixture.generate.mockImplementation(async (request) => {
+      const value = modelValue(request.name, request.input);
+      if (request.name !== "clarification_options") return response(value);
+      if (!request.input.repairFeedback) {
+        const rejected = structuredClone(value) as { questions: IntakeQuestion[] };
+        rejected.questions[1].options = [
+          "旧选项一",
+          "旧选项二",
+          "旧选项三",
+          "旧选项四",
+          "旧选项五",
+          "旧选项六",
+          "旧选项七",
+        ];
+        rejectedOutput = JSON.stringify(rejected);
+        expect(request.allowRepair).toBe(true);
+        throw new ModelCallError("模拟记录中的选项数量错误", false, response(null).usage, {
+          feedback,
+          rejectedOutput,
+        });
+      }
+      expect(request.allowRepair).toBe(false);
+      expect(request.input.repairFeedback).toBe(feedback);
+      expect(request.input.rejectedOutput).toBe(rejectedOutput);
+      return response(value);
+    });
+    draft = await next(answer(draft, { purpose: "真实报名" }));
+    expect(draft.status).toBe("questions");
+    expect(draft.questions.find((entry) => entry.id === "real_fields")?.options).toEqual([
+      "姓名与联系方式",
+      "仅收集昵称",
+    ]);
+    const runs = draft.clarification!.runs;
+    const failed = runs.find((run) => run.role === "B" && run.status === "failed")!;
+    const repaired = runs.find((run) => run.repairOf === failed.id)!;
+    expect(repaired.status).toBe("completed");
+    expect(repaired.id).not.toBe(failed.id);
+    expect(repaired.basedOnRevision).toBe(failed.basedOnRevision);
+    expect("error" in failed.output && failed.output.repair?.rejectedOutput).toBe(rejectedOutput);
+    for (const run of [failed, repaired]) {
+      expect(run.callIds).toEqual([run.id]);
+      expect(run.usage).toHaveLength(1);
+    }
+    expect(
+      fixture.generate.mock.calls.filter(([request]) => request.name === "clarification_decompose"),
+    ).toHaveLength(2);
+    expect(
+      fixture.generate.mock.calls.filter(([request]) => request.name === "clarification_options"),
+    ).toHaveLength(3);
+    expect(draft.usage).toHaveLength(5);
+    expect(draft.usage.reduce((sum, usage) => sum + (usage.estimatedUsd ?? 0), 0)).toBeCloseTo(
+      0.005,
+    );
+    expect(draft.reservedUsd).toBe(0);
+    expect(db().prepare("SELECT kind,state FROM intake_calls ORDER BY rowid").all()).toMatchObject([
+      { state: "completed" },
+      { state: "completed" },
+      { state: "completed" },
+      { state: "failed" },
+      { state: "completed" },
+    ]);
+  });
+
+  it("stops after the one allowed role repair fails and preserves both paid failures", async () => {
+    const repair = {
+      feedback: "questions.0.options: too_big",
+      rejectedOutput: "明确标注的两次格式失败测试",
+    };
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_options")
+        throw new ModelCallError("测试格式仍无效", false, response(null).usage, repair);
+      return response(modelValue(request.name, request.input));
+    });
+    const draft = await next(create());
+    expect(draft.status).toBe("failed");
+    expect(draft.clarification?.runs.map((run) => [run.role, run.status])).toEqual([
+      ["A", "completed"],
+      ["B", "failed"],
+      ["B", "failed"],
+    ]);
+    const failed = draft.clarification!.runs.filter((run) => run.role === "B");
+    expect(failed[1].repairOf).toBe(failed[0].id);
+    expect(fixture.generate).toHaveBeenCalledTimes(3);
+    expect(fixture.generate.mock.calls[2][0].allowRepair).toBe(false);
+    expect(draft.usage).toHaveLength(3);
+    expect(draft.questions).toEqual([]);
+  });
+
+  it.each([
+    { name: "unknown provider outcome", uncertain: true },
+    { name: "known network failure without format metadata", uncertain: false },
+  ])("does not retry a role for $name", async ({ uncertain }) => {
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_options")
+        throw new ModelCallError(
+          "模拟网络或调用结果未知",
+          uncertain,
+          undefined,
+          uncertain ? { feedback: "不得据此重试", rejectedOutput: "" } : undefined,
+        );
+      return response(modelValue(request.name, request.input));
+    });
+    const draft = await next(create());
+    expect(draft.status).toBe(uncertain ? "uncertain" : "failed");
+    expect(fixture.generate).toHaveBeenCalledTimes(2);
+    expect(draft.clarification?.runs).toHaveLength(2);
+    expect(draft.clarification?.runs.some((run) => run.repairOf)).toBe(false);
+  });
+
   it("retains A's completed work and recorded failure when B fails instead of inventing questions", async () => {
     fixture.generate.mockImplementation(async (request) => {
       if (request.name === "clarification_options")

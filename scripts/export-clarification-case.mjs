@@ -140,6 +140,7 @@ function draftRecord(draft) {
             ({
               id,
               operationId,
+              repairOf,
               callIds,
               role,
               round,
@@ -152,6 +153,7 @@ function draftRecord(draft) {
             }) => ({
               id,
               operationId,
+              repairOf,
               callIds,
               role,
               round,

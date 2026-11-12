@@ -97,6 +97,18 @@ export function ArenaConsole({
 }) {
   const beats = beatsOf(version);
   const clarification = version.workflow === "clarification" ? version.clarification : undefined;
+  const repairedRunIds = new Set(
+    clarification?.runs.flatMap((repair) => {
+      const failed = clarification.runs.find((run) => run.id === repair.repairOf);
+      return repair.status === "completed" &&
+        failed?.status === "failed" &&
+        failed.role === repair.role &&
+        failed.round === repair.round &&
+        failed.basedOnRevision === repair.basedOnRevision
+        ? [failed.id]
+        : [];
+    }) ?? [],
+  );
   const last = beats.length - 1;
   const [cursor, setCursor] = useState<number | null>(startFromBeginning ? -1 : null);
   const [playing, setPlaying] = useState(startFromBeginning);
@@ -543,18 +555,21 @@ export function ArenaConsole({
             {STAGES.map((stage) => {
               const own = steps.filter((s) => s.stage === stage);
               const list = beats.flatMap((b, i) => (b.stage === stage ? [{ b, i }] : []));
+              const stageAttempts = list.filter(
+                ({ b }) => !repairedRunIds.has(b.clarificationRun?.id ?? ""),
+              );
               const done = clarification
                 ? stage === "judge"
                   ? clarification.next === "completed"
                   : stage === "revise"
                     ? !clarification.draftOnly
-                    : list.length > 0 &&
-                      list.every(({ b }) => b.clarificationRun?.status === "completed")
+                    : stageAttempts.length > 0 &&
+                      stageAttempts.every(({ b }) => b.clarificationRun?.status === "completed")
                 : own.length > 0 &&
                   own.every((s) => s.status === "completed" || s.status === "skipped") &&
                   (!startFromBeginning || list.every(({ i }) => i <= index));
               const bad = clarification
-                ? list.some(
+                ? stageAttempts.some(
                     ({ b }) =>
                       b.clarificationRun?.status === "failed" ||
                       b.clarificationRun?.status === "uncertain",

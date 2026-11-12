@@ -16,6 +16,7 @@ import {
   CLARIFICATION_SYSTEM,
 } from "../../../prompts/clarification";
 import type { ModelConfig, StructuredRequest } from "./model";
+import { ModelCallError } from "./model";
 import { ArenaError } from "./db";
 
 export interface ClarificationContext {
@@ -370,7 +371,8 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
   async function role<T>(
     name: ClarificationRun["role"],
     schema: z.ZodType<T>,
-    input: unknown,
+    input: Record<string, unknown>,
+    repairOf?: string,
   ): Promise<T> {
     const run: ClarificationRun = {
       id: randomUUID(),
@@ -383,6 +385,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       output: { error: "尚未返回" },
       usage: [],
       createdAt: new Date().toISOString(),
+      ...(repairOf ? { repairOf } : {}),
     };
     run.promptHash = clarificationProtocolHash();
     try {
@@ -398,7 +401,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
           system: `${CLARIFICATION_SYSTEM}\n${CLARIFICATION_ROLES[name]}`,
           input,
           config: context.config,
-          allowRepair: true,
+          allowRepair: !repairOf,
         }),
       );
       run.output = value as ClarificationRun["output"];
@@ -410,9 +413,21 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       run.status =
         error instanceof Error && "uncertain" in error && error.uncertain ? "uncertain" : "failed";
       run.summary = error instanceof Error ? error.message : "角色调用失败";
-      run.output = { error: run.summary };
+      const repair = error instanceof ModelCallError ? error.repair : undefined;
+      run.output = { error: run.summary, ...(repair ? { repair } : {}) };
       state.runs.push(run);
       context.record(state);
+      if (!repairOf && error instanceof ModelCallError && !error.uncertain && repair)
+        return role(
+          name,
+          schema,
+          {
+            ...input,
+            repairFeedback: repair.feedback,
+            rejectedOutput: repair.rejectedOutput,
+          },
+          run.id,
+        );
       throw error;
     }
   }

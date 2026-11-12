@@ -79,8 +79,16 @@ export interface ClarificationRun {
   basedOnRevision: number;
   status: "completed" | "failed" | "uncertain";
   summary: string;
-  output: Decomposition | OptionReview | HandoffReview | { error: string };
+  output:
+    | Decomposition
+    | OptionReview
+    | HandoffReview
+    | {
+        error: string;
+        repair?: { feedback: string; rejectedOutput: string };
+      };
   usage: ModelUsage[];
+  repairOf?: string;
   callIds?: string[];
   promptHash?: string;
   createdAt: string;

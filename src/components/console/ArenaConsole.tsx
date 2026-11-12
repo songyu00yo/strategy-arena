@@ -125,22 +125,27 @@ export function ArenaConsole({
   const paused = useMotionPaused();
   const nowPanel = useRef<HTMLElement>(null);
   const resultPanel = useRef<HTMLElement>(null);
+  const consoleRoot = useRef<HTMLDivElement>(null);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
-  const shown = beats.slice(0, index + 1);
-  const repairedRunIds = new Set(
-    shown.flatMap(({ clarificationRun: repair }) => {
-      const failed = shown.find(
-        ({ clarificationRun }) => clarificationRun?.id === repair?.repairOf,
-      )?.clarificationRun;
-      return repair?.status === "completed" &&
-        failed?.status === "failed" &&
-        failed.role === repair.role &&
-        failed.round === repair.round &&
-        failed.basedOnRevision === repair.basedOnRevision
-        ? [failed.id]
-        : [];
-    }),
+  const shown = useMemo(() => beats.slice(0, index + 1), [beats, index]);
+  const repairedRunIds = useMemo(
+    () =>
+      new Set(
+        shown.flatMap(({ clarificationRun: repair }) => {
+          const failed = shown.find(
+            ({ clarificationRun }) => clarificationRun?.id === repair?.repairOf,
+          )?.clarificationRun;
+          return repair?.status === "completed" &&
+            failed?.status === "failed" &&
+            failed.role === repair.role &&
+            failed.round === repair.round &&
+            failed.basedOnRevision === repair.basedOnRevision
+            ? [failed.id]
+            : [];
+        }),
+      ),
+    [shown],
   );
   const seen = new Set(shown.map((b) => b.id));
   const live = version.status === "running" || version.status === "ready";
@@ -152,7 +157,7 @@ export function ArenaConsole({
     setMotion(false);
     setCursor(null);
   }, [index, last, live, current?.replayAction?.kind, filmDone]);
-  const replayProgress = usePlaybackProgress({
+  const { progress: replayProgress, timeline: replayTimeline } = usePlaybackProgress({
     stepId: clarification ? (current?.id ?? "") : "",
     duration: playbackDuration(current),
     speed,
@@ -167,9 +172,20 @@ export function ArenaConsole({
     queueRevision: `${last}:${live}`,
     onComplete: advanceReplay,
   });
-  const projection = clarification
-    ? projectReplay(version, beats, index, events, replayProgress)
-    : null;
+  const committed = replayProgress >= 0.8;
+  const projection = useMemo(
+    () => (clarification ? projectReplay(version, beats, index, events, committed ? 1 : 0) : null),
+    [clarification, version, beats, index, events, committed],
+  );
+  useLayoutEffect(() => {
+    if (!clarification) return;
+    const update = (frame: ReturnType<typeof replayTimeline.read>) => {
+      if (frame.stepId === current?.id && consoleRoot.current)
+        consoleRoot.current.dataset.replayProgress = frame.progress.toFixed(4);
+    };
+    update(replayTimeline.read());
+    return replayTimeline.subscribe(update);
+  }, [clarification, current?.id, replayTimeline, replayProgress]);
   const reviewMessages = projection
     ? [...new Set([...projection.conflicts, ...projection.unresolved])]
     : [];
@@ -355,7 +371,10 @@ export function ArenaConsole({
   const hasResult = !!verdict || !!clarification;
   const directed = motion;
   // The result takes the lead once the game has reached it. Looking back at a step hides it.
-  const atResult = hasResult && index === last && (!projection || projection.handoffComplete);
+  const atResult =
+    hasResult &&
+    index === last &&
+    (!projection || (projection.handoffComplete && replayProgress === 1));
   useEffect(() => {
     if (!clarification || !atResult || playing) return;
     const frame = requestAnimationFrame(() => {
@@ -514,6 +533,7 @@ export function ArenaConsole({
 
   return (
     <div
+      ref={consoleRoot}
       data-motion-origin={seeking ? "interaction" : "story"}
       data-replay-kind={current?.replayAction?.kind ?? (clarification ? "model" : undefined)}
       data-replay-progress={clarification ? replayProgress.toFixed(3) : undefined}
@@ -528,11 +548,17 @@ export function ArenaConsole({
         directed={directed && !seeking}
         replayProgress={replayProgress}
         replayAnswersVisible={projection?.answers}
+        timeline={clarification ? replayTimeline : undefined}
       />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
         {hasResult && (
-          <ResultRegion open={atResult} expanded={wholeResult}>
+          <ResultRegion
+            open={atResult}
+            expanded={wholeResult}
+            theater={!!clarification}
+            speed={speed}
+          >
             <section
               ref={resultPanel}
               className={`c-result ${wholeResult ? "whole" : ""}`}
@@ -737,6 +763,7 @@ export function ArenaConsole({
             replayProgress={replayProgress}
             replayAnswersBefore={answersBefore}
             replayAnswersVisible={projection?.answers}
+            timeline={clarification ? replayTimeline : undefined}
             playing={playing}
             directed={directed}
             seeking={seeking}
@@ -914,7 +941,9 @@ export function ArenaConsole({
       {hasResult &&
         directed &&
         !filmDone &&
-        (clarification ? current?.replayAction?.kind === "handoff" : current?.id === "judge") && (
+        (clarification
+          ? current?.replayAction?.kind === "handoff" && replayProgress === 1
+          : current?.id === "judge") && (
           <VerdictFilm
             verdict={verdict ?? undefined}
             clarification={clarification}

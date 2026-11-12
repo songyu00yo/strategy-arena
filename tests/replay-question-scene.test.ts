@@ -9,7 +9,14 @@ import {
   ReplayQuestionScene,
   replayAnswerAt,
   replayFlipGeometry,
+  replayHandoffActive,
+  replayHandoffOutside,
+  replayPaperTiming,
+  replayPointerAt,
+  replayPressedAt,
+  replayReadingScroll,
 } from "../src/components/console/ReplayQuestionScene";
+import type { PlaybackFrame } from "../src/components/console/use-playback-progress";
 import { Chars, Decode } from "../src/components/console/effects";
 import { RouteStage } from "../src/components/console/RouteStage";
 import { LiveRecord } from "../src/components/console/fx";
@@ -99,6 +106,103 @@ describe("shared original question controls", () => {
 });
 
 describe("controlled recorded question scenes", () => {
+  it("opens over 420 active milliseconds and folds only during the final 360 after acceptance", () => {
+    const frame = (elapsed: number, overrides: Partial<PlaybackFrame> = {}): PlaybackFrame => ({
+      stepId: "synthetic-question",
+      progress: elapsed / 2500,
+      elapsed,
+      duration: 2500,
+      running: true,
+      settled: false,
+      ...overrides,
+    });
+    expect(replayPaperTiming(frame(0), true, true)).toEqual({ open: 0, fold: 0 });
+    expect(replayPaperTiming(frame(210), true, true).open).toBe(0.875);
+    expect(replayPaperTiming(frame(420), true, true).open).toBe(1);
+    expect(replayPaperTiming(frame(2140), true, true).fold).toBe(0);
+    expect(replayPaperTiming(frame(2320), true, true).fold).toBe(0.5);
+    expect(replayPaperTiming(frame(2500), true, true).fold).toBe(1);
+    expect(replayPaperTiming(frame(2320, { running: false }), true, true)).toEqual(
+      replayPaperTiming(frame(2320), true, true),
+    );
+    expect(replayPaperTiming(frame(2500, { settled: true }), true, true)).toEqual({
+      open: 1,
+      fold: 0,
+    });
+    expect(replayPaperTiming(frame(420), false, false)).toEqual({ open: 1, fold: 0 });
+    expect(replayPaperTiming(frame(399, { duration: 500 }), true, true).fold).toBe(0);
+  });
+
+  it("uses one 160ms press per actual selection and a curved decelerating pointer path", () => {
+    for (const at of [0.45, 0.6]) {
+      expect(replayPressedAt(at * 2500 - 1, 2500, [at])).toBe(false);
+      expect(replayPressedAt(at * 2500, 2500, [at])).toBe(true);
+      expect(replayPressedAt(at * 2500 + 159, 2500, [at])).toBe(true);
+      expect(replayPressedAt(at * 2500 + 160, 2500, [at])).toBe(false);
+    }
+    const origin = { x: 10, y: 20 };
+    const target = { x: 210, y: 20 };
+    expect(replayPointerAt(origin, target, 0)).toEqual(origin);
+    expect(replayPointerAt(origin, target, 1)).toEqual(target);
+    expect(replayPointerAt(origin, target, 0.5).y).toBeGreaterThan(20);
+    expect(replayPointerAt(origin, target, 0.1).x - origin.x).toBeGreaterThan(
+      target.x - replayPointerAt(origin, target, 0.9).x,
+    );
+  });
+
+  it("requests a temporary handoff ornament only for a measured recipient outside the stage", () => {
+    const stage = { left: 80, top: 200, width: 900, height: 520 };
+    expect(replayHandoffOutside({ left: 120, top: 240, width: 260, height: 320 }, stage)).toBe(
+      false,
+    );
+    expect(replayHandoffOutside({ left: 80, top: 60, width: 900, height: 180 }, stage)).toBe(true);
+    expect(replayHandoffOutside({ left: 960, top: 300, width: 260, height: 200 }, stage)).toBe(
+      true,
+    );
+    expect(replayHandoffOutside({ left: 120, top: 0, width: 0, height: 0 }, stage)).toBe(false);
+    const html = scene(action({ kind: "handoff", questions: undefined }), 1);
+    expect(html).not.toContain('class="replay-handoff-strip"');
+    expect(html).toContain('class="replay-paper-strip" aria-hidden="true"');
+    expect(html).not.toContain('data-pressed="true"');
+  });
+
+  it("retains the identical handoff ornament pose during pause and releases it on seek or completion", () => {
+    const frame: PlaybackFrame = {
+      stepId: "synthetic-handoff",
+      progress: 2320 / 2500,
+      elapsed: 2320,
+      duration: 2500,
+      running: true,
+      settled: false,
+    };
+    const paused = { ...frame, running: false };
+    const fold = replayPaperTiming(frame, false, true).fold;
+    expect(replayHandoffActive(frame, fold, true)).toBe(true);
+    expect(replayHandoffActive(paused, fold, true)).toBe(true);
+    expect(replayPaperTiming(paused, false, true)).toEqual(replayPaperTiming(frame, false, true));
+    expect(replayHandoffActive({ ...paused, settled: true }, fold, true)).toBe(false);
+    expect(replayHandoffActive({ ...frame, progress: 1 }, 1, true)).toBe(false);
+    expect(replayHandoffActive({ ...frame, progress: 0.79 }, fold, true)).toBe(false);
+    expect(replayHandoffActive(paused, fold, false)).toBe(false);
+  });
+
+  it("scrolls continuously between measured reading stops with pauses at each group", () => {
+    const stops = [0, 180, 360];
+    expect(replayReadingScroll(0.2, stops, 360)).toBe(0);
+    expect(replayReadingScroll(0.3, stops, 360)).toBe(0);
+    expect(replayReadingScroll(0.5, stops, 360)).toBe(180);
+    expect(replayReadingScroll(0.55, stops, 360)).toBe(180);
+    expect(replayReadingScroll(0.8, stops, 360)).toBe(360);
+    expect(replayReadingScroll(1, [0], 0)).toBe(0);
+    const positions = Array.from({ length: 61 }, (_, index) =>
+      replayReadingScroll(0.2 + index / 100, stops, 360),
+    );
+    expect(positions.every((position, index) => !index || position >= positions[index - 1])).toBe(
+      true,
+    );
+    expect(positions.some((position) => position > 0 && position < 180)).toBe(true);
+  });
+
   it("derives paper FLIP offsets and ratios from supplied rectangles and rejects empty geometry", () => {
     const source = { left: 100, top: 60, width: 300, height: 200 };
     const target = { left: 40, top: 20, width: 600, height: 400 };

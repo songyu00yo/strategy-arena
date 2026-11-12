@@ -31,7 +31,7 @@ export default defineConfig({
       ? [
           {
             name: "webkit",
-            testMatch: /replay-interaction\.spec\.ts/,
+            testMatch: /(?:replay-interaction|paper-theater)\.spec\.ts/,
             use: { ...devices["Desktop Safari"] },
           },
         ]

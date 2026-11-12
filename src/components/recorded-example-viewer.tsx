@@ -15,10 +15,52 @@ import { readMotionOrigin } from "./motion-origin";
 import { RecordedConditionEditor } from "./recorded-condition-editor";
 import { RecordedChallenge } from "./recorded-challenge";
 import { supplementDraftKey, type SupplementDraft } from "./supplement-draft";
+import { createMotionScope } from "./console/motion-runtime";
+import { initialPaperFrames, PAPER_MOTION } from "./console/paper-stage";
 import "./console/console.css";
 import "./recorded-example-viewer.css";
 import "./console/paper-console.css";
 import "./console/press.css";
+import "./console/paper-stage.css";
+
+/** Keep the original input on paper until the mounted A card can receive it at a measured position. */
+function handoffInitialPaper(form: HTMLFormElement, onStart: () => void) {
+  const source = form.getBoundingClientRect();
+  const paper = form.cloneNode(true) as HTMLElement;
+  paper.classList.add("initial-paper-transfer");
+  paper.inert = true;
+  paper.setAttribute("aria-hidden", "true");
+  paper.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+  Object.assign(paper.style, {
+    left: `${source.left}px`,
+    top: `${source.top}px`,
+    width: `${source.width}px`,
+    height: `${source.height}px`,
+  });
+  document.body.appendChild(paper);
+  const scope = createMotionScope();
+  scope.own(paper);
+  onStart();
+  requestAnimationFrame(() => {
+    const target = document.querySelector<HTMLElement>('[data-board="A"]');
+    const frames = target && initialPaperFrames(source, target.getBoundingClientRect());
+    if (!frames || reducedMotion()) return scope.dispose();
+    const animation = scope.animate(paper, frames, {
+      duration: PAPER_MOTION.transfer,
+      easing: "cubic-bezier(.2,.75,.25,1)",
+      fill: "both",
+    });
+    const preference = matchMedia("(prefers-reduced-motion: reduce)");
+    const settle = () => {
+      if (preference.matches) animation.finish();
+    };
+    preference.addEventListener("change", settle);
+    animation.onfinish = () => {
+      preference.removeEventListener("change", settle);
+      scope.dispose();
+    };
+  });
+}
 
 function RecordedExampleEntry({
   metadata,
@@ -71,6 +113,7 @@ function RecordedExampleEntry({
     started.current = true;
     setLeaving(true);
     if (!form.current || reducedMotion()) return onStart();
+    if (clarification) return handoffInitialPaper(form.current, onStart);
     const animation = form.current.animate(
       [
         { opacity: 1, transform: "translateY(0) scale(1)" },

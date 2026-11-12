@@ -1,6 +1,13 @@
 "use client";
 import { claimLabel, readableClaimText } from "@/components/claim-label";
-import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type CSSProperties,
+} from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import type { RecordedAnswer } from "@/lib/intake-contracts";
 import { attackMeta } from "@/components/status";
@@ -16,6 +23,10 @@ import {
 } from "./motion-runtime";
 import "./stage-motion.css";
 import { ReplayQuestionScene } from "./ReplayQuestionScene";
+import { playbackDuration, type PlaybackTimeline } from "./use-playback-progress";
+import { adjacentPaperTransfer, nextRecordedRole, PAPER_MOTION } from "./paper-stage";
+import { paperTransferPath } from "./paper-stage";
+import "./paper-stage.css";
 
 const CLAIM = { user: "用户给定", estimate: "估算", unknown: "待核", supported: "有据" };
 const WORD: Record<Attack["status"], string> = {
@@ -67,6 +78,7 @@ export function RouteStage({
   replayAnswersBefore = [],
   replayAnswersVisible,
   playing = false,
+  timeline,
 }: {
   version: ArenaVersion;
   demo: boolean;
@@ -89,16 +101,30 @@ export function RouteStage({
   replayAnswersBefore?: RecordedAnswer[];
   replayAnswersVisible?: RecordedAnswer[];
   playing?: boolean;
+  timeline?: PlaybackTimeline;
 }) {
   const reducePreference = useReducedMotion();
   const motionSpeed = seeking ? 1.25 : speed;
-  const shown = beats.slice(0, index + 1);
+  const clarification = version.workflow === "clarification";
+  const shown = useMemo(() => beats.slice(0, index + 1), [beats, index]);
   const current = beats[index] ?? null;
-  const seen = new Set(shown.map((b) => b.id));
-  const attacks = shown.filter((b) => b.stage === "attack" && b.attack).map((b) => b.attack!);
+  const seen = useMemo(() => new Set(shown.map((b) => b.id)), [shown]);
+  const attacks = useMemo(
+    () => shown.filter((b) => b.stage === "attack" && b.attack).map((b) => b.attack!),
+    [shown],
+  );
   const activeAttack = current?.attack;
-  const stateOf = (a: Attack) => (seen.has(`v:${a.id}`) ? a.status : "pending");
+  const stateOf = useCallback(
+    (a: Attack) => (seen.has(`v:${a.id}`) ? a.status : "pending"),
+    [seen],
+  );
   const hot = activeAttack ? `${activeAttack.targetStrategyId}:${activeAttack.targetClaimId}` : "";
+  const foreground =
+    clarification &&
+    !!current?.replayAction &&
+    (current.replayAction.kind !== "handoff" || replayProgress < 1);
+  const backgroundCurrent = foreground ? shown.findLast((beat) => beat.clarificationRun) : current;
+  const nextRole = useMemo(() => nextRecordedRole(beats, index), [beats, index]);
 
   const beatId = current?.id;
   const signature = attacks.map((a) => a.id).join();
@@ -106,6 +132,7 @@ export function RouteStage({
   const rig = useRef<HTMLDivElement>(null);
   const world = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const paperPath = useRef<SVGPathElement>(null);
   const packet = useRef<HTMLDivElement>(null);
   const fx = useRef<Sparks | null>(null);
   const paths = useRef(new Map<string, SVGPathElement>());
@@ -125,18 +152,19 @@ export function RouteStage({
     ReturnType<typeof bodyOf>
   >);
   useLayoutEffect(() => {
+    if (foreground) return;
     const body = stage.current?.querySelector<HTMLElement>(
       `[data-board="${current?.agent}"] .c-board-body`,
     );
     if (body) body.scrollTop = 0;
-  }, [beatId, current?.agent]);
+  }, [beatId, current?.agent, foreground]);
   useEffect(() => {
     live.current = attacks;
     filming.current = camera;
     directedRef.current = directed;
     if (!camera && rig.current) rig.current.style.transform = "none";
     wake.current();
-  });
+  }, [attacks, camera, directed]);
 
   const push = (id: string, x: number, y: number, z: number, r: number) => {
     const body = bodies.current[id];
@@ -231,7 +259,7 @@ export function RouteStage({
   // Energy hands the story on: timeline to board, then each step's own choreography.
   useEffect(() => {
     const host = stage.current;
-    if (!host || !current || !isDirected()) return;
+    if (!host || !current || !isDirected() || clarification) return;
     const scope = stepMotion.current!;
     const later = (ms: number, run: () => void) => scope.later(lead + ms / motionSpeed, run);
     const node = host.querySelector<HTMLElement>(`[data-board="${current.agent}"]`);
@@ -361,6 +389,13 @@ export function RouteStage({
     const surface = canvas.current;
     const el = world.current;
     if (!host || !dot || !surface || !el) return;
+    if (clarification) {
+      flight.current = null;
+      el.style.transform = "none";
+      if (rig.current) rig.current.style.transform = "none";
+      surface.getContext("2d")?.clearRect(0, 0, surface.width, surface.height);
+      return;
+    }
     if (reducePreference) {
       flight.current = null;
       for (const body of Object.values(bodies.current)) {
@@ -649,7 +684,7 @@ export function RouteStage({
     };
     // The loop reads current state through refs and lives as long as the stage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seeking, reducePreference]);
+  }, [seeking, reducePreference, clarification]);
 
   // The shot for this step. Every board stays in frame: the camera leans and pushes, it never hides.
   useLayoutEffect(() => {
@@ -745,7 +780,7 @@ export function RouteStage({
 
   // Only an actual opening sequence raises the boards; history and seeks stay readable.
   useEffect(() => {
-    if (entering || !directed || reducedMotion()) return;
+    if (clarification || entering || !directed || reducedMotion()) return;
     const scope = createMotionScope();
     scope.later(80, () => {
       push("A", -50, 44, 900, 18);
@@ -759,7 +794,7 @@ export function RouteStage({
 
   // The room leans toward the pointer during a replay; at rest the boards hold still for clicking.
   useEffect(() => {
-    if (reducedMotion()) return;
+    if (clarification || reducedMotion()) return;
     const onMove = (e: MouseEvent) => {
       if (motionPaused()) return;
       const nx = e.clientX / innerWidth - 0.5;
@@ -773,7 +808,7 @@ export function RouteStage({
     };
     addEventListener("mousemove", onMove);
     return () => removeEventListener("mousemove", onMove);
-  }, []);
+  }, [clarification]);
 
   // Pointing at a claim or a challenge lights the threads tied to it, so the page explains itself.
   useEffect(() => {
@@ -806,160 +841,261 @@ export function RouteStage({
     };
   }, []);
 
-  const involved = (id: string) => {
-    if (!camera || !current || current.stage === "judge") return true;
-    return current.agent === id || current.to === id;
-  };
+  const involved = useCallback(
+    (id: string) => {
+      if (!camera || !backgroundCurrent || backgroundCurrent.stage === "judge") return true;
+      return backgroundCurrent.agent === id || backgroundCurrent.to === id;
+    },
+    [camera, backgroundCurrent],
+  );
 
-  const board = (id: "A" | "B" | "C") => {
-    const clarification = version.workflow === "clarification";
-    const latest = shown.findLast((beat) => beat.clarificationRun?.role === id);
-    const run = latest?.clarificationRun;
-    const strategy = version.strategies.find((s) => s.id === id);
-    const present = clarification ? !!run : !!strategy && seen.has(`p:${id}`);
-    const revision = latestShownRevision(shown, id)?.revision;
-    const view = revision?.strategy ?? strategy;
-    const taken = attacks.filter((a) => a.targetStrategyId === id);
-    const sent = attacks.filter((a) => a.from === id);
-    const pick = seen.has("judge") && version.verdict?.preferred === id;
-    const speaking = current?.agent === id;
-    const target = !speaking && current?.to === id;
-    const enter =
-      directed &&
-      (clarification ? current?.clarificationRun?.role === id : current?.id === `p:${id}`);
-    const rewriting = directed && current?.revision?.strategyId === id;
-    return (
-      <section
-        key={id}
-        data-board={id}
-        aria-label={clarification ? `${id} ${CLARIFICATION_ROLES[id]}` : `路线 ${id}`}
-        className={`c-board c-board-${id} ${speaking ? "speaking" : ""} ${target ? "target" : ""} ${pick ? "pick" : ""} ${involved(id) ? "" : "dim"} ${enter ? "enter" : ""}`}
-        style={{ "--route": spaced(ROUTE_COLOR[id]) } as CSSProperties}
-      >
-        <svg className="c-outline" aria-hidden="true">
-          <rect width="100%" height="100%" pathLength={1} />
-        </svg>
-        <header>
-          <b>{id}</b>
-          <span>
-            {clarification
-              ? run
-                ? { completed: "调用完成", failed: "调用失败", uncertain: "调用待核对" }[run.status]
-                : "尚未调用"
-              : pick
-                ? "当前建议"
-                : revision
-                  ? "已修订"
-                  : present
-                    ? "已提案"
-                    : "等待提案"}
-          </span>
-          <em>
-            {clarification
-              ? `用量记录 ${run?.usage.length ?? 0} 笔`
-              : `发出 ${sent.length} · 收到 ${taken.length}`}
-          </em>
-        </header>
-        {present && (run || (strategy && view)) ? (
-          <div className="c-board-body">
-            <h3>
-              <Chars
-                text={run ? CLARIFICATION_ROLES[id] : readableClaimText(version, view!.title)}
-                active={enter}
-                delay={lead * speed + 700}
-                speed={speed}
-              />
-            </h3>
-            <p>{run ? run.summary : readableClaimText(version, view!.thesis)}</p>
-            <div className="est">
-              {run
-                ? `第 ${run.round} 轮 · 依据修订 ${run.basedOnRevision}`
-                : strategy!.estimatedHours === view!.estimatedHours
-                  ? `${view!.estimatedHours ?? "待核实"} 小时`
-                  : `${strategy!.estimatedHours ?? "待核实"} → ${view!.estimatedHours ?? "待核实"} 小时`}
-              {run ? "" : ` · ¥${view!.estimatedCost ?? "?"}`}
-            </div>
-            {[
-              ...new Set([...(strategy?.claims ?? []), ...(view?.claims ?? [])].map((c) => c.id)),
-            ].map((claimId) => {
-              const before = strategy!.claims.find((c) => c.id === claimId);
-              const after = view!.claims.find((c) => c.id === claimId);
-              const claim = after ?? before!;
-              const hits = taken.filter((a) => a.targetClaimId === claimId);
-              const lost = hits.some((a) => stateOf(a) === "supported");
-              return (
-                <button
-                  key={claimId}
-                  type="button"
-                  data-claim={`${id}:${claimId}`}
-                  className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
-                  disabled={readOnly || !after}
-                  title={after ? "质疑这条判断" : "这条主张已撤回"}
-                  onClick={() => onClaim(view!, claimId)}
-                >
-                  <em>
-                    {claimLabel(version, id, claimId)} · {CLAIM[claim.status]}
-                    {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
-                    {!after && " · 已撤回"}
-                    {!before && " · 新增"}
-                    {hits.map((a) => (
-                      <i key={a.id} className={`is-${stateOf(a)}`}>
-                        {a.from} {WORD[stateOf(a)]}
-                      </i>
-                    ))}
-                  </em>
-                  <span>
-                    <span className={lost || !after ? "struck" : ""}>
-                      {readableClaimText(version, before?.text ?? claim.text)}
+  const board = useCallback(
+    (id: "A" | "B" | "C") => {
+      const latest = shown.findLast((beat) => beat.clarificationRun?.role === id);
+      const run = latest?.clarificationRun;
+      const strategy = version.strategies.find((s) => s.id === id);
+      const present = clarification ? !!run : !!strategy && seen.has(`p:${id}`);
+      const revision = latestShownRevision(shown, id)?.revision;
+      const view = revision?.strategy ?? strategy;
+      const taken = attacks.filter((a) => a.targetStrategyId === id);
+      const sent = attacks.filter((a) => a.from === id);
+      const pick = seen.has("judge") && version.verdict?.preferred === id;
+      const speaking = backgroundCurrent?.agent === id;
+      const target = !speaking && backgroundCurrent?.to === id;
+      const enter =
+        directed &&
+        (clarification ? current?.clarificationRun?.role === id : current?.id === `p:${id}`);
+      const rewriting = directed && current?.revision?.strategyId === id;
+      return (
+        <section
+          key={id}
+          data-board={id}
+          aria-label={clarification ? `${id} ${CLARIFICATION_ROLES[id]}` : `路线 ${id}`}
+          className={`c-board c-board-${id} ${speaking ? "speaking" : ""} ${target ? "target" : ""} ${pick ? "pick" : ""} ${involved(id) ? "" : "dim"} ${enter ? "enter" : ""}`}
+          style={{ "--route": spaced(ROUTE_COLOR[id]) } as CSSProperties}
+        >
+          <svg className="c-outline" aria-hidden="true">
+            <rect width="100%" height="100%" pathLength={1} />
+          </svg>
+          <header>
+            <b>{id}</b>
+            <span>
+              {clarification
+                ? run
+                  ? { completed: "调用完成", failed: "调用失败", uncertain: "调用待核对" }[
+                      run.status
+                    ]
+                  : "尚未调用"
+                : pick
+                  ? "当前建议"
+                  : revision
+                    ? "已修订"
+                    : present
+                      ? "已提案"
+                      : "等待提案"}
+            </span>
+            <em>
+              {clarification
+                ? `用量记录 ${run?.usage.length ?? 0} 笔`
+                : `发出 ${sent.length} · 收到 ${taken.length}`}
+            </em>
+          </header>
+          {present && (run || (strategy && view)) ? (
+            <div className="c-board-body">
+              <h3>
+                <Chars
+                  text={run ? CLARIFICATION_ROLES[id] : readableClaimText(version, view!.title)}
+                  active={enter && !clarification}
+                  delay={lead * speed + 700}
+                  speed={speed}
+                />
+              </h3>
+              <p>{run ? run.summary : readableClaimText(version, view!.thesis)}</p>
+              <div className="est">
+                {run
+                  ? `第 ${run.round} 轮 · 依据修订 ${run.basedOnRevision}`
+                  : strategy!.estimatedHours === view!.estimatedHours
+                    ? `${view!.estimatedHours ?? "待核实"} 小时`
+                    : `${strategy!.estimatedHours ?? "待核实"} → ${view!.estimatedHours ?? "待核实"} 小时`}
+                {run ? "" : ` · ¥${view!.estimatedCost ?? "?"}`}
+              </div>
+              {[
+                ...new Set([...(strategy?.claims ?? []), ...(view?.claims ?? [])].map((c) => c.id)),
+              ].map((claimId) => {
+                const before = strategy!.claims.find((c) => c.id === claimId);
+                const after = view!.claims.find((c) => c.id === claimId);
+                const claim = after ?? before!;
+                const hits = taken.filter((a) => a.targetClaimId === claimId);
+                const lost = hits.some((a) => stateOf(a) === "supported");
+                return (
+                  <button
+                    key={claimId}
+                    type="button"
+                    data-claim={`${id}:${claimId}`}
+                    className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
+                    disabled={readOnly || !after}
+                    title={after ? "质疑这条判断" : "这条主张已撤回"}
+                    onClick={() => onClaim(view!, claimId)}
+                  >
+                    <em>
+                      {claimLabel(version, id, claimId)} · {CLAIM[claim.status]}
+                      {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
+                      {!after && " · 已撤回"}
+                      {!before && " · 新增"}
+                      {hits.map((a) => (
+                        <i key={a.id} className={`is-${stateOf(a)}`}>
+                          {a.from} {WORD[stateOf(a)]}
+                        </i>
+                      ))}
+                    </em>
+                    <span>
+                      <span className={lost || !after ? "struck" : ""}>
+                        {readableClaimText(version, before?.text ?? claim.text)}
+                      </span>
                     </span>
-                  </span>
-                  {before && after && before.text !== after.text && (
-                    <span className={`changed ${rewriting ? "fresh" : ""}`}>
-                      <Chars
-                        text={readableClaimText(version, after.text)}
-                        active={rewriting}
-                        delay={lead * speed + 800}
-                        speed={speed}
-                      />
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-            <ol className="steps">
-              {(run ? clarificationLines(run, latest?.clarificationAnswers) : view!.steps).map(
-                (step) => (
-                  <li key={step}>{step}</li>
-                ),
-              )}
-            </ol>
-            <div className="first">
-              <b>{run ? "记录" : "第一步"}</b>{" "}
-              {run ? "在原步骤卡片中查看本次调用的完整输出。" : view!.firstAction}
+                    {before && after && before.text !== after.text && (
+                      <span className={`changed ${rewriting ? "fresh" : ""}`}>
+                        <Chars
+                          text={readableClaimText(version, after.text)}
+                          active={rewriting}
+                          delay={lead * speed + 800}
+                          speed={speed}
+                        />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+              <ol className="steps">
+                {(run ? clarificationLines(run, latest?.clarificationAnswers) : view!.steps).map(
+                  (step) => (
+                    <li key={step}>{step}</li>
+                  ),
+                )}
+              </ol>
+              <div className="first">
+                <b>{run ? "记录" : "第一步"}</b>{" "}
+                {run ? "在原步骤卡片中查看本次调用的完整输出。" : view!.firstAction}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="c-board-body quiet">
-            {clarification
-              ? `${CLARIFICATION_ROLES[id]}尚无已完成的调用记录。`
-              : demo
-                ? "等待演示步骤，内容为预设。"
-                : "只显示真实生成的结果。"}
-          </div>
-        )}
-      </section>
-    );
-  };
+          ) : (
+            <div className="c-board-body quiet">
+              {clarification
+                ? `${CLARIFICATION_ROLES[id]}尚无已完成的调用记录。`
+                : demo
+                  ? "等待演示步骤，内容为预设。"
+                  : "只显示真实生成的结果。"}
+            </div>
+          )}
+        </section>
+      );
+    },
+    [
+      version,
+      demo,
+      speed,
+      clarification,
+      shown,
+      seen,
+      attacks,
+      backgroundCurrent,
+      current,
+      directed,
+      lead,
+      hot,
+      located,
+      readOnly,
+      onClaim,
+      involved,
+      stateOf,
+    ],
+  );
+  const boardElements = useMemo(() => [board("A"), board("B"), board("C")], [board]);
+
+  useLayoutEffect(() => {
+    const host = stage.current;
+    const currentRole = current?.clarificationRun?.role;
+    if (!clarification || !host || !currentRole) return;
+    const node = host.querySelector<HTMLElement>(`[data-board="${currentRole}"]`);
+    const transfer = adjacentPaperTransfer(beats, index);
+    const receiver = transfer
+      ? host.querySelector<HTMLElement>(`[data-board="${transfer.to}"]`)
+      : null;
+    const path = paperPath.current;
+    const measure = () => {
+      if (!path || !node || !receiver) return;
+      const geometry = paperTransferPath(
+        node.getBoundingClientRect(),
+        receiver.getBoundingClientRect(),
+        host.getBoundingClientRect(),
+      );
+      if (geometry) path.setAttribute("d", geometry);
+    };
+    measure();
+    const draw = (frame: ReturnType<PlaybackTimeline["read"]>) => {
+      if (frame.stepId !== current.id) return;
+      const entering =
+        frame.settled || reducedMotion() ? 1 : Math.min(1, frame.elapsed / PAPER_MOTION.feedback);
+      node?.style.setProperty("--paper-lift", `${-3 * entering}px`);
+      const amount =
+        frame.settled || reducedMotion()
+          ? 1
+          : Math.max(
+              0,
+              Math.min(
+                1,
+                (frame.elapsed - Math.max(0, frame.duration - PAPER_MOTION.transfer)) /
+                  PAPER_MOTION.transfer,
+              ),
+            );
+      if (path) {
+        path.style.strokeDashoffset = String(1 - amount);
+        path.style.opacity = transfer && amount > 0 && amount < 1 && !frame.settled ? "1" : "0";
+      }
+      host.dataset.backgroundMotion =
+        transfer && amount > 0 && amount < 1 ? "transition" : "active";
+      receiver?.style.setProperty(
+        "--paper-receive",
+        amount >= 0.75 && amount < 1 ? String(Math.sin((amount - 0.75) * Math.PI * 4)) : "0",
+      );
+    };
+    if (timeline) draw(timeline.read());
+    const unsubscribe = timeline?.subscribe(draw);
+    addEventListener("resize", measure);
+    return () => {
+      unsubscribe?.();
+      removeEventListener("resize", measure);
+      node?.style.removeProperty("--paper-lift");
+      receiver?.style.removeProperty("--paper-receive");
+      if (path) path.style.opacity = "0";
+    };
+  }, [clarification, beats, index, current, timeline]);
 
   return (
-    <div className={`c-stage3 ${activeAttack ? "has-float" : ""}`} ref={stage}>
+    <div
+      className={`c-stage3 ${clarification ? "clarification-paper-stage" : ""} ${activeAttack ? "has-float" : ""}`}
+      data-background-held={foreground || undefined}
+      data-background-motion={clarification ? (foreground ? "held" : "active") : undefined}
+      style={
+        clarification
+          ? ({
+              "--paper-feedback": `${PAPER_MOTION.feedback}ms`,
+              "--paper-settle": `${PAPER_MOTION.settle}ms`,
+            } as CSSProperties)
+          : undefined
+      }
+      ref={stage}
+    >
       <div className="c-rig" ref={rig}>
         <div className="c-world" ref={world}>
-          {board("A")}
-          {board("B")}
-          {board("C")}
+          {boardElements}
         </div>
       </div>
+      {clarification && (
+        <svg className="paper-role-transfer" aria-hidden="true">
+          <path ref={paperPath} pathLength={1} />
+        </svg>
+      )}
       <svg className="c-threads" aria-hidden="true">
         {attacks.map((a) => (
           <g key={a.id} style={{ "--route": spaced(ROUTE_COLOR[a.from]) } as CSSProperties}>
@@ -1013,19 +1149,21 @@ export function RouteStage({
         speed={speed}
         replayProgress={replayProgress}
         replayAnswersVisible={replayAnswersVisible}
+        backgroundHeld={foreground}
         reviewing={reviewing}
         onStep={onStep}
       />
       <LiveRecord
         version={version}
-        beat={current}
-        index={index}
+        beat={foreground ? (backgroundCurrent ?? null) : current}
+        index={foreground && backgroundCurrent ? beats.indexOf(backgroundCurrent) : index}
         directed={directed}
         seeking={seeking}
         lead={lead}
         speed={speed}
         replayProgress={replayProgress}
         replayAnswersVisible={replayAnswersVisible}
+        backgroundHeld={foreground}
         onEvidence={onEvidence}
       />
       {current?.replayAction && (current.replayAction.kind !== "handoff" || replayProgress < 1) && (
@@ -1041,6 +1179,10 @@ export function RouteStage({
           playing={playing}
           speed={speed}
           seeking={seeking}
+          timeline={timeline}
+          stepId={current.id}
+          duration={playbackDuration(current)}
+          nextRole={nextRole}
         />
       )}
     </div>

@@ -2,24 +2,35 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { reducedMotion } from "./effects";
 import { createMotionScope, useReducedMotion } from "./motion-runtime";
+import { PAPER_MOTION } from "./paper-stage";
 
 /** Keep the result in the flow until its space has closed. A new request starts at the current size. */
 export function ResultRegion({
   open,
   expanded,
   children,
+  theater = false,
+  speed = 1,
 }: {
   open: boolean;
   expanded: boolean;
   children: ReactNode;
+  theater?: boolean;
+  speed?: number;
 }) {
   const reducePreference = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
+  const animations = useRef<Animation[]>([]);
+  const playbackRate = useRef(speed);
+  useLayoutEffect(() => {
+    playbackRate.current = theater && !expanded ? speed : 1;
+    animations.current.forEach((part) => part.updatePlaybackRate(playbackRate.current));
+  }, [speed, theater, expanded]);
   useLayoutEffect(() => {
     const host = ref.current;
     const card = host?.firstElementChild as HTMLElement | null;
     if (!host || !card) return;
-    const scope = createMotionScope("interaction");
+    const scope = createMotionScope(theater && !expanded ? "story" : "interaction");
     let parts: Animation[] = [];
     let target = -1;
     const freeze = () => {
@@ -49,10 +60,11 @@ export function ResultRegion({
         card.style.transform = open ? "none" : "translateY(-8px)";
         parts.forEach((part) => part.cancel());
         parts = [];
+        animations.current = [];
       };
       if (reducedMotion() || (next === 0 && parseFloat(height) === 0)) return finish();
       const timing = {
-        duration: open ? 620 : 460,
+        duration: theater ? (open ? PAPER_MOTION.open : PAPER_MOTION.fold) : open ? 620 : 460,
         easing: "cubic-bezier(.2,.75,.25,1)",
         fill: "both",
       } as const;
@@ -67,6 +79,8 @@ export function ResultRegion({
           timing,
         ),
       ];
+      animations.current = parts;
+      parts.forEach((part) => part.updatePlaybackRate(playbackRate.current));
       parts[0].onfinish = finish;
     };
     resize();
@@ -76,8 +90,9 @@ export function ResultRegion({
       observer.disconnect();
       freeze();
       scope.dispose();
+      animations.current = [];
     };
-  }, [open, expanded, reducePreference]);
+  }, [open, expanded, reducePreference, theater]);
   return (
     <div ref={ref} className="c-result-region" inert={!open} aria-hidden={!open}>
       {children}

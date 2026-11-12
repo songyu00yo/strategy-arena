@@ -1,10 +1,13 @@
 "use client";
 
-import { useLayoutEffect, useRef, type CSSProperties } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { MousePointer2 } from "lucide-react";
 import type { IntakeAnswer, IntakeQuestion, RecordedAnswer } from "@/lib/intake-contracts";
 import type { ReplayAction } from "@/lib/replay-contracts";
 import { QuestionInput } from "../question-input";
+import { createMotionScope, motionPaused, subscribeMotionPause } from "./motion-runtime";
+import { PAPER_MOTION } from "./paper-stage";
+import type { PlaybackFrame, PlaybackTimeline } from "./use-playback-progress";
 import "../guided-intake.css";
 import "./replay-question-scene.css";
 
@@ -29,6 +32,87 @@ const EMPTY_CHOICES: string[] = [];
 
 const bounded = (progress: number) =>
   Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 1;
+const easeOut = (amount: number) => 1 - (1 - bounded(amount)) ** 3;
+type Point = { x: number; y: number };
+
+/** These durations use the shared clock's active elapsed time, including playback speed. */
+export function replayPaperTiming(frame: PlaybackFrame, opening: boolean, closing: boolean) {
+  const foldStart = Math.max(frame.duration - PAPER_MOTION.fold, frame.duration * 0.8);
+  return {
+    open: frame.settled || !opening ? 1 : easeOut(frame.elapsed / PAPER_MOTION.open),
+    fold:
+      frame.settled || !closing
+        ? 0
+        : bounded((frame.elapsed - foldStart) / Math.max(1, frame.duration - foldStart)),
+  };
+}
+
+/** A curved approach decelerates at the actual control rather than overshooting it. */
+export function replayPointerAt(origin: Point, target: Point, progress: number): Point {
+  const amount = easeOut(progress);
+  const dx = target.x - origin.x;
+  const dy = target.y - origin.y;
+  const bend = {
+    x: (origin.x + target.x) / 2 - dy * 0.12,
+    y: (origin.y + target.y) / 2 + dx * 0.12,
+  };
+  return {
+    x: (1 - amount) ** 2 * origin.x + 2 * (1 - amount) * amount * bend.x + amount ** 2 * target.x,
+    y: (1 - amount) ** 2 * origin.y + 2 * (1 - amount) * amount * bend.y + amount ** 2 * target.y,
+  };
+}
+
+export function replayPressedAt(elapsed: number, duration: number, clickTimes: number[]) {
+  return clickTimes.some(
+    (at) => elapsed >= at * duration && elapsed < at * duration + PAPER_MOTION.feedback,
+  );
+}
+
+/** A body-owned ornament is needed only when the measured recipient leaves the stage clip. */
+export function replayHandoffOutside(
+  receiver: Pick<DOMRect, "left" | "top" | "width" | "height">,
+  stage: Pick<DOMRect, "left" | "top" | "width" | "height">,
+) {
+  if (receiver.width <= 0 || receiver.height <= 0 || stage.width <= 0 || stage.height <= 0)
+    return false;
+  const x = receiver.left + receiver.width / 2;
+  const y = receiver.top + receiver.height / 2;
+  return (
+    x < stage.left || x > stage.left + stage.width || y < stage.top || y > stage.top + stage.height
+  );
+}
+
+/** A paused frame owns the same ornament until seeking or completion replaces it. */
+export function replayHandoffActive(frame: PlaybackFrame, fold: number, crossesClip: boolean) {
+  return crossesClip && fold >= 0.42 && fold < 1 && frame.progress >= 0.8 && !frame.settled;
+}
+
+/** Each measured question gets a reading stop before the next continuous scroll. */
+export function replayReadingScroll(progress: number, stops: number[], range: number) {
+  const positions = [
+    ...new Set([0, ...stops.map((stop) => Math.max(0, Math.min(range, stop))), range]),
+  ].sort((a, b) => a - b);
+  if (positions.length < 2) return 0;
+  const travel = bounded((progress - 0.2) / 0.6) * (positions.length - 1);
+  const index = Math.min(positions.length - 2, Math.floor(travel));
+  const amount = bounded((travel - index - 0.42) / 0.58);
+  const eased = amount * amount * (3 - 2 * amount);
+  return positions[index] + (positions[index + 1] - positions[index]) * eased;
+}
+
+function layoutPoint(element: HTMLElement): Point {
+  let x = 0;
+  let y = 0;
+  for (
+    let node: HTMLElement | null = element;
+    node;
+    node = node.offsetParent as HTMLElement | null
+  ) {
+    x += node.offsetLeft;
+    y += node.offsetTop;
+  }
+  return { x, y };
+}
 
 /** FLIP geometry is derived from measured rectangles, with no guessed source position. */
 export function replayFlipGeometry(
@@ -99,6 +183,10 @@ export function ReplayQuestionScene({
   playing = false,
   speed = 1,
   seeking = false,
+  timeline,
+  stepId,
+  duration = 2500,
+  nextRole,
 }: {
   action: ReplayAction;
   previousAnswers?: RecordedAnswer[];
@@ -106,11 +194,17 @@ export function ReplayQuestionScene({
   playing?: boolean;
   speed?: number;
   seeking?: boolean;
+  timeline?: PlaybackTimeline;
+  stepId?: string;
+  duration?: number;
+  nextRole?: "A" | "B" | "C";
 }) {
   const root = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const pointer = useRef<HTMLDivElement>(null);
-  const amount = bounded(progress);
+  const activeStepId = stepId ?? action.id;
+  const [sample, setSample] = useState({ stepId: activeStepId, amount: bounded(progress) });
+  const amount = timeline && sample.stepId === activeStepId ? sample.amount : bounded(progress);
   const questions = action.questions ?? [];
   const currentAnswer = action.kind === "answer" ? action.answers?.[0] : undefined;
   const confirmed = amount >= 0.8;
@@ -123,259 +217,449 @@ export function ReplayQuestionScene({
     currentAnswer?.state === "answered" && Array.isArray(currentAnswer.value)
       ? currentAnswer.value
       : EMPTY_CHOICES;
-  const clickTimes = userConfirmation
-    ? [0.8]
-    : choices.length
-      ? choices.map((_, index) => 0.45 + index * (0.3 / choices.length))
-      : [0.45];
-  const pressLength = choices.length ? Math.min(0.04, 0.15 / choices.length) : 0.05;
-  const targetIndex = choices.length
-    ? Math.min(choices.length - 1, clickTimes.filter((time) => amount >= time + pressLength).length)
-    : 0;
-  const moveStart =
-    userConfirmation || targetIndex === 0 ? 0.15 : clickTimes[targetIndex - 1] + pressLength;
-  const moveEnd = userConfirmation ? 0.75 : clickTimes[targetIndex];
-  const movement = bounded((amount - moveStart) / (moveEnd - moveStart));
-  const pressed =
-    !!(currentAnswer || userConfirmation) &&
-    clickTimes.some((time) => amount >= time && amount < time + pressLength);
   const phase = amount < 0.2 ? "show" : amount < 0.8 ? "answer" : "settle";
-  const closesGroup =
-    action.kind === "round_confirm" ||
-    action.kind === "summary_submit" ||
-    action.kind === "handoff";
-  const closing = playing && !seeking && closesGroup && amount > 0.94 ? (amount - 0.94) / 0.06 : 0;
-  const sourceRole = action.kind === "handoff" ? "C" : "B";
-  const opened = useRef(false);
-  const measureFlip = useRef<() => void>(() => {});
-  const point = useRef({ actionId: "", x: 0, y: 0, originX: 0, originY: 0, placed: false });
-  const measurePointer = useRef<() => void>(() => {});
-  const currentQuestionId = currentAnswer?.questionId;
+  const frameRef = useRef<PlaybackFrame>({
+    stepId: activeStepId,
+    progress: bounded(progress),
+    elapsed: bounded(progress) * duration,
+    duration,
+    running: playing,
+    settled: seeking,
+  });
+  const sync = useRef<(frame: PlaybackFrame) => void>(() => {});
+  const refresh = useRef<() => void>(() => {});
+  const pointerPosition = useRef<Point | null>(null);
   const followed = useRef({ id: "", playing: false, seeking: false, speed });
 
   useLayoutEffect(() => {
+    const element = root.current;
+    const viewport = body.current;
+    const cursor = pointer.current;
+    const stage = element?.closest<HTMLElement>(".c-stage3");
+    if (!element || !viewport || !cursor || !stage) return;
+    const opening = action.kind === "questions" || action.kind === "summary_submit";
+    const closing = ["round_confirm", "summary_submit", "handoff"].includes(action.kind);
+    const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const board = stage.querySelector<HTMLElement>('[data-board="B"]');
+    const receiver = nextRole
+      ? stage.querySelector<HTMLElement>('[data-board="' + nextRole + '"]')
+      : action.kind === "handoff"
+        ? element.closest(".c-root")?.querySelector<HTMLElement>("#verdict")
+        : null;
+    let cache: {
+      source: ReturnType<typeof replayFlipGeometry>;
+      destination: ReturnType<typeof replayFlipGeometry>;
+      bodyTop: number;
+      bodyHeight: number;
+      range: number;
+      scroll: number;
+      stops: number[];
+      targets: Array<Point | null>;
+      heading: Point;
+      startScroll: number;
+      sheet: { left: number; top: number; width: number; height: number };
+      clip: { left: number; top: number; right: number; bottom: number };
+      transferOutside: boolean;
+      sheetStyles: Array<[string, string]>;
+    } | null = null;
+    let scheduled = 0;
+    let disposed = false;
+    let signature = "";
+    let origin: Point | null = pointerPosition.current;
+    let transfer: {
+      scope: ReturnType<typeof createMotionScope>;
+      node: HTMLDivElement;
+    } | null = null;
+    const clearTransfer = () => {
+      transfer?.scope.dispose();
+      transfer = null;
+      element.style.setProperty("--replay-paper-opacity", "1");
+      element.dataset.stripOwner = "local";
+    };
+    const clickTimes = userConfirmation
+      ? [0.8]
+      : choices.length
+        ? choices.map((_, index) => 0.45 + index * (0.3 / choices.length))
+        : [0.45];
+
+    const localSignature = (frame: PlaybackFrame) => {
+      const shown = targetQuestion
+        ? replayAnswerAt(targetQuestion, currentAnswer, frame.progress)
+        : null;
+      return JSON.stringify([
+        activeStepId,
+        shown?.state,
+        shown?.value,
+        frame.progress >= 0.2,
+        frame.progress >= 0.45,
+        frame.progress >= 0.75,
+        frame.progress >= 0.8,
+      ]);
+    };
+
+    const paint = (frame: PlaybackFrame) => {
+      if (!cache || frame.stepId !== activeStepId) return;
+      const paper = replayPaperTiming(frame, opening, closing);
+      const open = reducedMotion ? 1 : paper.open;
+      const fold = reducedMotion || !cache.destination ? 0 : paper.fold;
+      const unfolded = easeOut(fold);
+      const flight = easeOut(bounded((fold - 0.42) / 0.58));
+      const destination = cache.destination;
+      const source = cache.source;
+      const x = (source?.x ?? 0) * (1 - open) + (destination?.x ?? 0) * flight;
+      const y = (source?.y ?? 0) * (1 - open) + (destination?.y ?? 0) * flight;
+      const scaleX = (1 + ((source?.scaleX ?? 1) - 1) * (1 - open)) * (1 - unfolded * 0.16);
+      const scaleY = (1 + ((source?.scaleY ?? 1) - 1) * (1 - open)) * (1 - unfolded * 0.86);
+      let scroll = cache.scroll;
+      if (frame.running && action.kind === "questions")
+        scroll = replayReadingScroll(frame.progress, cache.stops, cache.range);
+      const clickIndex = choices.length
+        ? Math.min(
+            choices.length - 1,
+            clickTimes.filter((at) => frame.elapsed >= at * frame.duration + PAPER_MOTION.feedback)
+              .length,
+          )
+        : 0;
+      const target = cache.targets[clickIndex];
+      const previousTarget = clickIndex > 0 ? cache.targets[clickIndex - 1] : null;
+      const moveStart =
+        userConfirmation || clickIndex === 0
+          ? 0.15 * frame.duration
+          : Math.min(
+              clickTimes[clickIndex - 1] * frame.duration + PAPER_MOTION.feedback,
+              clickTimes[clickIndex] * frame.duration,
+            );
+      const moveEnd = (userConfirmation ? 0.75 : clickTimes[clickIndex]) * frame.duration;
+      const movement = bounded((frame.elapsed - moveStart) / Math.max(1, moveEnd - moveStart));
+      if (target && frame.running && !userConfirmation && action.kind === "answer") {
+        const desired = Math.max(
+          0,
+          Math.min(cache.range, target.y - cache.bodyTop - cache.bodyHeight * 0.35),
+        );
+        const start = previousTarget
+          ? Math.max(
+              0,
+              Math.min(cache.range, previousTarget.y - cache.bodyTop - cache.bodyHeight * 0.35),
+            )
+          : cache.startScroll;
+        scroll = start + (desired - start) * easeOut(movement);
+      }
+      const toVisible = (point: Point) => ({
+        x: point.x,
+        y: point.y - (userConfirmation ? 0 : scroll),
+      });
+      const position = target
+        ? replayPointerAt(
+            previousTarget ? toVisible(previousTarget) : (origin ?? cache.heading),
+            toVisible(target),
+            reducedMotion ? 1 : movement,
+          )
+        : null;
+      const pressed =
+        !!(currentAnswer || userConfirmation) &&
+        replayPressedAt(frame.elapsed, frame.duration, clickTimes);
+      const stripLeft = cache.sheet.left + x + (cache.sheet.width * (1 - scaleX)) / 2;
+      const stripTop = cache.sheet.top + y + (cache.sheet.height * (1 - scaleY)) / 2;
+      const crossesClip =
+        stripLeft < cache.clip.left ||
+        stripTop < cache.clip.top ||
+        stripLeft + cache.sheet.width * scaleX > cache.clip.right ||
+        stripTop + cache.sheet.height * scaleY > cache.clip.bottom;
+      const carry = cache.transferOutside && replayHandoffActive(frame, fold, crossesClip);
+
+      // Geometry was read during refresh. All frame writes follow the completed calculation.
+      element.style.transform =
+        "translate3d(" + x + "px," + y + "px,0) scale(" + scaleX + "," + scaleY + ")";
+      element.style.setProperty("--replay-shadow", String(1 - open + unfolded * 0.75));
+      element.style.setProperty("--replay-fold", String(unfolded));
+      element.style.setProperty("--replay-content-visibility", fold >= 0.42 ? "hidden" : "visible");
+      element.style.setProperty("--replay-strip-visibility", fold >= 0.42 ? "visible" : "hidden");
+      element.style.setProperty("--replay-strip-scale-x", String(1 / scaleX));
+      element.style.setProperty("--replay-strip-scale-y", String(1 / scaleY));
+      element.dataset.replayOpened = String(open >= 1);
+      element.dataset.replayFold = fold.toFixed(3);
+      if (carry) {
+        if (!transfer) {
+          const scope = createMotionScope();
+          const node = scope.own(document.createElement("div"));
+          node.className = "replay-handoff-strip";
+          node.setAttribute("aria-hidden", "true");
+          node.inert = true;
+          node.dataset.replayHandoffFor = activeStepId;
+          const shadow = document.createElement("div");
+          shadow.className = "replay-paper-shadow";
+          const label = document.createElement("span");
+          label.textContent = "第 " + action.round + " 轮 · " + LABELS[action.kind];
+          node.append(shadow, label);
+          document.body.appendChild(node);
+          transfer = { scope, node };
+        }
+        const node = transfer.node;
+        node.style.visibility = document.hidden ? "hidden" : "visible";
+        cache.sheetStyles.forEach(([property, value]) => node.style.setProperty(property, value));
+        node.style.left = cache.sheet.left - scrollX + "px";
+        node.style.top = cache.sheet.top - scrollY + "px";
+        node.style.width = cache.sheet.width + "px";
+        node.style.height = cache.sheet.height + "px";
+        node.style.transform =
+          "translate3d(" + x + "px," + y + "px,0) scale(" + scaleX + "," + scaleY + ")";
+        node.style.setProperty("--replay-shadow", String(unfolded * 0.75));
+        node.style.setProperty("--replay-strip-scale-x", String(1 / scaleX));
+        node.style.setProperty("--replay-strip-scale-y", String(1 / scaleY));
+        element.style.setProperty("--replay-paper-opacity", "0");
+        element.dataset.stripOwner = "body";
+      } else clearTransfer();
+      if (frame.running && Math.abs(scroll - cache.scroll) > 0.1) {
+        viewport.scrollTop = scroll;
+        cache.scroll = scroll;
+      }
+      cursor.dataset.pressed = String(pressed);
+      cursor.style.opacity =
+        frame.progress >= 0.15 && frame.progress < 0.96 && fold < 0.25 ? "1" : "0";
+      cursor.style.visibility = position ? "visible" : "hidden";
+      if (position) {
+        pointerPosition.current = position;
+        cursor.style.transform =
+          "translate3d(" + (position.x + 2) + "px," + (position.y + 2) + "px,0)";
+      }
+    };
+
     const measure = () => {
-      const element = root.current;
-      const stage = element?.closest<HTMLElement>(".c-stage3");
-      if (!element || !stage) return;
-      const previousTransform = element.style.transform;
-      element.style.transform = "none";
-      const target = element.getBoundingClientRect();
-      element.style.transform = previousTransform;
+      scheduled = 0;
+      if (disposed) return;
+      const page = layoutPoint(element);
+      const bodyPage = layoutPoint(viewport);
+      const width = element.offsetWidth;
+      const height = element.offsetHeight;
+      const targetBox = {
+        left: page.x - scrollX,
+        top: page.y - scrollY,
+        width,
+        height,
+      };
+      const sourceBox = board?.getBoundingClientRect();
       const stageBox = stage.getBoundingClientRect();
-      const board = stage.querySelector<HTMLElement>(`[data-board="${sourceRole}"]`);
-      const boardBox = board?.getBoundingClientRect();
-      const visible =
-        !!boardBox &&
-        boardBox.width > 0 &&
-        boardBox.height > 0 &&
-        boardBox.right > Math.max(0, stageBox.left) &&
-        boardBox.left < Math.min(innerWidth, stageBox.right) &&
-        boardBox.bottom > Math.max(0, stageBox.top) &&
-        boardBox.top < Math.min(innerHeight, stageBox.bottom);
-      const source = visible && boardBox ? boardBox : stageBox;
-      const geometry = replayFlipGeometry(source, target);
-      element.dataset.flipOrigin = geometry
-        ? visible
-          ? `board-${sourceRole.toLowerCase()}`
+      const receiverBox = receiver?.getBoundingClientRect();
+      const sheetStyle = getComputedStyle(element);
+      const sheetStyles = [
+        "font-family",
+        "color",
+        "background",
+        "border",
+        "border-radius",
+        "box-shadow",
+      ].map((property): [string, string] => [property, sheetStyle.getPropertyValue(property)]);
+      const visibleSource =
+        !!sourceBox &&
+        sourceBox.width > 0 &&
+        sourceBox.height > 0 &&
+        sourceBox.right > Math.max(0, stageBox.left) &&
+        sourceBox.left < Math.min(innerWidth, stageBox.right) &&
+        sourceBox.bottom > Math.max(0, stageBox.top) &&
+        sourceBox.top < Math.min(innerHeight, stageBox.bottom);
+      const source = replayFlipGeometry(
+        visibleSource && sourceBox ? sourceBox : stageBox,
+        targetBox,
+      );
+      const destination = receiverBox ? replayFlipGeometry(receiverBox, targetBox) : null;
+      const positionOf = (node: HTMLElement): Point => {
+        const point = layoutPoint(node);
+        return {
+          x:
+            point.x -
+            page.x +
+            (node.hasAttribute("data-answer-option")
+              ? node.offsetWidth / 2
+              : Math.min(node.offsetWidth / 2, 22)),
+          y: point.y - page.y + node.offsetHeight / 2,
+        };
+      };
+      const fieldset = [...viewport.querySelectorAll<HTMLElement>("[data-question-id]")].find(
+        (node) => node.dataset.questionId === currentAnswer?.questionId,
+      );
+      const optionCard = (value: string) =>
+        [...(fieldset?.querySelectorAll<HTMLElement>("[data-answer-option]") ?? [])].find(
+          (node) => node.dataset.answerOption === value,
+        );
+      const nodes: Array<HTMLElement | null | undefined> = userConfirmation
+        ? [element.querySelector<HTMLElement>("[data-replay-confirm]")]
+        : currentAnswer?.state === "unknown" || currentAnswer?.state === "skipped"
+          ? [
+              fieldset?.querySelector<HTMLElement>(
+                '[data-answer-state="' + currentAnswer.state + '"]',
+              ),
+            ]
+          : targetQuestion?.type === "single" || targetQuestion?.type === "multiple"
+            ? (choices.length ? choices : [String(currentAnswer?.value ?? "")]).map(optionCard)
+            : [fieldset?.querySelector<HTMLElement>("[data-answer-field]")];
+      const targets = nodes.map((node) => (node ? positionOf(node) : null));
+      const heading = element.querySelector<HTMLElement>("h3");
+      const headingPoint = heading ? positionOf(heading) : { x: width / 2, y: 0 };
+      const stops = [
+        ...viewport.querySelectorAll<HTMLElement>(
+          "[data-question-id], .replay-summary-answers > div",
+        ),
+      ].map((node) => Math.max(0, layoutPoint(node).y - bodyPage.y));
+      cache = {
+        source,
+        destination,
+        bodyTop: bodyPage.y - page.y,
+        bodyHeight: viewport.clientHeight,
+        range: Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+        scroll: viewport.scrollTop,
+        stops,
+        targets,
+        heading: headingPoint,
+        startScroll: cache?.startScroll ?? viewport.scrollTop,
+        sheet: { left: page.x, top: page.y, width, height },
+        clip: {
+          left: stageBox.left + scrollX,
+          top: stageBox.top + scrollY,
+          right: stageBox.right + scrollX,
+          bottom: stageBox.bottom + scrollY,
+        },
+        transferOutside:
+          action.kind === "handoff" && !!receiverBox && replayHandoffOutside(receiverBox, stageBox),
+        sheetStyles,
+      };
+      origin ??= headingPoint;
+      // Attribution is observable in browser evidence, including every fallback.
+      element.dataset.flipOrigin = source
+        ? visibleSource
+          ? "board-b"
           : "stage-plane"
         : "unavailable";
-      element.dataset.flipFallback = visible
+      element.dataset.flipFallback = visibleSource
         ? ""
         : !board
           ? "board-missing"
-          : !boardBox?.width || !boardBox.height
+          : !sourceBox?.width || !sourceBox.height
             ? "board-empty-size"
             : "board-outside-viewport";
-      if (!geometry) {
-        element.dataset.flipFallback = "source-or-target-empty-size";
-        opened.current = true;
-        element.style.setProperty("--replay-open", "1");
-        return;
-      }
-      element.style.setProperty("--replay-source-x", `${geometry.x}px`);
-      element.style.setProperty("--replay-source-y", `${geometry.y}px`);
-      element.style.setProperty("--replay-source-scale-x", String(geometry.scaleX));
-      element.style.setProperty("--replay-source-scale-y", String(geometry.scaleY));
+      element.dataset.foldTarget = destination
+        ? nextRole
+          ? "board-" + nextRole.toLowerCase()
+          : "original-result"
+        : "unavailable";
+      element.dataset.foldFallback = destination
+        ? ""
+        : !receiver
+          ? "target-missing"
+          : "target-empty-size";
+      paint(frameRef.current);
     };
-    measureFlip.current = measure;
-    measure();
-  }, [action.id, sourceRole]);
-
-  useLayoutEffect(() => {
-    const isOpening = action.kind === "questions" || action.kind === "summary_submit";
-    if (!playing || seeking || !isOpening || amount >= 0.18) opened.current = true;
-    const opening = opened.current ? 1 : bounded(amount / 0.18);
-    root.current?.style.setProperty("--replay-open", String(opening));
-    if (root.current) root.current.dataset.replayOpened = String(opened.current);
-  }, [action.kind, amount, playing, seeking]);
-
-  useLayoutEffect(() => {
-    const previous = followed.current;
-    const shouldFollow =
-      previous.id !== action.id ||
-      (!previous.playing && playing) ||
-      (!previous.seeking && seeking) ||
-      (playing && previous.speed !== speed);
-    followed.current = { id: action.id, playing, seeking, speed };
-    const element = root.current;
-    if (!element || !shouldFollow) return;
-    // Layout offsets keep this target stable while FLIP changes the painted rectangle.
-    let pageTop = 0;
-    for (
-      let node: HTMLElement | null = element;
-      node;
-      node = node.offsetParent as HTMLElement | null
-    )
-      pageTop += node.offsetTop;
-    for (
-      let parent = element.parentElement;
-      parent && parent !== document.body && parent !== document.documentElement;
-      parent = parent.parentElement
-    )
-      pageTop -= parent.scrollTop;
-    const viewport = window.visualViewport;
-    const viewTop = (viewport?.offsetTop ?? 0) + 12;
-    const viewBottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight) - 12;
-    const top = pageTop - scrollY;
-    if (top >= viewTop && top + element.offsetHeight <= viewBottom) return;
-    const scrolling = document.documentElement;
-    const previousBehavior = scrolling.style.scrollBehavior;
-    scrolling.style.scrollBehavior = "auto";
-    window.scrollTo({ left: scrollX, top: Math.max(0, pageTop - viewTop), behavior: "auto" });
-    scrolling.style.scrollBehavior = previousBehavior;
-    measureFlip.current();
-    measurePointer.current();
-  }, [action.id, playing, seeking, speed]);
-
-  useLayoutEffect(() => {
-    const viewport = body.current;
-    if (!viewport || !currentQuestionId) return;
-    const fieldset = [...viewport.querySelectorAll<HTMLElement>("[data-question-id]")].find(
-      (node) => node.dataset.questionId === currentQuestionId,
-    );
-    if (fieldset)
-      viewport.scrollTop +=
-        fieldset.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 8;
-  }, [action.id, currentQuestionId]);
-
-  useLayoutEffect(() => {
-    const viewport = body.current;
-    if (!viewport || action.kind !== "questions" || !playing) return;
-    const travel = bounded((amount - 0.2) / 0.6);
-    viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight) * travel;
-  }, [action.id, action.kind, amount, playing]);
-
-  useLayoutEffect(() => {
-    const measure = () => {
-      const element = root.current;
-      const viewport = body.current;
-      const cursor = pointer.current;
-      if (!element || !viewport || !cursor) return;
-      const fieldset = [...element.querySelectorAll<HTMLElement>("[data-question-id]")].find(
-        (node) => node.dataset.questionId === currentAnswer?.questionId,
-      );
-      const optionCard = (value: string | undefined) => {
-        const label = [
-          ...(fieldset?.querySelectorAll<HTMLElement>("[data-answer-option]") ?? []),
-        ].find((node) => node.dataset.answerOption === value);
-        return label ?? null;
-      };
-      let target: HTMLElement | null = null;
-      if (userConfirmation) target = element.querySelector<HTMLElement>("[data-replay-confirm]");
-      else if (currentAnswer?.state === "unknown" || currentAnswer?.state === "skipped")
-        target =
-          fieldset?.querySelector<HTMLElement>(`[data-answer-state="${currentAnswer.state}"]`) ??
-          null;
-      else if (targetQuestion?.type === "single" || targetQuestion?.type === "multiple")
-        target = optionCard(
-          choices.length ? choices[targetIndex] : String(currentAnswer?.value ?? ""),
-        );
-      else target = fieldset?.querySelector<HTMLElement>("[data-answer-field]") ?? null;
-      if (!target) {
-        cursor.style.visibility = "hidden";
-        return;
-      }
-      const targetBox = target.getBoundingClientRect();
-      const viewportBox = viewport.getBoundingClientRect();
-      if (
-        playing &&
-        !userConfirmation &&
-        amount >= 0.15 &&
-        (targetBox.top < viewportBox.top + 12 || targetBox.bottom > viewportBox.bottom - 12)
-      )
-        viewport.scrollTop += targetBox.top - viewportBox.top - viewportBox.height * 0.35;
-      const panel = element.getBoundingClientRect();
-      const scaleX = panel.width / Math.max(1, element.offsetWidth);
-      const scaleY = panel.height / Math.max(1, element.offsetHeight);
-      const positionOf = (node: HTMLElement) => {
-        const box = node.getBoundingClientRect();
-        return {
-          x:
-            (box.left +
-              (node.hasAttribute("data-answer-option")
-                ? box.width / 2
-                : Math.min(box.width / 2, 22)) -
-              panel.left) /
-            scaleX,
-          y: (box.top + box.height / 2 - panel.top) / scaleY,
-        };
-      };
-      const destination = positionOf(target);
-      const state = point.current;
-      if (state.actionId !== action.id) {
-        const heading = element.querySelector<HTMLElement>("h3");
-        const origin = state.placed
-          ? { x: state.x, y: state.y }
-          : heading
-            ? positionOf(heading)
-            : destination;
-        state.actionId = action.id;
-        state.originX = origin.x;
-        state.originY = origin.y;
-      }
-      const previousControl =
-        choices.length && targetIndex > 0 ? optionCard(choices[targetIndex - 1]) : null;
-      const origin = previousControl
-        ? positionOf(previousControl)
-        : { x: state.originX, y: state.originY };
-      state.x = origin.x + (destination.x - origin.x) * movement;
-      state.y = origin.y + (destination.y - origin.y) * movement;
-      state.placed = true;
-      cursor.style.transform = `translate3d(${state.x + 2}px, ${state.y + 2}px, 0)`;
-      cursor.style.visibility = "visible";
+    const scheduleMeasure = () => {
+      if (!scheduled && !disposed) scheduled = requestAnimationFrame(measure);
     };
-    measurePointer.current = measure;
+    const receive = (frame: PlaybackFrame) => {
+      if (frame.stepId !== activeStepId) return;
+      frameRef.current = frame;
+      const key = localSignature(frame);
+      if (signature !== key) {
+        signature = key;
+        setSample({ stepId: activeStepId, amount: bounded(frame.progress) });
+      }
+      paint(frame);
+    };
+    const scrollBody = () => {
+      if (cache) cache.scroll = viewport.scrollTop;
+      paint(frameRef.current);
+    };
+    const scrollPage = () => {
+      if (!cache) return;
+      // Scroll changes viewport offsets, never the measured content geometry.
+      paint(frameRef.current);
+    };
+    sync.current = receive;
+    refresh.current = scheduleMeasure;
+    const observer = new ResizeObserver(scheduleMeasure);
+    observer.observe(element);
+    observer.observe(viewport);
+    observer.observe(stage);
+    if (board) observer.observe(board);
+    if (receiver) observer.observe(receiver);
+    viewport.addEventListener("scroll", scrollBody, { passive: true });
+    addEventListener("scroll", scrollPage, { passive: true });
+    addEventListener("resize", scheduleMeasure, { passive: true });
+    window.visualViewport?.addEventListener("resize", scheduleMeasure);
+    const unsubscribe = timeline?.subscribe(receive);
+    const unsubscribePause = subscribeMotionPause(() => {
+      paint(frameRef.current);
+    });
+    const initial = timeline?.read();
+    if (initial?.stepId === activeStepId) frameRef.current = initial;
+    else
+      frameRef.current = {
+        stepId: activeStepId,
+        progress: 0,
+        elapsed: 0,
+        duration,
+        running: false,
+        settled: false,
+      };
     measure();
+    receive(frameRef.current);
+    return () => {
+      disposed = true;
+      if (scheduled) cancelAnimationFrame(scheduled);
+      observer.disconnect();
+      unsubscribe?.();
+      unsubscribePause();
+      clearTransfer();
+      viewport.removeEventListener("scroll", scrollBody);
+      removeEventListener("scroll", scrollPage);
+      removeEventListener("resize", scheduleMeasure);
+      window.visualViewport?.removeEventListener("resize", scheduleMeasure);
+    };
   }, [
-    action.id,
-    amount,
+    action,
+    activeStepId,
     choices,
-    confirming,
     currentAnswer,
-    movement,
-    targetIndex,
+    duration,
+    nextRole,
     targetQuestion,
-    playing,
+    timeline,
     userConfirmation,
   ]);
 
   useLayoutEffect(() => {
+    if (timeline) {
+      const frame = timeline.read();
+      if (frame.stepId === activeStepId) sync.current(frame);
+    } else {
+      sync.current({
+        stepId: activeStepId,
+        progress: bounded(progress),
+        elapsed: bounded(progress) * duration,
+        duration,
+        running: playing,
+        settled: seeking,
+      });
+    }
+  }, [activeStepId, duration, playing, progress, seeking, timeline]);
+
+  useLayoutEffect(() => {
+    const previous = followed.current;
+    const activePlaying = playing && !motionPaused();
+    const shouldFollow =
+      previous.id !== action.id ||
+      (!previous.playing && activePlaying) ||
+      (!previous.seeking && seeking) ||
+      (activePlaying && previous.speed !== speed);
+    followed.current = { id: action.id, playing: activePlaying, seeking, speed };
+    if (!shouldFollow) return;
     const element = root.current;
-    const viewport = body.current;
-    if (!element || !viewport) return;
-    const measure = () => {
-      measureFlip.current();
-      measurePointer.current();
-    };
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    viewport.addEventListener("scroll", measure, { passive: true });
-    return () => {
-      observer.disconnect();
-      viewport.removeEventListener("scroll", measure);
-    };
-  }, []);
+    if (!element) return;
+    const page = layoutPoint(element);
+    const viewport = window.visualViewport;
+    const top = (viewport?.offsetTop ?? 0) + 12;
+    const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight) - 12;
+    if (page.y - scrollY < top || page.y - scrollY + element.offsetHeight > bottom) {
+      window.scrollTo({ left: scrollX, top: Math.max(0, page.y - top), behavior: "instant" });
+      refresh.current();
+    }
+  }, [action.id, playing, seeking, speed]);
 
   const rows = questions.length
     ? questions.map((question) => ({
@@ -405,8 +689,13 @@ export function ReplayQuestionScene({
       aria-label="补问过程回放"
       data-replay-action={action.kind}
       data-replay-phase={phase}
-      style={{ "--replay-fold": closing } as CSSProperties}
     >
+      <div className="replay-paper-shadow" aria-hidden="true" />
+      <div className="replay-paper-strip" aria-hidden="true">
+        <span>
+          第 {action.round} 轮 · {LABELS[action.kind]}
+        </span>
+      </div>
       <header className="replay-question-heading">
         <div>
           <span>
@@ -526,13 +815,7 @@ export function ReplayQuestionScene({
           </button>
         )}
       </footer>
-      <div
-        ref={pointer}
-        className="replay-question-pointer"
-        aria-hidden="true"
-        style={{ opacity: amount >= 0.15 && amount < 0.96 ? 1 : 0 }}
-        data-pressed={pressed}
-      >
+      <div ref={pointer} className="replay-question-pointer" aria-hidden="true">
         <MousePointer2 size={25} />
       </div>
     </section>

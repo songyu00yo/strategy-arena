@@ -3,6 +3,7 @@ import { claimLabel, readableClaimText } from "@/components/claim-label";
 import {
   useEffect,
   useLayoutEffect,
+  memo,
   useRef,
   useState,
   type CSSProperties,
@@ -28,6 +29,9 @@ import { type Stage } from "@/lib/contracts";
 import { verdictLabel } from "@/lib/verdict-label";
 
 import { createMotionLoop, createMotionScope, useReducedMotion } from "./motion-runtime";
+import type { PlaybackTimeline } from "./use-playback-progress";
+import { paperBackgroundIndex, PAPER_MOTION } from "./paper-stage";
+import "./paper-stage.css";
 
 const reduced = reducedMotion;
 
@@ -54,9 +58,17 @@ export function VerdictFilm({
   }, [speed]);
   useEffect(() => {
     const el = seal.current;
-    const board = document
-      .querySelector(`[data-board="${clarification ? "C" : (verdict?.preferred ?? "B")}"]`)
-      ?.getBoundingClientRect();
+    const target = document.querySelector<HTMLElement>(
+      clarification ? ".c-result .tag" : `[data-board="${verdict?.preferred ?? "B"}"]`,
+    );
+    if (clarification && target) {
+      const rect = target.getBoundingClientRect();
+      if (rect.top < 12 || rect.bottom > innerHeight - 12)
+        target
+          .closest<HTMLElement>(".c-result")
+          ?.scrollIntoView({ block: "start", behavior: "instant" });
+    }
+    const board = target?.getBoundingClientRect();
     if (!el || !board || reducedMotion()) return onDone();
     el.style.left = `${board.left + board.width * 0.62}px`;
     el.style.top = `${board.top + Math.min(board.height * 0.42, 150)}px`;
@@ -69,7 +81,12 @@ export function VerdictFilm({
         { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.85 },
         { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 0 },
       ],
-      { duration: 2600, delay: 200, easing: "cubic-bezier(.19,1,.22,1)", fill: "both" },
+      {
+        duration: clarification ? PAPER_MOTION.seal : 2600,
+        delay: clarification ? 0 : 200,
+        easing: "cubic-bezier(.19,1,.22,1)",
+        fill: "both",
+      },
     );
     press.playbackRate = playbackRate.current;
     sealAnimation.current = press;
@@ -232,15 +249,7 @@ type Panel = {
 };
 
 /** Real records on panels set back in space, in rows by stage, the newest nearest. */
-export function RecordWall({
-  version,
-  shown,
-  currentId,
-  events,
-  directed = false,
-  replayProgress = 1,
-  replayAnswersVisible,
-}: {
+type RecordWallProps = {
   version: ArenaVersion;
   shown: Beat[];
   currentId?: string;
@@ -248,15 +257,43 @@ export function RecordWall({
   directed?: boolean;
   replayProgress?: number;
   replayAnswersVisible?: readonly RecordedAnswer[];
-}) {
+  timeline?: PlaybackTimeline;
+};
+
+function wallBackground(props: RecordWallProps) {
+  const current = props.shown.find((beat) => beat.id === props.currentId);
+  const held = !!current?.replayAction && (!!props.directed || (props.replayProgress ?? 1) < 1);
+  const lastModel = paperBackgroundIndex(props.shown, props.shown.length - 1, held);
+  return { held, length: lastModel + 1 };
+}
+
+function RecordWallView({
+  version,
+  shown,
+  currentId,
+  events,
+  directed = false,
+  replayProgress = 1,
+  replayAnswersVisible,
+}: RecordWallProps) {
   const reducePreference = useReducedMotion();
   const stage = useRef<HTMLDivElement>(null);
   const panels = useRef(new Map<string, Panel>());
-  const records = wallRecords(
+  const background = wallBackground({
     version,
     shown,
-    events,
     currentId,
+    events,
+    directed,
+    replayProgress,
+  });
+  const backgroundShown = shown.slice(0, background.length);
+  const backgroundCurrent = background.held ? backgroundShown.at(-1)?.id : currentId;
+  const records = wallRecords(
+    version,
+    backgroundShown,
+    events,
+    backgroundCurrent,
     replayProgress,
     replayAnswersVisible,
   );
@@ -271,12 +308,12 @@ export function RecordWall({
     if (!host) return;
     const counts = [0, 0, 0, 0];
     const list = latest.current;
-    const animate = directed && settled.current && !reduced();
+    const animate = directed && !background.held && settled.current && !reduced();
     settled.current = true;
     list.forEach((record, i) => {
       const col = counts[record.row]++;
       const rank = list.length - 1 - i;
-      const focus = record.id === currentId;
+      const focus = record.id === backgroundCurrent;
       let panel = panels.current.get(record.id);
       if (!panel) {
         const el = document.createElement("div");
@@ -334,7 +371,7 @@ export function RecordWall({
         panel.el.remove();
         panels.current.delete(id);
       }
-  }, [signature, currentId, directed, reducePreference]);
+  }, [signature, backgroundCurrent, directed, background.held, reducePreference]);
   // The wall fills the same share of the stage on any screen.
   useEffect(() => {
     const fit = () => {
@@ -347,6 +384,7 @@ export function RecordWall({
   }, []);
   useEffect(() => {
     const all = panels.current;
+    if (background.held) return;
     const place = (p: Panel) => {
       p.el.style.transform = `translate3d(${p.x - 180}px, ${p.y - 115}px, ${p.z}px)`;
     };
@@ -373,13 +411,32 @@ export function RecordWall({
       return moving;
     });
     return () => loop.dispose();
-  }, [signature, currentId, directed, reducePreference]);
+  }, [signature, backgroundCurrent, directed, background.held, reducePreference]);
   return (
-    <div className="c-wall" aria-hidden="true">
+    <div
+      className={`c-wall ${version.workflow === "clarification" ? "paper-record-wall" : ""}`}
+      data-background-held={background.held || undefined}
+      data-background-motion={background.held ? "held" : "active"}
+      aria-hidden="true"
+    >
       <div className="c-stage" ref={stage} />
     </div>
   );
 }
+
+export const RecordWall = memo(RecordWallView, (left, right) => {
+  const a = wallBackground(left);
+  const b = wallBackground(right);
+  return (
+    left.version === right.version &&
+    left.directed === right.directed &&
+    a.held === b.held &&
+    a.length === b.length &&
+    left.shown.slice(0, a.length).every((beat, index) => beat === right.shown[index]) &&
+    left.events.length === right.events.length &&
+    left.events.every((event, index) => event === right.events[index])
+  );
+});
 
 /** The record behind the step in front, so the card carries substance and not only a caption. */
 function detailsOf(
@@ -415,19 +472,7 @@ function detailsOf(
 const SHORT: Record<string, string> = { verify: "核验", judge: "裁判" };
 
 /** The chain of thought: every step so far stays in view, grouped by stage, the newest in front. */
-export function ChainDeck({
-  version,
-  beats,
-  index,
-  directed,
-  seeking = false,
-  lead,
-  speed = 1,
-  replayProgress = 1,
-  replayAnswersVisible,
-  reviewing,
-  onStep,
-}: {
+type ChainDeckProps = {
   version: ArenaVersion;
   beats: Beat[];
   index: number;
@@ -439,7 +484,23 @@ export function ChainDeck({
   replayAnswersVisible?: readonly RecordedAnswer[];
   reviewing: boolean;
   onStep: (index: number) => void;
-}) {
+  backgroundHeld?: boolean;
+};
+
+function ChainDeckView({
+  version,
+  beats,
+  index,
+  directed,
+  seeking = false,
+  lead,
+  speed = 1,
+  replayProgress = 1,
+  replayAnswersVisible,
+  reviewing,
+  onStep,
+  backgroundHeld = false,
+}: ChainDeckProps) {
   const reducePreference = useReducedMotion();
   const shown = beats.slice(0, index + 1);
   const front = useRef<HTMLDivElement>(null);
@@ -455,7 +516,7 @@ export function ChainDeck({
   const attack = current?.attack;
   const running = current?.stage === "attack" ? 1 : current?.stage === "verify" ? 2 : 3;
   useEffect(() => {
-    if (!front.current || !directed || reduced()) return;
+    if (!front.current || !directed || backgroundHeld || reduced()) return;
     const scope = createMotionScope(seeking ? "interaction" : "story");
     const animation = scope.animate(
       front.current,
@@ -483,7 +544,7 @@ export function ChainDeck({
     };
     // Only a new step brings a card in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id, reducePreference]);
+  }, [current?.id, backgroundHeld, reducePreference]);
   // Long records stay inside the card: the line being worked on is always the one in view.
   useEffect(() => {
     const body = front.current?.querySelector<HTMLElement>(".body");
@@ -648,11 +709,12 @@ export function ChainDeck({
                   <>
                     <small className="c-deck-summary-label">摘要 · 展开详情查看完整记录</small>
                     <ul>
-                      {detailsOf(version, beat, replayProgress, replayAnswersVisible).map(
-                        (line) => (
-                          <li key={line}>{line}</li>
-                        ),
-                      )}
+                      {(backgroundHeld
+                        ? ["本次操作在原补问纸面中展示。", "展开详情查看保存的来源。"]
+                        : detailsOf(version, beat, replayProgress, replayAnswersVisible)
+                      ).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
                     </ul>
                   </>
                 )}
@@ -665,8 +727,26 @@ export function ChainDeck({
   );
 }
 
+export const ChainDeck = memo(
+  ChainDeckView,
+  (left, right) =>
+    left.version === right.version &&
+    left.beats === right.beats &&
+    left.index === right.index &&
+    left.backgroundHeld === right.backgroundHeld &&
+    left.directed === right.directed &&
+    left.seeking === right.seeking &&
+    left.lead === right.lead &&
+    left.speed === right.speed &&
+    left.reviewing === right.reviewing &&
+    left.onStep === right.onStep &&
+    (!!left.backgroundHeld ||
+      (left.replayProgress === right.replayProgress &&
+        left.replayAnswersVisible === right.replayAnswersVisible)),
+);
+
 /** The record of the current step, always in clear view, written out as it happens. */
-export function LiveRecord({
+function LiveRecordView({
   version,
   beat,
   index,
@@ -677,6 +757,7 @@ export function LiveRecord({
   replayProgress = 1,
   replayAnswersVisible,
   onEvidence,
+  backgroundHeld = false,
 }: {
   version: ArenaVersion;
   beat: Beat | null;
@@ -688,6 +769,7 @@ export function LiveRecord({
   replayProgress?: number;
   replayAnswersVisible?: readonly RecordedAnswer[];
   onEvidence: (attack: Attack) => void;
+  backgroundHeld?: boolean;
 }) {
   const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -725,7 +807,7 @@ export function LiveRecord({
           <div key={`${i}:${line}`}>
             <Decode
               text={line}
-              active={directed}
+              active={directed && !backgroundHeld}
               origin={seeking ? "interaction" : "story"}
               delay={lead * speed + 160 + i * 110}
               speed={speed}
@@ -736,3 +818,20 @@ export function LiveRecord({
     </div>
   );
 }
+
+export const LiveRecord = memo(
+  LiveRecordView,
+  (left, right) =>
+    left.version === right.version &&
+    left.beat === right.beat &&
+    left.index === right.index &&
+    left.directed === right.directed &&
+    left.seeking === right.seeking &&
+    left.lead === right.lead &&
+    left.speed === right.speed &&
+    left.backgroundHeld === right.backgroundHeld &&
+    left.onEvidence === right.onEvidence &&
+    (!left.beat?.replayAction ||
+      (left.replayProgress === right.replayProgress &&
+        left.replayAnswersVisible === right.replayAnswersVisible)),
+);

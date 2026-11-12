@@ -1,0 +1,141 @@
+// Saved real-model simulation data. All API requests are blocked, with no provider calls.
+import { readFileSync } from "node:fs";
+import { expect, test, type Page } from "@playwright/test";
+import type { RecordedExamplePayload } from "../../src/lib/recorded-examples";
+import { buildClarificationReplay } from "../../src/lib/replay";
+import { playbackDuration } from "../../src/components/console/use-playback-progress";
+
+const payload = JSON.parse(
+  readFileSync("public/recorded-examples/personal-website.json", "utf8"),
+) as RecordedExamplePayload;
+const version = payload.arena.versions.find((entry) => entry.id === payload.arena.activeVersionId)!;
+const steps = buildClarificationReplay(version, payload.replayActions);
+const questionIndex = steps.findIndex(
+  (step) => step.replayAction?.kind === "questions" && step.replayAction.round === 2,
+);
+
+async function playQuestion(page: Page) {
+  const blocked: string[] = [];
+  await page.route("**/api/**", (route) => {
+    blocked.push(route.request().method() + " " + new URL(route.request().url()).pathname);
+    return route.abort();
+  });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/examples/personal-website");
+  await page.getByRole("button", { name: "暂停自动开始", exact: true }).click();
+  await page.getByRole("button", { name: "开始回看", exact: true }).click();
+  await page.getByRole("button", { name: `第 ${questionIndex} 步`, exact: true }).click();
+  const speed = page.getByRole("button", { name: "放映速度", exact: true });
+  await speed.click();
+  await speed.click();
+  await page.getByRole("button", { name: "继续放映", exact: true }).click();
+  await expect(page.locator(".c-time [aria-current=step]")).toHaveAttribute(
+    "aria-label",
+    `第 ${questionIndex + 1} 步`,
+  );
+  return blocked;
+}
+
+for (const width of [1440, 390]) {
+  test(`paper theater: scrolling uses continuous frames at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const blocked = await playQuestion(page);
+    const sample = await page.evaluate(
+      () =>
+        new Promise<{ gaps: number[]; frameGaps: number[] }>((resolve) => {
+          const start = performance.now();
+          let previousFrame = start;
+          let previousScroll = start;
+          let previousTop: number | undefined;
+          const gaps: number[] = [];
+          const frameGaps: number[] = [];
+          const tick = (time: number) => {
+            frameGaps.push(time - previousFrame);
+            previousFrame = time;
+            const body = document.querySelector<HTMLElement>(".replay-question-body");
+            const top = body?.scrollTop;
+            if (
+              top !== undefined &&
+              previousTop !== undefined &&
+              Math.abs(top - previousTop) >= 0.1
+            ) {
+              gaps.push(time - previousScroll);
+              previousScroll = time;
+            }
+            previousTop = top;
+            if (time - start < 4600) requestAnimationFrame(tick);
+            else resolve({ gaps, frameGaps });
+          };
+          requestAnimationFrame(tick);
+        }),
+    );
+    const sorted = sample.gaps.slice().sort((a, b) => a - b);
+    const p95 = sorted[Math.floor(sorted.length * 0.95)];
+    await testInfo.attach("continuous-scroll-frames", {
+      body: JSON.stringify({ width, p95, ...sample }),
+      contentType: "application/json",
+    });
+    expect(sample.gaps.length).toBeGreaterThanOrEqual(60);
+    // WebKit timestamps are integer milliseconds. Allow 1ms measurement rounding.
+    expect(p95).toBeLessThanOrEqual(34.4);
+    expect(blocked).toEqual([]);
+  });
+}
+
+test("paper theater: foreground playback leaves background settled and pause keeps its exact pose", async ({
+  page,
+}) => {
+  const blocked = await playQuestion(page);
+  await page.waitForTimeout(700);
+  const stage = page.locator(".c-stage3");
+  await expect(stage).toHaveAttribute("data-background-motion", "held");
+  const pose = () =>
+    page.locator(".c-rig, .c-world, .c-board").evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const style = getComputedStyle(node);
+        return [style.transform, style.translate, style.rotate];
+      }),
+    );
+  const first = await pose();
+  await page.waitForTimeout(700);
+  expect(await pose()).toEqual(first);
+  await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((node) => {
+    if (node instanceof HTMLButtonElement) node.click();
+  });
+  const progress = await page.locator(".c-root").getAttribute("data-replay-progress");
+  const scroll = await page.locator(".replay-question-body").evaluate((node) => node.scrollTop);
+  await page.waitForTimeout(400);
+  await expect(page.locator(".c-root")).toHaveAttribute("data-replay-progress", progress!);
+  expect(await page.locator(".replay-question-body").evaluate((node) => node.scrollTop)).toBe(
+    scroll,
+  );
+  expect(blocked).toEqual([]);
+});
+
+test("paper theater: an explicitly injected frame delay keeps active playback time accurate", async ({
+  page,
+}) => {
+  const blocked = await playQuestion(page);
+  const sample = await page.evaluate(async () => {
+    const root = document.querySelector<HTMLElement>(".c-root")!;
+    const before = { at: performance.now(), progress: Number(root.dataset.replayProgress) };
+    // This synthetic 180ms task tests the playback clock, not normal rendering performance.
+    const until = performance.now() + 180;
+    while (performance.now() < until) {
+      /* Deliberate browser-test load. */
+    }
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    return {
+      before,
+      after: { at: performance.now(), progress: Number(root.dataset.replayProgress) },
+    };
+  });
+  const activeTime =
+    (sample.after.progress - sample.before.progress) * playbackDuration(steps[questionIndex]);
+  expect(activeTime).toBeGreaterThanOrEqual((sample.after.at - sample.before.at) * 1.8 * 0.8);
+  expect(blocked).toEqual([]);
+});

@@ -1,8 +1,47 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Beat } from "./beats";
-import { createMotionLoop } from "./motion-runtime";
+import { createMotionLoop, motionNow } from "./motion-runtime";
+
+export interface PlaybackFrame {
+  stepId: string;
+  progress: number;
+  elapsed: number;
+  duration: number;
+  running: boolean;
+  settled: boolean;
+}
+
+export interface PlaybackTimeline {
+  read: () => PlaybackFrame;
+  subscribe: (listener: (frame: PlaybackFrame) => void) => () => void;
+}
+
+/** Imperative subscribers share every animation frame without rendering the console. */
+export function createPlaybackTimeline(initial: PlaybackFrame) {
+  let current = initial;
+  const listeners = new Set<(frame: PlaybackFrame) => void>();
+  return {
+    read: () => current,
+    subscribe(listener: (frame: PlaybackFrame) => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    publish(frame: PlaybackFrame) {
+      current = frame;
+      for (const listener of [...listeners]) listener(frame);
+    },
+  };
+}
+
+/** These boundaries change recorded facts. Motion between them belongs to the timeline. */
+const STATE_BOUNDARIES = [0.15, 0.2, 0.32, 0.45, 0.75, 0.8, 0.94, 1];
+export function playbackStateKey(progress: number) {
+  return STATE_BOUNDARIES.filter((at) => progress >= at).length;
+}
 
 /** Durations describe the reconstructed demonstration, never original user input timing. */
 export function playbackDuration(beat: Beat | null): number {
@@ -47,31 +86,64 @@ export function usePlaybackProgress({
 }) {
   const clock = useRef({ id: "", elapsed: 0 });
   const complete = useRef(onComplete);
-  const [sample, setSample] = useState({ id: "", progress: 0 });
-  useEffect(() => {
+  const [timeline] = useState(() =>
+    createPlaybackTimeline({
+      stepId,
+      progress: settled ? 1 : 0,
+      elapsed: settled ? duration : 0,
+      duration,
+      running,
+      settled,
+    }),
+  );
+  const stateKey = useSyncExternalStore(
+    timeline.subscribe,
+    () => {
+      const frame = timeline.read();
+      return frame.stepId === stepId ? playbackStateKey(frame.progress) : 0;
+    },
+    () => (settled ? STATE_BOUNDARIES.length : 0),
+  );
+  useLayoutEffect(() => {
     complete.current = onComplete;
   }, [onComplete]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (clock.current.id !== stepId) clock.current = { id: stepId, elapsed: 0 };
     const current = clock.current;
-    if (settled) {
-      current.elapsed = duration;
-      return;
-    }
+    if (settled) current.elapsed = duration;
+    const publish = () =>
+      timeline.publish({
+        stepId,
+        progress: current.elapsed / duration,
+        elapsed: current.elapsed,
+        duration,
+        running,
+        settled,
+      });
+    publish();
+    if (settled) return;
     if (!running || !stepId) return;
-    let published = -1;
-    const loop = createMotionLoop((_time, dt) => {
-      current.elapsed = Math.min(duration, current.elapsed + dt * 1000 * speed);
+    let previous = motionNow();
+    const loop = createMotionLoop((time) => {
+      // The shared physics loop caps dt for springs. Playback uses actual active elapsed time.
+      current.elapsed = Math.min(duration, current.elapsed + Math.max(0, time - previous) * speed);
+      previous = time;
       const progress = current.elapsed / duration;
-      if (progress - published >= 0.01 || progress === 1) {
-        published = progress;
-        setSample({ id: stepId, progress });
-      }
+      publish();
       if (progress < 1) return true;
       complete.current();
       return false;
     });
-    return () => loop.dispose();
-  }, [stepId, duration, speed, running, settled, queueRevision]);
-  return settled ? 1 : sample.id === stepId ? sample.progress : 0;
+    return () => {
+      loop.dispose();
+      current.elapsed = Math.min(
+        duration,
+        current.elapsed + Math.max(0, motionNow() - previous) * speed,
+      );
+    };
+  }, [stepId, duration, speed, running, settled, queueRevision, timeline]);
+  return {
+    progress: settled ? 1 : (STATE_BOUNDARIES[stateKey - 1] ?? 0),
+    timeline,
+  };
 }

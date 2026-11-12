@@ -23,9 +23,7 @@ export const DecisionItemSchema = z.object({
   required: z.boolean(),
   acceptance: z.array(z.string().min(1).max(300)).max(6),
   sourceRefs: z.array(z.string().max(160)).max(12),
-  provided: z
-    .object({ sourceRef: z.string().max(160), quote: z.string().min(2).max(1000) })
-    .optional(),
+  provided: z.object({ sourceRef: z.string().max(160), quote: z.string().max(1000) }).optional(),
 });
 export type DecisionItem = z.infer<typeof DecisionItemSchema>;
 export const DecompositionSchema = z.object({

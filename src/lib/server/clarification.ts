@@ -115,6 +115,13 @@ const SUMMARY_FIELD_LABELS: Partial<Record<keyof Challenge, string>> = {
   domain: "成果类型",
   materials: "材料",
 };
+function concreteProvidedQuote(quote: string) {
+  const text = quote.trim();
+  const undecided = /(?:没(?:有)?想好|尚未(?:确定|决定|明确)|还没(?:确定|决定))/;
+  const unknownReply =
+    /^(?:(?:我|我们|本人|目前|现在|暂时|具体|还|仍|尚|也|都)\s*)*不(?:知道|清楚|确定)|^(?:(?:目前|暂时|仍)\s*)*(?:未知|未定|待定|待确认)[，。！？,.!?\s]*$|^(?:i\s+(?:am\s+)?)?(?:unknown|undecided|tbd|not\s+(?:yet\s+)?(?:sure|decided|specified|known))(?:\b|$)/i;
+  return !!text && !undecided.test(text) && !unknownReply.test(text);
+}
 function resolved(
   draft: IntakeDraft,
   item: DecisionItem,
@@ -122,6 +129,7 @@ function resolved(
 ) {
   if (confirmed(decisionAnswer(draft, item))) return true;
   if (!item.provided) return false;
+  if (!item.provided.sourceRef.trim() || !concreteProvidedQuote(item.provided.quote)) return false;
   if (
     !submission &&
     SUMMARY_FIELDS_BY_TOPIC[item.topic].some((field) =>
@@ -336,6 +344,12 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       challenge: structuredClone(context.submit.challenge),
     };
   const state = structuredClone(draft.clarification ?? emptyClarification());
+  const priorReview = state.runs.findLast(
+    (run) => run.role === "C" && run.status === "completed",
+  )?.output;
+  const priorGapIds = new Set(
+    priorReview && "gaps" in priorReview ? priorReview.gaps.map((gap) => gap.id) : [],
+  );
   state.review = null;
   const round = draft.round + 1;
   const previousItems = structuredClone(state.items);
@@ -402,10 +416,27 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       throw error;
     }
   }
+  function pendingReviewItems(items: DecisionItem[], currentReview = false) {
+    return items.map((item) => {
+      if (confirmed(decisionAnswer(draft, item))) return item;
+      const userAnswer = draft.answers.find(
+        (answer) => answer.questionId === item.provided?.sourceRef,
+      );
+      const newUserSource =
+        item.provided &&
+        resolved(draft, item, context.submit) &&
+        ((context.submit && item.provided.sourceRef === "confirmed_summary") ||
+          confirmed(userAnswer));
+      if (!currentReview && (!priorGapIds.has(item.id) || newUserSource)) return item;
+      const { provided: omitted, ...pending } = item;
+      void omitted;
+      return pending;
+    });
+  }
   const decomposition = await role("A", DecompositionSchema, common);
   const incomingIds = new Set(decomposition.items.map((item) => item.id));
   state.retiredIds = state.retiredIds.filter((id) => !incomingIds.has(id));
-  mergeItems(state, decomposition.items, draft);
+  mergeItems(state, pendingReviewItems(decomposition.items), draft);
   const knownAnswers = new Set(
     draft.answers.filter((answer) => confirmed(answer)).map((answer) => answer.questionId),
   );
@@ -493,7 +524,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       conflicts: state.conflicts,
       submittedRequirements: context.submit ?? null,
     });
-    mergeItems(state, review.gaps, draft);
+    mergeItems(state, pendingReviewItems(review.gaps, true), draft);
     state.conflicts = [...new Set([...state.conflicts, ...review.conflicts])];
     const coverage =
       ["function", "content", "flow", "style"].every((topic) =>

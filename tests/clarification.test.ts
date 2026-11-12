@@ -1,7 +1,13 @@
 /** Real isolated SQLite and explicit model test doubles. No provider or public-search request. */
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DecisionItem, HandoffReview } from "../src/lib/clarification-contracts";
+import {
+  DecisionItemSchema,
+  type DecisionItem,
+  type HandoffReview,
+} from "../src/lib/clarification-contracts";
+import { toStrictToolSchema } from "../src/lib/server/strict-schema";
 import type { IntakeDraft, IntakeQuestion } from "../src/lib/intake-contracts";
 import { closeDb, db } from "../src/lib/server/db";
 import { createArena, newVersion, refreshRequirements } from "../src/lib/server/runtime";
@@ -853,6 +859,178 @@ describe("explicit clarification workflow with model test doubles", () => {
     delete legacy.clarification;
     refreshRequirements(legacy);
     expect(legacy.requirements?.confirmed.join("\n")).toContain("真实报名需要收集哪些信息");
+  });
+
+  it("expresses an empty provided object in the strict schema while retaining optional legacy reads", async () => {
+    const pending = {
+      ...item("style", "style", "视觉风格"),
+      provided: { sourceRef: "", quote: "" },
+    };
+    expect(DecisionItemSchema.parse(pending).provided).toEqual({ sourceRef: "", quote: "" });
+    expect(DecisionItemSchema.parse(item("style", "style", "视觉风格")).provided).toBeUndefined();
+    const strict = toStrictToolSchema(z.toJSONSchema(DecisionItemSchema));
+    expect(strict.required).toContain("provided");
+    const provided = (strict.properties as Record<string, Record<string, unknown>>).provided;
+    expect(provided.required).toEqual(["sourceRef", "quote"]);
+    const quote = (provided.properties as Record<string, Record<string, unknown>>).quote;
+    expect(new RegExp(String(quote.pattern)).test("")).toBe(true);
+    fixture.generate.mockImplementation(async (request) =>
+      response(
+        request.name === "clarification_decompose"
+          ? { summary: "明确未决来源", items: [pending], retired: [], suggestions: [] }
+          : {
+              summary: "先问未决风格",
+              questions: [question(pending, ["简洁正式", "活泼明亮"])],
+              conflicts: [],
+            },
+      ),
+    );
+    const draft = await next(create("准备一份PPT，视觉风格还没有决定"));
+    expect(draft.status).toBe("questions");
+    expect(draft.questions[0].id).toBe("style");
+  });
+
+  it("reproduces unknown provided quotes from the simulated-input real run using explicit test doubles", async () => {
+    // The provider output shape comes from real-model-smoke.json. Every call here is a test double.
+    const topics: DecisionItem["topic"][] = [
+      "scope",
+      "content",
+      "function",
+      "flow",
+      "style",
+      "materials",
+      "acceptance",
+    ];
+    const items = topics.map((topic, index) => ({
+      ...item(`smoke_${topic}`, topic, `确认${topic}的具体要求`, index ? ["smoke_scope"] : []),
+      provided: { sourceRef: "original_goal", quote: index ? "具体没想好" : "我想做一个个人网站" },
+    }));
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_decompose")
+        return response({
+          summary: "重现真实输出中的未决引用",
+          items,
+          retired: [],
+          suggestions: [],
+        });
+      const eligible = request.input.questionableItems as DecisionItem[];
+      return response({
+        summary: "对当前相关缺口生成选项",
+        questions: eligible
+          .slice(0, 3)
+          .map((entry) => question(entry, ["先提供具体要求", "补充参考材料"])),
+        conflicts: [],
+      });
+    });
+    const draft = await next(create("【真实输出复现用测试替身】我想做一个个人网站，具体没想好。"));
+    expect(draft.status).toBe("questions");
+    expect(draft.questions.length).toBeGreaterThan(0);
+    expect(draft.questions.length).toBeLessThanOrEqual(3);
+    expect(draft.questions.map((entry) => entry.id)).toContain("smoke_content");
+    expect(draft.clarification?.executionPrompt).not.toContain("- 具体没想好");
+    expect(draft.clarification?.specification).not.toContain("- 具体没想好");
+    expect(draft.clarification?.draftOnly).toBe(true);
+    expect(draft.answers).toEqual([]);
+  });
+
+  it.each(["保留不知道和跳过选项", "未知事项要独立列出"])(
+    "retains an explicit rule that mentions unknown states: %s",
+    async (quote) => {
+      const decision = {
+        ...item("unknown_rule", "flow", "未知信息处理规则"),
+        provided: { sourceRef: "original_goal", quote },
+      };
+      fixture.generate.mockImplementation(async (request) => {
+        if (request.name === "clarification_decompose")
+          return response({
+            summary: "按本人明确规则拆解",
+            items: [decision],
+            retired: [],
+            suggestions: [],
+          });
+        if (request.name === "clarification_options")
+          return response({ summary: "该规则已明确，无需重复提问", questions: [], conflicts: [] });
+        return response({
+          summary: "独立检查明确规则",
+          ready: true,
+          coverage: ["function", "content", "flow", "style"].map((topic) => ({
+            topic,
+            applicable: topic === "flow",
+            reason: "规则适用性检查",
+            decisionIds: topic === "flow" ? [decision.id] : [],
+          })),
+          gaps: [],
+          conflicts: [],
+        });
+      });
+      const draft = await next(create(`实现一个需求细化工具，${quote}。`));
+      expect(draft.status).toBe("summary");
+      expect(draft.questions).toEqual([]);
+      expect(draft.clarification?.review?.ready).toBe(true);
+      expect(draft.clarification?.specification).toContain(`- ${quote}`);
+      expect(draft.clarification?.executionPrompt).toContain(`- ${quote}`);
+    },
+  );
+
+  it("keeps C's actual gaps unresolved across retries instead of accepting the same provided quote again", async () => {
+    const scope = {
+      ...item("review_scope", "scope", "网站主要服务什么目的？"),
+      provided: { sourceRef: "original_goal", quote: "我想做一个个人网站" },
+    };
+    const content = {
+      ...item("review_content", "content", "需要展示什么内容？", [scope.id]),
+      provided: { sourceRef: "original_goal", quote: "具体没想好" },
+    };
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_decompose")
+        return response({
+          summary: "明确标注的真实输出形状复现",
+          items: [scope],
+          retired: [],
+          suggestions: [],
+        });
+      if (request.name === "clarification_options")
+        return response({
+          summary: "根据当前依赖提问",
+          questions: (request.input.questionableItems as DecisionItem[])
+            .slice(0, 3)
+            .map((entry) => question(entry, ["展示个人作品", "发布学习文章"])),
+          conflicts: [],
+        });
+      return response({
+        summary: "C指出成果类型还没有说明具体用途",
+        ready: false,
+        coverage: ["scope", "function", "content", "flow", "style"].map((topic) => ({
+          topic,
+          applicable: topic === "scope" || topic === "content",
+          reason: "测试重现查漏",
+          decisionIds: topic === "scope" ? [scope.id] : topic === "content" ? [content.id] : [],
+        })),
+        gaps: [scope, content],
+        conflicts: [],
+      });
+    });
+    let draft = await next(create("【真实输出复现用测试替身】我想做一个个人网站，具体没想好。"));
+    expect(draft.status).toBe("questions");
+    expect(draft.questions.map((entry) => entry.id)).toEqual([scope.id]);
+    expect(draft.clarification?.runs.map((run) => run.role)).toEqual(["A", "B", "C", "B"]);
+    expect(
+      draft.clarification?.items.find((entry) => entry.id === scope.id)?.provided,
+    ).toBeUndefined();
+    const recordedC = draft.clarification?.runs.find((run) => run.role === "C")?.output;
+    expect(recordedC && "gaps" in recordedC ? recordedC.gaps[0].provided?.quote : "").toBe(
+      scope.provided.quote,
+    );
+    draft = await next(draft);
+    expect(draft.questions.map((entry) => entry.id)).toEqual([scope.id]);
+    expect(draft.clarification?.executionPrompt).not.toContain(`- ${scope.provided.quote}`);
+    draft = await next(answer(draft, { [scope.id]: "展示个人作品" }));
+    expect(draft.questions.map((entry) => entry.id)).toContain(content.id);
+    expect(draft.questions.map((entry) => entry.id)).not.toContain(scope.id);
+    expect(draft.answers.find((entry) => entry.questionId === scope.id)?.confirmation).toBe(
+      "confirmed",
+    );
+    expect(draft.clarification?.executionPrompt).toContain("展示个人作品");
   });
 
   it("keeps a newer saved answer when a prior A response returns after the draft revision changed", async () => {

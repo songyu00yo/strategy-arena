@@ -4,14 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionItem, HandoffReview } from "../src/lib/clarification-contracts";
 import type { IntakeDraft, IntakeQuestion } from "../src/lib/intake-contracts";
 import { closeDb, db } from "../src/lib/server/db";
-import { createArena, newVersion } from "../src/lib/server/runtime";
+import { createArena, newVersion, refreshRequirements } from "../src/lib/server/runtime";
+import {
+  emptyClarification,
+  formatClarification,
+  runClarification,
+} from "../src/lib/server/clarification";
+import { ChallengeSchema } from "../src/lib/contracts";
 
 const fixture = vi.hoisted(() => ({ generate: vi.fn(), gap: false }));
 vi.mock("../src/lib/server/model", async (original) => ({
   ...(await original<typeof import("../src/lib/server/model")>()),
   generateStructured: fixture.generate,
 }));
-import { ModelCallError } from "../src/lib/server/model";
+import { ModelCallError, resolveModelConfig } from "../src/lib/server/model";
 import {
   analyzeIntake,
   createIntake,
@@ -601,6 +607,252 @@ describe("explicit clarification workflow with model test doubles", () => {
         ?.executionPrompt,
     ).toBe(original.clarification?.executionPrompt);
     expect(delivered.steps.filter((step) => step.versionId === current.id)).toEqual([]);
+  });
+
+  it("keeps first-candidate summary edits pending through analysis and confirms them only on explicit submission", async () => {
+    let draft = await answeredDraft();
+    expect(draft.confirmation?.summary).toBeUndefined();
+    const priorAnswers = structuredClone(draft.answers);
+    draft = updateIntake(draft.id, owner, {
+      revision: draft.revision,
+      summary: {
+        challenge: { ...draft.challenge!, preferences: "活泼明亮" },
+        assumptions: draft.assumptions,
+      },
+    });
+    expect(draft.confirmation?.history.at(-1)?.answers).toEqual(priorAnswers);
+    expect(draft.answers.find((entry) => entry.questionId === "style")).toMatchObject({
+      confirmation: "pending",
+      needsReconfirmation: true,
+    });
+    expect(draft.answers.find((entry) => entry.questionId === "purpose")?.confirmation).toBe(
+      "confirmed",
+    );
+    draft = await next(draft);
+    expect(draft.clarification?.draftOnly).toBe(true);
+    expect(draft.clarification?.review?.ready ?? false).toBe(false);
+    expect(draft.clarification?.executionPrompt).not.toContain("活泼明亮");
+    expect(draft.clarification?.executionPrompt).not.toContain("简洁正式");
+    expect(draft.clarification?.specification).toContain("偏好与风格的摘要修改尚待确认");
+    expect(draft.questions.map((entry) => entry.id)).toContain("style");
+    draft = await next(answer(draft, { style: "活泼明亮" }));
+    const submitted = await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    if (!("versions" in submitted))
+      throw new Error("Expected explicitly confirmed revised handoff");
+    const result = submitted.versions.find((version) => version.id === submitted.activeVersionId)!;
+    expect(result.clarification?.executionPrompt).toContain("活泼明亮");
+    expect(result.clarification?.executionPrompt).not.toContain("简洁正式");
+  });
+
+  it("does not use an old original-goal quote to approve a pending style edit", async () => {
+    const challenge = ChallengeSchema.parse({
+      goal: "制作一份PPT，采用简洁正式的风格",
+      preferences: "简洁正式",
+    });
+    const draft: IntakeDraft = {
+      ...create(challenge.goal),
+      challenge,
+      confirmation: {
+        history: [],
+        summary: { revision: 1, confirmedAt: new Date().toISOString(), challenge },
+        pendingSummaryFields: ["preferences"],
+      },
+      clarification: emptyClarification(),
+    };
+    const edited = {
+      ...challenge,
+      goal: "制作一份PPT并采用本次确认的风格",
+      preferences: "新的活泼风格",
+    };
+    async function execute(explicit: boolean) {
+      return runClarification(draft, {
+        operationId: randomUUID(),
+        revision: draft.revision,
+        config: resolveModelConfig(draft.modelMode),
+        finish: false,
+        editedFields: { preferences: edited.preferences },
+        ...(explicit ? { submit: { challenge: edited, assumptions: [] } } : {}),
+        call: async <T>(role: "A" | "B" | "C", request: { input: unknown }) => {
+          const decision = {
+            ...item("style", "style", "视觉风格"),
+            provided: {
+              sourceRef: explicit ? "confirmed_summary" : "original_goal",
+              quote: explicit ? edited.preferences : "简洁正式",
+            },
+          };
+          const value =
+            role === "A"
+              ? { summary: "测试A", items: [decision], retired: [], suggestions: [] }
+              : role === "B"
+                ? {
+                    summary: "测试B",
+                    questions: (
+                      request.input as { questionableItems: DecisionItem[] }
+                    ).questionableItems.map((entry) =>
+                      question(entry, ["简洁正式", "新的活泼风格"]),
+                    ),
+                    conflicts: [],
+                  }
+                : {
+                    summary: "测试C",
+                    ready: true,
+                    coverage: ["function", "content", "flow", "style"].map((topic) => ({
+                      topic,
+                      applicable: topic === "style",
+                      reason: "测试覆盖",
+                      decisionIds: topic === "style" ? ["style"] : [],
+                    })),
+                    gaps: [],
+                    conflicts: [],
+                  };
+          return value as T;
+        },
+        record: () => {},
+      });
+    }
+    const pending = await execute(false);
+    expect(pending.state.draftOnly).toBe(true);
+    expect(pending.state.review?.ready ?? false).toBe(false);
+    expect(pending.state.executionPrompt).not.toContain("已确认偏好 — 新的活泼风格");
+    expect(pending.state.specification).toContain("偏好与风格的摘要修改尚待确认");
+    const confirmed = await execute(true);
+    expect(confirmed.state.review?.ready).toBe(true);
+    expect(confirmed.state.executionPrompt).toContain("新的活泼风格");
+    expect(confirmed.state.executionPrompt).not.toContain("简洁正式");
+  });
+
+  it.each([
+    { field: "budget" as const, quote: "预算100元", value: 200 },
+    { field: "timeHours" as const, quote: "总工时10小时", value: 20 },
+    { field: "domain" as const, quote: "制作PPT", value: "work" as const },
+  ])(
+    "keeps pending $field changes from being resolved by an older original-goal quote",
+    async ({ field, quote, value }) => {
+      const challenge = ChallengeSchema.parse({
+        goal: "制作PPT，预算100元，总工时10小时",
+        budget: 100,
+        timeHours: 10,
+      });
+      const draft: IntakeDraft = {
+        ...create(challenge.goal),
+        challenge,
+        confirmation: {
+          history: [],
+          summary: { revision: 1, confirmedAt: new Date().toISOString(), challenge },
+          pendingSummaryFields: [field],
+        },
+      };
+      const decision = {
+        ...item("scope", "scope", "确认最新成果范围与投入"),
+        provided: { sourceRef: "original_goal", quote },
+      };
+      const result = await runClarification(draft, {
+        operationId: randomUUID(),
+        revision: draft.revision,
+        config: resolveModelConfig(draft.modelMode),
+        finish: false,
+        editedFields: { [field]: value },
+        call: async <T>(role: "A" | "B" | "C", request: { input: unknown }) => {
+          if (role === "A")
+            return {
+              summary: "测试原文来源",
+              items: [decision],
+              retired: [],
+              suggestions: [],
+            } as T;
+          if (role === "B")
+            return {
+              summary: "需要确认修改",
+              questions: (
+                request.input as { questionableItems: DecisionItem[] }
+              ).questionableItems.map((entry) => question(entry, ["确认修改", "进一步补充"])),
+              conflicts: [],
+            } as T;
+          throw new Error("Pending changes must not reach a ready handoff");
+        },
+        record: () => {},
+      });
+      expect(result.status).toBe("questions");
+      expect(result.state.draftOnly).toBe(true);
+      expect(result.state.executionPrompt).toContain("原始目标（相关修改待确认）");
+      expect(result.state.executionPrompt).not.toContain(`- ${quote}`);
+    },
+  );
+
+  it("exports every confirmed advanced summary field including zero while withholding pending or inferred values", () => {
+    // Stored zero-hour records remain readable. New inputs keep the existing positive-hour validator.
+    const summary = {
+      ...ChallengeSchema.parse({
+        goal: "准备一份已经确定范围的汇报文稿",
+        budget: 0,
+        timeHours: 12,
+        options: ["文字报告", "演示文稿"],
+        domain: "work",
+      }),
+      timeHours: 0,
+    };
+    const draft: IntakeDraft = {
+      ...create(summary.goal),
+      challenge: summary,
+      confirmation: {
+        history: [],
+        summary: { revision: 1, confirmedAt: new Date().toISOString(), challenge: summary },
+      },
+    };
+    const inferred = {
+      ...summary,
+      budget: 999,
+      timeHours: 888,
+      options: ["模型建议的备选"],
+      domain: "creation" as const,
+    };
+    const state = emptyClarification();
+    formatClarification(draft, state, inferred);
+    for (const output of [state.specification, state.executionPrompt]) {
+      expect(output).toContain("金额上限（人民币元） — 0");
+      expect(output).toContain("时间上限（小时） — 0");
+      expect(output).toContain("备选方案 — 文字报告、演示文稿");
+      expect(output).toContain("成果领域 — 工作业务");
+      expect(output).not.toContain("999");
+      expect(output).not.toContain("888");
+      expect(output).not.toContain("模型建议的备选");
+    }
+    draft.confirmation!.pendingSummaryFields = ["budget", "timeHours", "options", "domain"];
+    formatClarification(draft, state, inferred);
+    for (const label of ["金额上限（人民币元）", "时间上限（小时）", "备选方案", "成果领域"])
+      expect(state.executionPrompt).not.toContain(`已确认${label} —`);
+    expect(state.specification).toContain("金额的摘要修改尚待确认");
+    delete draft.confirmation!.summary;
+    draft.confirmation!.pendingSummaryFields = [];
+    formatClarification(draft, state, inferred);
+    expect(state.executionPrompt).not.toContain("金额上限（人民币元）");
+    expect(state.executionPrompt).not.toContain("时间上限（小时）");
+  });
+
+  it("omits retired answers from the new-mode API requirements while preserving legacy reading", async () => {
+    const draft = await answeredDraft("真实报名");
+    const snapshot = await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    if (!("versions" in snapshot)) throw new Error("Expected test-double snapshot");
+    const version = structuredClone(
+      snapshot.versions.find((entry) => entry.id === snapshot.activeVersionId)!,
+    );
+    version.clarification!.retiredIds = ["real_fields"];
+    version.intake!.confirmation!.summary!.challenge.constraints = "当前只交付界面演示";
+    refreshRequirements(version);
+    expect(version.requirements?.confirmed.join("\n")).not.toContain("真实报名需要收集哪些信息");
+    const legacy = structuredClone(version);
+    delete legacy.workflow;
+    delete legacy.clarification;
+    refreshRequirements(legacy);
+    expect(legacy.requirements?.confirmed.join("\n")).toContain("真实报名需要收集哪些信息");
   });
 
   it("keeps a newer saved answer when a prior A response returns after the draft revision changed", async () => {

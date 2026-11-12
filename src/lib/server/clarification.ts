@@ -95,6 +95,26 @@ function deferred(answer: RecordedAnswer | undefined) {
       !(Array.isArray(answer.value) ? answer.value.length : answer.value.trim()))
   );
 }
+const SUMMARY_FIELDS_BY_TOPIC: Record<DecisionItem["topic"], (keyof Challenge)[]> = {
+  scope: ["goal", "constraints", "options", "budget", "timeHours", "domain"],
+  function: ["constraints", "budget", "timeHours", "domain"],
+  content: ["constraints", "domain"],
+  flow: ["constraints", "timeHours"],
+  style: ["preferences"],
+  acceptance: ["constraints", "budget", "timeHours"],
+  materials: ["materials"],
+  authorization: ["constraints", "budget"],
+};
+const SUMMARY_FIELD_LABELS: Partial<Record<keyof Challenge, string>> = {
+  goal: "目标",
+  constraints: "要求",
+  preferences: "偏好与风格",
+  options: "备选方案",
+  budget: "金额",
+  timeHours: "时间",
+  domain: "成果类型",
+  materials: "材料",
+};
 function resolved(
   draft: IntakeDraft,
   item: DecisionItem,
@@ -102,6 +122,13 @@ function resolved(
 ) {
   if (confirmed(decisionAnswer(draft, item))) return true;
   if (!item.provided) return false;
+  if (
+    !submission &&
+    SUMMARY_FIELDS_BY_TOPIC[item.topic].some((field) =>
+      draft.confirmation?.pendingSummaryFields?.includes(field),
+    )
+  )
+    return false;
   const { sourceRef, quote } = item.provided;
   if (sourceRef === "original_goal") return draft.goal.includes(quote);
   if (sourceRef === "confirmed_summary") {
@@ -141,6 +168,37 @@ export function formatClarification(
   state: ClarificationState,
   challenge: Challenge,
 ) {
+  const pendingFields = new Set(draft.confirmation?.pendingSummaryFields ?? []);
+  const summary = draft.confirmation?.summary?.challenge;
+  const domains = {
+    learning: "学习成长",
+    life: "生活决策",
+    work: "工作业务",
+    creation: "内容创作",
+    general: "不限领域",
+  };
+  const summaryFields: Array<{
+    field: keyof Challenge;
+    label: string;
+    value: string | number | string[] | null | undefined;
+  }> = [
+    { field: "constraints", label: "要求", value: challenge.constraints },
+    { field: "preferences", label: "偏好", value: challenge.preferences },
+    { field: "budget", label: "金额上限（人民币元）", value: summary?.budget },
+    { field: "timeHours", label: "时间上限（小时）", value: summary?.timeHours },
+    { field: "options", label: "备选方案", value: summary?.options },
+    { field: "domain", label: "成果领域", value: summary ? domains[summary.domain] : undefined },
+  ];
+  const summaryLines = summaryFields
+    .filter(
+      ({ field, value }) => !pendingFields.has(field) && value !== null && value !== undefined,
+    )
+    .map(({ label, value }) => ({
+      label,
+      text: Array.isArray(value) ? value.join("、") : String(value),
+    }))
+    .filter(({ text }) => text.length > 0)
+    .map(({ label, text }) => `${label} — ${text}`);
   const formal = draft.answers.filter(
     (answer) =>
       confirmed(answer) &&
@@ -165,9 +223,9 @@ export function formatClarification(
     "",
   ];
   if (draft.confirmation?.summary || !state.draftOnly) {
-    lines.push("## 用户确认的摘要", `目标 — ${challenge.goal}`);
-    if (challenge.constraints) lines.push(`要求 — ${challenge.constraints}`);
-    if (challenge.preferences) lines.push(`偏好 — ${challenge.preferences}`);
+    lines.push("## 用户确认的摘要");
+    if (!pendingFields.has("goal")) lines.push(`目标 — ${challenge.goal}`);
+    lines.push(...summaryLines);
     lines.push("");
   }
   for (const [topic, heading] of Object.entries(headings)) {
@@ -177,7 +235,13 @@ export function formatClarification(
           ?.topic === topic,
     );
     const provided = activeItems(state)
-      .filter((item) => item.topic === topic && item.provided && resolved(draft, item))
+      .filter(
+        (item) =>
+          item.topic === topic &&
+          item.provided &&
+          !confirmed(decisionAnswer(draft, item)) &&
+          resolved(draft, item),
+      )
       .map((item) => item.provided!.quote);
     if (answers.length || provided.length)
       lines.push(
@@ -194,7 +258,12 @@ export function formatClarification(
     "## 未决与阻塞",
     ...(unresolved.length
       ? unresolved.map((item) => `- ${item.title}${item.required ? "（阻塞交接）" : "（未决）"}`)
-      : ["当前记录未列出未决事项。"]),
+      : pendingFields.size
+        ? []
+        : ["当前记录未列出未决事项。"]),
+    ...[...pendingFields].map(
+      (field) => `- ${SUMMARY_FIELD_LABELS[field] ?? field}的摘要修改尚待确认（阻塞交接）`,
+    ),
     ...state.conflicts.map((conflict) => `- 冲突 — ${conflict}`),
     "",
     "## 材料与来源",
@@ -214,16 +283,25 @@ export function formatClarification(
   state.specification = lines.join("\n");
   state.executionPrompt = [
     "依据当前版本用户确认的需求执行。",
-    `用户目标 — ${challenge.goal}`,
-    challenge.constraints ? `已确认要求 — ${challenge.constraints}` : "",
-    challenge.preferences ? `已确认偏好 — ${challenge.preferences}` : "",
+    pendingFields.size
+      ? `原始目标（相关修改待确认） — ${draft.goal}`
+      : `用户目标 — ${challenge.goal}`,
+    ...summaryLines.map((line) => `已确认${line}`),
     ...formal.map((answer) => `- ${formatAnswer(answer)}`),
     ...activeItems(state)
-      .filter((item) => item.provided && resolved(draft, item))
+      .filter(
+        (item) => item.provided && !confirmed(decisionAnswer(draft, item)) && resolved(draft, item),
+      )
       .map((item) => `- ${item.provided!.quote}`),
     "执行中遇到尚未确认的选择，请向用户提问。授权仅在明确同意的单项范围内生效。",
     ...(state.draftOnly
-      ? ["当前为草稿，以下事项仍待确认。", ...unresolved.map((item) => `- ${item.title}`)]
+      ? [
+          "当前为草稿，以下事项仍待确认。",
+          ...unresolved.map((item) => `- ${item.title}`),
+          ...[...pendingFields].map(
+            (field) => `- ${SUMMARY_FIELD_LABELS[field] ?? field}的摘要修改尚待确认`,
+          ),
+        ]
       : []),
   ]
     .filter(Boolean)
@@ -231,6 +309,32 @@ export function formatClarification(
 }
 
 export async function runClarification(draft: IntakeDraft, context: ClarificationContext) {
+  draft = structuredClone(draft);
+  const pendingFields = new Set<keyof Challenge>(
+    context.submit ? [] : (draft.confirmation?.pendingSummaryFields ?? []),
+  );
+  if (!context.submit) {
+    const confirmedSummary = draft.confirmation?.summary?.challenge;
+    for (const field of Object.keys(context.editedFields ?? {}) as (keyof Omit<
+      Challenge,
+      "materials"
+    >)[]) {
+      if (
+        JSON.stringify(context.editedFields?.[field]) !== JSON.stringify(confirmedSummary?.[field])
+      )
+        pendingFields.add(field);
+    }
+  }
+  draft.confirmation = {
+    ...(draft.confirmation ?? { history: [] }),
+    pendingSummaryFields: [...pendingFields],
+  };
+  if (context.submit)
+    draft.confirmation.summary = {
+      revision: context.revision,
+      confirmedAt: new Date().toISOString(),
+      challenge: structuredClone(context.submit.challenge),
+    };
   const state = structuredClone(draft.clarification ?? emptyClarification());
   state.review = null;
   const round = draft.round + 1;
@@ -243,6 +347,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
     confirmedSummary: context.submit ?? draft.confirmation?.summary,
     editedSummary: draft.challenge,
     editedFields: context.editedFields,
+    pendingSummaryFields: [...pendingFields],
     sources: draft.sources,
     previousItems: activeItems(state),
     retiredItems: state.items.filter((item) => previouslyRetired.has(item.id)),
@@ -411,6 +516,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       ready:
         review.ready &&
         coverage &&
+        !pendingFields.size &&
         !blocked &&
         !questions.length &&
         !state.conflicts.length &&

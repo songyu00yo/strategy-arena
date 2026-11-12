@@ -705,7 +705,7 @@ export function updateIntake(
           changedFields.push(key);
         }
       }
-      if (changedFields.length && draft.confirmation?.summary) {
+      if (changedFields.length) {
         rememberConfirmation(draft);
         draft.confirmation!.pendingSummaryFields = [
           ...new Set([...(draft.confirmation!.pendingSummaryFields ?? []), ...changedFields]),

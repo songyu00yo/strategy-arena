@@ -211,7 +211,11 @@ export function refreshRequirements(version: ArenaVersion) {
     }
   }
   const unresolved: string[] = [];
+  const retiredIds = new Set(
+    version.workflow === "clarification" ? (version.clarification?.retiredIds ?? []) : [],
+  );
   for (const answer of intake.answers) {
+    if (retiredIds.has(answer.question.decisionId ?? answer.questionId)) continue;
     const value = Array.isArray(answer.value) ? answer.value.join("、") : answer.value;
     if (answer.state === "answered" && answer.confirmation === "confirmed" && value.trim())
       confirmed.push(
@@ -378,7 +382,6 @@ export function createArena(
         options.revision,
       );
       draftBody.confirmation = version.intake.confirmation;
-      refreshRequirements(version);
       if (draftBody.workflow === "clarification" && draftBody.clarification) {
         version.workflow = "clarification";
         version.clarification = structuredClone(draftBody.clarification) as NonNullable<
@@ -396,9 +399,10 @@ export function createArena(
             run.role,
             run,
           );
-        if (version.requirements)
-          version.requirements.executionPrompt = version.clarification.executionPrompt;
       }
+      refreshRequirements(version);
+      if (version.clarification && version.requirements)
+        version.requirements.executionPrompt = version.clarification.executionPrompt;
     }
     if (version.workflow === "clarification") version.executionMode = "fixed";
     else if (executionMode === "agent")

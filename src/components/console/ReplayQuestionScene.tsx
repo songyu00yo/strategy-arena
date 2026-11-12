@@ -13,7 +13,7 @@ const LABELS = {
   answer: "回看这一项回答",
   round_confirm: "确认这一轮的回答",
   summary_submit: "确认摘要并继续查漏",
-  summary_confirm: "确认最终需求摘要",
+  summary_confirm: "摘要提交的确认结果",
   handoff: "交接确认需求与执行提示词",
 };
 
@@ -22,8 +22,8 @@ const BUTTONS = {
   answer: "继续梳理",
   round_confirm: "确认本轮回答并继续梳理",
   summary_submit: "确认摘要并继续查漏",
-  summary_confirm: "确认最终摘要",
-  handoff: "查看需求与执行提示词",
+  summary_confirm: "摘要确认已接受",
+  handoff: "需求交接记录已生成",
 };
 const EMPTY_CHOICES: string[] = [];
 
@@ -78,6 +78,8 @@ function previousAnswer(question: IntakeQuestion, answers: RecordedAnswer[]) {
       answer.questionId === question.id &&
       answer.question.title === question.title &&
       answer.question.type === question.type &&
+      answer.question.unit === question.unit &&
+      (answer.question.authorization ?? "") === (question.authorization ?? "") &&
       JSON.stringify(answer.question.options) === JSON.stringify(question.options),
   );
 }
@@ -95,6 +97,7 @@ export function ReplayQuestionScene({
   previousAnswers = [],
   progress = 1,
   playing = false,
+  speed = 1,
   seeking = false,
 }: {
   action: ReplayAction;
@@ -114,25 +117,28 @@ export function ReplayQuestionScene({
   const confirming = ["round_confirm", "summary_submit", "summary_confirm", "handoff"].includes(
     action.kind,
   );
+  const userConfirmation = action.kind === "round_confirm" || action.kind === "summary_submit";
   const targetQuestion = questions.find((question) => question.id === currentAnswer?.questionId);
   const choices =
     currentAnswer?.state === "answered" && Array.isArray(currentAnswer.value)
       ? currentAnswer.value
       : EMPTY_CHOICES;
-  const clickTimes = confirming
+  const clickTimes = userConfirmation
     ? [0.8]
     : choices.length
       ? choices.map((_, index) => 0.45 + index * (0.3 / choices.length))
       : [0.45];
+  const pressLength = choices.length ? Math.min(0.04, 0.15 / choices.length) : 0.05;
   const targetIndex = choices.length
-    ? Math.min(choices.length - 1, clickTimes.filter((time) => amount >= time).length)
+    ? Math.min(choices.length - 1, clickTimes.filter((time) => amount >= time + pressLength).length)
     : 0;
-  const moveStart = confirming || targetIndex === 0 ? 0.15 : clickTimes[targetIndex - 1];
-  const moveEnd = confirming ? 0.75 : clickTimes[targetIndex];
+  const moveStart =
+    userConfirmation || targetIndex === 0 ? 0.15 : clickTimes[targetIndex - 1] + pressLength;
+  const moveEnd = userConfirmation ? 0.75 : clickTimes[targetIndex];
   const movement = bounded((amount - moveStart) / (moveEnd - moveStart));
   const pressed =
-    !!(currentAnswer || confirming) &&
-    clickTimes.some((time) => amount >= time && amount < time + 0.05);
+    !!(currentAnswer || userConfirmation) &&
+    clickTimes.some((time) => amount >= time && amount < time + pressLength);
   const phase = amount < 0.2 ? "show" : amount < 0.8 ? "answer" : "settle";
   const closesGroup =
     action.kind === "round_confirm" ||
@@ -145,6 +151,7 @@ export function ReplayQuestionScene({
   const point = useRef({ actionId: "", x: 0, y: 0, originX: 0, originY: 0, placed: false });
   const measurePointer = useRef<() => void>(() => {});
   const currentQuestionId = currentAnswer?.questionId;
+  const followed = useRef({ id: "", playing: false, seeking: false, speed });
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -204,6 +211,44 @@ export function ReplayQuestionScene({
   }, [action.kind, amount, playing, seeking]);
 
   useLayoutEffect(() => {
+    const previous = followed.current;
+    const shouldFollow =
+      previous.id !== action.id ||
+      (!previous.playing && playing) ||
+      (!previous.seeking && seeking) ||
+      (playing && previous.speed !== speed);
+    followed.current = { id: action.id, playing, seeking, speed };
+    const element = root.current;
+    if (!element || !shouldFollow) return;
+    // Layout offsets keep this target stable while FLIP changes the painted rectangle.
+    let pageTop = 0;
+    for (
+      let node: HTMLElement | null = element;
+      node;
+      node = node.offsetParent as HTMLElement | null
+    )
+      pageTop += node.offsetTop;
+    for (
+      let parent = element.parentElement;
+      parent && parent !== document.body && parent !== document.documentElement;
+      parent = parent.parentElement
+    )
+      pageTop -= parent.scrollTop;
+    const viewport = window.visualViewport;
+    const viewTop = (viewport?.offsetTop ?? 0) + 12;
+    const viewBottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight) - 12;
+    const top = pageTop - scrollY;
+    if (top >= viewTop && top + element.offsetHeight <= viewBottom) return;
+    const scrolling = document.documentElement;
+    const previousBehavior = scrolling.style.scrollBehavior;
+    scrolling.style.scrollBehavior = "auto";
+    window.scrollTo({ left: scrollX, top: Math.max(0, pageTop - viewTop), behavior: "auto" });
+    scrolling.style.scrollBehavior = previousBehavior;
+    measureFlip.current();
+    measurePointer.current();
+  }, [action.id, playing, seeking, speed]);
+
+  useLayoutEffect(() => {
     const viewport = body.current;
     if (!viewport || !currentQuestionId) return;
     const fieldset = [...viewport.querySelectorAll<HTMLElement>("[data-question-id]")].find(
@@ -237,7 +282,7 @@ export function ReplayQuestionScene({
         return label?.querySelector<HTMLElement>("input") ?? label ?? null;
       };
       let target: HTMLElement | null = null;
-      if (confirming) target = element.querySelector<HTMLElement>("[data-replay-confirm]");
+      if (userConfirmation) target = element.querySelector<HTMLElement>("[data-replay-confirm]");
       else if (currentAnswer?.state === "unknown" || currentAnswer?.state === "skipped")
         target =
           fieldset?.querySelector<HTMLElement>(`[data-answer-state="${currentAnswer.state}"]`) ??
@@ -255,7 +300,7 @@ export function ReplayQuestionScene({
       const viewportBox = viewport.getBoundingClientRect();
       if (
         playing &&
-        !confirming &&
+        !userConfirmation &&
         amount >= 0.15 &&
         (targetBox.top < viewportBox.top + 12 || targetBox.bottom > viewportBox.bottom - 12)
       )
@@ -307,6 +352,7 @@ export function ReplayQuestionScene({
     targetIndex,
     targetQuestion,
     playing,
+    userConfirmation,
   ]);
 
   useLayoutEffect(() => {
@@ -447,22 +493,35 @@ export function ReplayQuestionScene({
               ? "交接记录已生成"
               : action.kind === "summary_submit"
                 ? "摘要已提交，继续查漏"
-                : "本次确认已记录"
+                : action.kind === "summary_confirm"
+                  ? "本次提交的摘要确认已接受"
+                  : "本次确认已记录"
             : action.kind === "answer"
               ? amount < 0.75
                 ? "正在填写，待确认"
                 : "已填写，待确认"
               : "按记录回看本轮操作"}
         </p>
-        <button
-          type="button"
-          disabled
-          data-replay-confirm
-          className={`primary-button ${confirming && confirmed ? "is-confirmed" : ""}`}
-        >
-          {confirming && confirmed && <Check size={16} />}
-          {BUTTONS[action.kind]}
-        </button>
+        {action.kind === "summary_confirm" || action.kind === "handoff" ? (
+          <span className="replay-question-acknowledgement">
+            {confirmed && <Check size={16} />}
+            {confirmed
+              ? BUTTONS[action.kind]
+              : action.kind === "handoff"
+                ? "正在生成交接记录"
+                : "正在接收摘要确认结果"}
+          </span>
+        ) : (
+          <button
+            type="button"
+            disabled
+            data-replay-confirm
+            className={`primary-button ${confirming && confirmed ? "is-confirmed" : ""}`}
+          >
+            {confirming && confirmed && <Check size={16} />}
+            {BUTTONS[action.kind]}
+          </button>
+        )}
       </footer>
       <div
         ref={pointer}

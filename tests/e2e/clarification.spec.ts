@@ -256,6 +256,14 @@ for (const width of [1440, 390]) {
             assumptions: [],
             usedSources: [],
             usage: runs.flatMap((run) => run.usage),
+            confirmation: {
+              summary: {
+                revision: draft.revision,
+                confirmedAt: date,
+                challenge: structuredClone(draft.challenge!),
+              },
+              history: [],
+            },
           },
           requirements: {
             confirmed: [

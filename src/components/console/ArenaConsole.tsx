@@ -109,18 +109,6 @@ export function ArenaConsole({
 }) {
   const beats = useMemo(() => beatsOf(version, replayActions), [version, replayActions]);
   const clarification = version.workflow === "clarification" ? version.clarification : undefined;
-  const repairedRunIds = new Set(
-    clarification?.runs.flatMap((repair) => {
-      const failed = clarification.runs.find((run) => run.id === repair.repairOf);
-      return repair.status === "completed" &&
-        failed?.status === "failed" &&
-        failed.role === repair.role &&
-        failed.round === repair.round &&
-        failed.basedOnRevision === repair.basedOnRevision
-        ? [failed.id]
-        : [];
-    }) ?? [],
-  );
   const last = beats.length - 1;
   const [cursor, setCursor] = useState<number | null>(startFromBeginning ? -1 : null);
   const [playing, setPlaying] = useState(startFromBeginning);
@@ -136,9 +124,24 @@ export function ArenaConsole({
   const [openStep, setOpenStep] = useState<number | null>(null);
   const paused = useMotionPaused();
   const nowPanel = useRef<HTMLElement>(null);
+  const resultPanel = useRef<HTMLElement>(null);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
+  const repairedRunIds = new Set(
+    shown.flatMap(({ clarificationRun: repair }) => {
+      const failed = shown.find(
+        ({ clarificationRun }) => clarificationRun?.id === repair?.repairOf,
+      )?.clarificationRun;
+      return repair?.status === "completed" &&
+        failed?.status === "failed" &&
+        failed.role === repair.role &&
+        failed.round === repair.round &&
+        failed.basedOnRevision === repair.basedOnRevision
+        ? [failed.id]
+        : [];
+    }),
+  );
   const seen = new Set(shown.map((b) => b.id));
   const live = version.status === "running" || version.status === "ready";
   const advanceReplay = useCallback(() => {
@@ -353,6 +356,17 @@ export function ArenaConsole({
   const directed = motion;
   // The result takes the lead once the game has reached it. Looking back at a step hides it.
   const atResult = hasResult && index === last && (!projection || projection.handoffComplete);
+  useEffect(() => {
+    if (!clarification || !atResult || playing) return;
+    const frame = requestAnimationFrame(() => {
+      const panel = resultPanel.current;
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      if (rect.top < 16 || rect.top + Math.min(rect.height, 120) > innerHeight - 16)
+        panel.scrollIntoView({ block: "start", behavior: "instant" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [clarification, atResult, playing]);
   // Looking back over a finished game, each step shows how it turned out.
   const reviewing = hasResult && !live && !playing;
   const canReturn = hasResult && index < last && !playing;
@@ -520,6 +534,7 @@ export function ArenaConsole({
         {hasResult && (
           <ResultRegion open={atResult} expanded={wholeResult}>
             <section
+              ref={resultPanel}
               className={`c-result ${wholeResult ? "whole" : ""}`}
               aria-label="结论"
               id="verdict"
@@ -674,7 +689,7 @@ export function ArenaConsole({
                         ? "current"
                         : "pending"
                 }
-                className={`seg ${group.bad ? "bad" : group.done ? "done" : ""} ${group.active ? "here" : ""}`}
+                className={`seg ${group.bad ? "bad" : group.done ? "done" : !clarification && version.stage === group.key ? "live" : ""} ${group.active ? "here" : ""}`}
                 style={{ flexGrow: Math.max(group.list.length, 2) }}
               >
                 <span>{group.label}</span>

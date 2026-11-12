@@ -230,10 +230,33 @@ describe("controlled recorded question scenes", () => {
     expect(html).not.toContain(later.value);
     const confirmation = { ...saved, kind: "summary_confirm" as const };
     expect(scene(confirmation, 0.79)).not.toContain("本次确认已记录");
-    expect(scene(confirmation, 0.8)).toContain("本次确认已记录");
+    expect(scene(confirmation, 0.8)).toContain("本次提交的摘要确认已接受");
+    expect(scene(confirmation, 0.8)).not.toContain("data-replay-confirm");
+    expect(scene(confirmation, 0.8)).not.toContain('data-pressed="true"');
+    expect(scene(action({ kind: "handoff", questions: undefined }), 0.8)).not.toContain(
+      'data-pressed="true"',
+    );
     expect(
       scene(action({ kind: "summary_submit", questions: undefined, answers: undefined }), 1),
     ).toContain("这次操作未保存完整摘要");
+  });
+
+  it("does not inherit a prior confirmed answer across unit or authorization changes", () => {
+    const original = question({ unit: "次", authorization: "仅比较展示方案" });
+    const saved = answer(original);
+    for (const changed of [
+      question({ unit: "人", authorization: original.authorization }),
+      question({ unit: original.unit, authorization: "允许修改账户设置" }),
+    ]) {
+      const html = scene(
+        action({ kind: "questions", questions: [changed], answers: undefined }),
+        1,
+        [saved],
+      );
+      expect(html).not.toContain('checked=""');
+      expect(html).not.toContain('data-confirmation="confirmed"');
+      expect(html).toContain("待回答");
+    }
   });
 
   it("keeps the complete answer out of live step text until its playback action is accepted", () => {

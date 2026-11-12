@@ -126,6 +126,49 @@ test("normal animation: pausing a newly entered B card leaves its text readable"
   expect(forbidden).toEqual([]);
 });
 
+test("explicit synthetic fixture: a later successful repair cannot hide the failure being replayed", async ({
+  page,
+}) => {
+  const { payload } = recorded("personal-website");
+  const snapshot = structuredClone(payload.arena);
+  const version = snapshot.versions.find((entry) => entry.id === snapshot.activeVersionId)!;
+  const originalA = version.clarification!.runs.find((run) => run.role === "A")!;
+  const originalB = version.clarification!.runs.find((run) => run.role === "B")!;
+  const failed = {
+    ...originalB,
+    id: "synthetic-failed-review",
+    status: "failed" as const,
+    summary: "【测试替身】第一次选项审查失败",
+    output: { error: "【测试替身】响应格式不合法" },
+  };
+  const repaired = { ...originalB, id: "synthetic-repaired-review", repairOf: failed.id };
+  version.clarification = {
+    ...version.clarification!,
+    runs: [originalA, failed, repaired],
+    rounds: [],
+    review: null,
+    next: "questions",
+    specification: "",
+    executionPrompt: "",
+  };
+  if (version.intake) version.intake.confirmation = undefined;
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.route("**/api/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/health")
+      return route.fulfill({ json: { status: "ok", model: snapshot.model, accessGranted: true } });
+    if (path === `/api/arenas/${snapshot.id}`) return route.fulfill({ json: snapshot });
+    return route.fulfill({ status: 404, json: { error: "Explicit synthetic fixture boundary" } });
+  });
+  await page.goto(`/?arena=${snapshot.id}`);
+  await expect(page.locator(".c-root")).toBeVisible();
+  await go(page, 1);
+  await expect(page.locator('.c-time [data-round="1"]')).toHaveAttribute("data-state", "failed");
+  await expect(page.locator(".c-board-B .c-board-body")).toContainText(failed.summary);
+  await go(page, 2);
+  await expect(page.locator('.c-time [data-round="1"]')).toHaveAttribute("data-state", "passed");
+});
+
 test("normal animation: selection, pause, modal, speed and resume share the same action clock", async ({
   page,
 }) => {
@@ -164,4 +207,202 @@ test("normal animation: selection, pause, modal, speed and resume share the same
   );
   await expect(metric(page, "已确认")).toHaveText("1");
   expect(forbidden).toEqual([]);
+});
+
+for (const width of [1440, 390]) {
+  test(`normal animation: final handoff brings the original result into view at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const { steps } = recorded("personal-website");
+    const forbidden = await openReplay(page, "personal-website");
+    await go(page, steps.length - 2);
+    await page.getByRole("button", { name: "继续放映", exact: true }).click();
+    await expect(page.locator(".c-root")).toHaveClass(/at-result/, { timeout: 15000 });
+    await expect(
+      page.getByRole("heading", { name: "需求说明与执行提示词", exact: true }),
+    ).toBeInViewport();
+    await expect(page.locator(".c-root")).not.toHaveClass(/theater/);
+    expect(forbidden).toEqual([]);
+  });
+}
+
+test("normal animation: all three speeds show the same mobile selection and confirmation", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { steps } = recorded("personal-website");
+  const forbidden = await openReplay(page, "personal-website");
+  const questionIndex = steps.findIndex((step) => step.replayAction?.kind === "questions");
+  const saved = steps.find((step) => step.replayAction?.kind === "answer")!.replayAction!
+    .answers![0];
+  const root = page.locator(".c-root");
+  const scene = page.getByRole("region", { name: "补问过程回放", exact: true });
+  for (const speed of ["慢速", "常速", "快速"]) {
+    await go(page, questionIndex);
+    const control = page.getByRole("button", { name: "放映速度", exact: true });
+    for (let click = 0; click < 3 && (await control.textContent()) !== speed; click++)
+      await control.click();
+    await expect(control).toHaveText(speed);
+    await page.getByRole("button", { name: "继续放映", exact: true }).click();
+    await expect(root).toHaveAttribute("data-replay-kind", "answer");
+    await page.waitForFunction(
+      () => Number(document.querySelector(".c-root")?.getAttribute("data-replay-progress")) >= 0.5,
+    );
+    await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((button) => {
+      if (button instanceof HTMLButtonElement) button.click();
+    });
+    await expect(scene.getByLabel(String(saved.value), { exact: true })).toBeChecked();
+    await expect(scene.locator(".replay-question-heading")).toBeInViewport({ ratio: 1 });
+    await expect(scene.locator(".replay-question-footer")).toBeInViewport({ ratio: 1 });
+    await expect(metric(page, "已确认")).toHaveText("0");
+    await page.getByRole("button", { name: "继续放映", exact: true }).click();
+    await expect(root).toHaveAttribute("data-replay-kind", "round_confirm", { timeout: 8000 });
+    await page.waitForFunction(
+      () => Number(document.querySelector(".c-root")?.getAttribute("data-replay-progress")) >= 0.84,
+    );
+    await expect(metric(page, "已确认")).toHaveText("1");
+    await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((button) => {
+      if (button instanceof HTMLButtonElement) button.click();
+    });
+  }
+  expect(forbidden).toEqual([]);
+});
+
+// Actual mobile controls scroll the rail into view before dispatching their click.
+// The replay must bring its stable, unfolded paper back into the viewport afterward.
+test("normal animation: mobile seek and resume keep the paper and each pressed control on screen", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const scenario of [
+    { slug: "personal-website", type: "single" },
+    { slug: "personal-website", type: "multiple" },
+    { slug: "event-registration", type: "text" },
+    { slug: "personal-website", type: "summary_submit" },
+  ] as const) {
+    const { steps } = recorded(scenario.slug);
+    const forbidden = await openReplay(page, scenario.slug);
+    const index = steps.findIndex(({ replayAction: action }) =>
+      scenario.type === "summary_submit"
+        ? action?.kind === "summary_submit"
+        : action?.kind === "answer" &&
+          action.answers?.[0].state === "answered" &&
+          action.answers[0].question.type === scenario.type,
+    );
+    expect(index).toBeGreaterThan(0);
+    const action = steps[index].replayAction!;
+    const saved = action.answers?.[0];
+    await go(page, index);
+    const scene = page.getByRole("region", { name: "补问过程回放", exact: true });
+    await expect(scene.locator(".replay-question-heading")).toBeInViewport({ ratio: 1 });
+    await expect(scene.locator(".replay-question-footer")).toBeInViewport({ ratio: 1 });
+    const labelOpacity = await scene
+      .locator("fieldset:disabled label")
+      .evaluateAll((labels) => labels.map((label) => Number(getComputedStyle(label).opacity)));
+    expect(labelOpacity.every((value) => value === 1)).toBe(true);
+
+    await go(page, index - 1);
+    // Use the real click so Playwright's focus/scroll behavior reproduces the reported rail path.
+    await page.getByRole("button", { name: "继续放映", exact: true }).click();
+    const pressed = await page.waitForFunction(
+      ({ step, questionId, values, summary }) => {
+        const root = document.querySelector(".c-root");
+        if (
+          root?.querySelector(".c-time [aria-current=step]")?.getAttribute("aria-label") !==
+          `第 ${step} 步`
+        )
+          return null;
+        const paper = root.querySelector<HTMLElement>(".replay-question-scene");
+        const pointer = paper?.querySelector<HTMLElement>(
+          '.replay-question-pointer[data-pressed="true"]',
+        );
+        if (!paper || !pointer || getComputedStyle(pointer).visibility === "hidden") return null;
+        const progress = Number(root.getAttribute("data-replay-progress"));
+        const fieldset = [...paper.querySelectorAll<HTMLElement>("[data-question-id]")].find(
+          (field) => field.dataset.questionId === questionId,
+        );
+        let target: HTMLElement | null = null;
+        if (summary) target = paper.querySelector<HTMLElement>("[data-replay-confirm]");
+        else if (values.length) {
+          const selectedIndex = Math.max(
+            0,
+            values.filter((_, i) => progress >= 0.45 + i * (0.3 / values.length)).length - 1,
+          );
+          const label = [
+            ...(fieldset?.querySelectorAll<HTMLElement>("[data-answer-option]") ?? []),
+          ].find((option) => option.dataset.answerOption === values[selectedIndex]);
+          target = label?.querySelector<HTMLElement>("input") ?? null;
+        } else target = fieldset?.querySelector<HTMLElement>("[data-answer-field]") ?? null;
+        if (!target) return null;
+        const header = paper
+          .querySelector<HTMLElement>(".replay-question-heading")!
+          .getBoundingClientRect();
+        const footer = paper
+          .querySelector<HTMLElement>(".replay-question-footer")!
+          .getBoundingClientRect();
+        const cursor = pointer.getBoundingClientRect();
+        const box = target.getBoundingClientRect();
+        return {
+          header: { top: header.top, bottom: header.bottom },
+          footer: { top: footer.top, bottom: footer.bottom },
+          tip: { x: cursor.left, y: cursor.top },
+          target: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+          width: innerWidth,
+          height: innerHeight,
+        };
+      },
+      {
+        step: index + 1,
+        questionId: saved?.questionId,
+        values:
+          saved && (saved.question.type === "single" || saved.question.type === "multiple")
+            ? Array.isArray(saved.value)
+              ? saved.value
+              : [saved.value]
+            : [],
+        summary: scenario.type === "summary_submit",
+      },
+    );
+    const frame = await pressed.jsonValue();
+    if (!frame) throw new Error("No pressed replay control frame was captured.");
+    expect(frame.header.top).toBeGreaterThanOrEqual(0);
+    expect(frame.header.bottom).toBeLessThanOrEqual(frame.height);
+    expect(frame.footer.top).toBeGreaterThanOrEqual(0);
+    expect(frame.footer.bottom).toBeLessThanOrEqual(frame.height);
+    expect(frame.tip.x).toBeGreaterThanOrEqual(0);
+    expect(frame.tip.x).toBeLessThanOrEqual(frame.width);
+    expect(frame.tip.y).toBeGreaterThanOrEqual(0);
+    expect(frame.tip.y).toBeLessThanOrEqual(frame.height);
+    expect(frame.tip.x).toBeGreaterThanOrEqual(frame.target.left - 3);
+    expect(frame.tip.x).toBeLessThanOrEqual(frame.target.right + 3);
+    expect(frame.tip.y).toBeGreaterThanOrEqual(frame.target.top - 3);
+    expect(frame.tip.y).toBeLessThanOrEqual(frame.target.bottom + 3);
+
+    if (scenario.type === "single") {
+      await page.getByRole("button", { name: "放映速度", exact: true }).click();
+      await expect(scene.locator(".replay-question-heading")).toBeInViewport({ ratio: 1 });
+      await expect(scene.locator(".replay-question-footer")).toBeInViewport({ ratio: 1 });
+    }
+
+    await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((button) => {
+      if (button instanceof HTMLButtonElement) button.click();
+    });
+    const manual = await page.evaluate(async () => {
+      const html = document.documentElement;
+      const original = html.style.scrollBehavior;
+      html.style.scrollBehavior = "auto";
+      window.scrollTo({ top: 0, behavior: "auto" });
+      html.style.scrollBehavior = original;
+      const top = scrollY;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      return { before: top, after: scrollY };
+    });
+    expect(manual.after).toBe(manual.before);
+    expect(forbidden).toEqual([]);
+  }
 });

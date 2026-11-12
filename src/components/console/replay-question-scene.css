@@ -3,7 +3,7 @@
   --gi-muted: var(--quiet, #656058);
   --gi-line: var(--line, #d2cbc0);
   position: absolute;
-  z-index: 12;
+  z-index: 24;
   inset: 8px;
   display: flex;
   flex-direction: column;
@@ -73,8 +73,8 @@
 .replay-question-scene .gi-question {
   margin-bottom: 6px;
 }
-.replay-question-scene fieldset:disabled,
-.replay-question-scene fieldset:disabled :is(button, input, textarea) {
+.console-shell .replay-question-scene fieldset:disabled,
+.console-shell .replay-question-scene fieldset:disabled :is(button, input, textarea, label) {
   opacity: 1;
   cursor: default;
 }
@@ -115,6 +115,12 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+.replay-question-acknowledgement {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
 }
 .replay-question-footer button:disabled {
   opacity: 1;

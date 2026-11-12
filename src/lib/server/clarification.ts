@@ -551,9 +551,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
           !entry.applicable ||
           (entry.decisionIds.length > 0 &&
             entry.decisionIds.every((decisionId) =>
-              activeItems(state).some(
-                (item) => item.id === decisionId && item.topic === entry.topic,
-              ),
+              activeItems(state).some((item) => item.id === decisionId),
             )),
       );
     const blocked = activeItems(state).some((item) => !resolved(draft, item, context.submit));

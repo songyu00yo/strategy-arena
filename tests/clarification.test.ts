@@ -544,6 +544,56 @@ describe("explicit clarification workflow with model test doubles", () => {
     },
   );
 
+  it("accepts an already confirmed decision that covers several review topics", async () => {
+    const draft = await answeredDraft();
+    fixture.generate.mockImplementation(async (request) => {
+      const value = modelValue(request.name, request.input);
+      if (request.name !== "clarification_review") return response(value);
+      return response({
+        ...value,
+        ready: true,
+        coverage: ["function", "content", "flow", "style"].map((topic) => ({
+          topic,
+          applicable: true,
+          reason: "真实PPT与说明文档覆盖形状的测试替身，确认要求可跨分类引用",
+          decisionIds: ["purpose", "style"],
+        })),
+      });
+    });
+    const result = await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    expect("versions" in result).toBe(true);
+    expect(getIntake(draft.id, owner).clarification?.review?.ready).toBe(true);
+  });
+
+  it("rejects review coverage that cites a nonexistent decision", async () => {
+    const draft = await answeredDraft();
+    fixture.generate.mockImplementation(async (request) => {
+      const value = modelValue(request.name, request.input);
+      if (request.name !== "clarification_review") return response(value);
+      return response({
+        ...value,
+        ready: true,
+        coverage: ["function", "content", "flow", "style"].map((topic) => ({
+          topic,
+          applicable: true,
+          reason: "明确标注的无效引用测试替身",
+          decisionIds: ["missing_decision"],
+        })),
+      });
+    });
+    const result = await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    expect("versions" in result).toBe(false);
+    expect(getIntake(draft.id, owner).clarification?.review?.ready).toBe(false);
+  });
+
   it("blocks formal handoff when C claims readiness without the required topic coverage", async () => {
     const draft = await answeredDraft();
     fixture.generate.mockImplementation(async (request) => {

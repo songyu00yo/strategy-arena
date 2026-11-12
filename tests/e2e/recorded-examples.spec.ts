@@ -123,7 +123,7 @@ for (const example of RECORDED_EXAMPLES) {
   }
 }
 
-test("homepage offers exactly the three new clarification examples and the exact new prompt", async ({
+test("homepage offers all four configured clarification examples and the exact new prompt", async ({
   page,
   baseURL,
 }) => {
@@ -136,7 +136,7 @@ test("homepage offers exactly the three new clarification examples and the exact
   );
   await page.getByRole("button", { name: "先看需求梳理示例", exact: true }).click();
   const gallery = page.getByRole("dialog", { name: "先看需求梳理示例", exact: true });
-  await expect(gallery.getByRole("link")).toHaveCount(3);
+  await expect(gallery.getByRole("link")).toHaveCount(RECORDED_EXAMPLES.length);
   for (const example of RECORDED_EXAMPLES)
     await expect(gallery.getByRole("heading", { name: example.title, exact: true })).toBeVisible();
   await expect(gallery).toContainText("真实模型运行的模拟案例");

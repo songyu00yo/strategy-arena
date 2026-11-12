@@ -21,6 +21,12 @@ export const NEW_EXAMPLES = [
     title: "说明文档，逐步明确结构与交付",
     direction: "说明文档",
   },
+  {
+    folder: "event-registration",
+    slug: "event-registration",
+    title: "活动报名页，逐步明确流程与范围",
+    direction: "活动报名页",
+  },
 ] as const;
 
 interface CompletedCaseRecord {

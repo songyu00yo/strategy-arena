@@ -30,7 +30,7 @@ function inspect(value: unknown) {
 }
 
 describe("completed real-model clarification simulations", () => {
-  it("publishes only the three new cases and removes the four old public data files", () => {
+  it("publishes all four configured cases and removes the four old public data files", () => {
     expect(RECORDED_EXAMPLES.map((item) => item.slug)).toEqual(
       NEW_EXAMPLES.map((item) => item.slug),
     );

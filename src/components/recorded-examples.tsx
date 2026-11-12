@@ -2,7 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ArrowUpRight, BookOpen, BriefcaseBusiness, Code2 } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  BookOpen,
+  BriefcaseBusiness,
+  CalendarDays,
+  Code2,
+} from "lucide-react";
 import { RECORDED_EXAMPLES } from "@/lib/recorded-examples";
 import { MODEL_CATALOG } from "@/lib/model-catalog";
 import { examplePickerRequested } from "@/lib/example-navigation";
@@ -13,6 +20,7 @@ const ICONS: Record<string, typeof BookOpen> = {
   "personal-website": Code2,
   presentation: BriefcaseBusiness,
   "user-guide": BookOpen,
+  "event-registration": CalendarDays,
 };
 
 function ExampleGallery() {

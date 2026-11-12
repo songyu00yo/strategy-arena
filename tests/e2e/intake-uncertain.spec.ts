@@ -82,7 +82,7 @@ test("explicit UI fixture: restored uncertain draft blocks mutations and model c
     return route.fulfill({ json: next });
   });
   await page.goto("/");
-  const intake = page.getByRole("region", { name: "准备一场推演", exact: true });
+  const intake = page.locator(".guided-intake");
   const recovery = intake.getByRole("region", { name: "分析暂停", exact: true });
   await expect(recovery.getByRole("alert")).toContainText("暂时没有收到完整结果");
   await expect(recovery.getByRole("alert")).toContainText("不会自动重试");
@@ -191,7 +191,7 @@ test("explicit UI fixture: a newly uncertain analysis cannot be replayed after r
   await page.locator(".gi-composer").dispatchEvent("submit");
   await page.reload();
   await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeDisabled();
-  await expect(page.getByRole("region", { name: "准备一场推演" })).toContainText("USD $0.0800");
+  await expect(page.locator(".guided-intake")).toContainText("USD $0.0800");
   await page.locator(".gi-composer").dispatchEvent("submit");
   await page.waitForTimeout(1200);
   expect(analyzes).toBe(1);

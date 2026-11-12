@@ -516,9 +516,9 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
   await expect(page.getByText("共 21 页，请先选择最多 20 页")).toBeVisible();
   await page.getByLabel("fixture-long.pdf 的页码", { exact: true }).fill("1-21");
   await page.getByRole("button", { name: "读取所选页", exact: true }).click();
-  await expect(
-    page.getByRole("region", { name: "准备一场推演", exact: true }).getByRole("alert"),
-  ).toContainText("一次最多选择 20 页");
+  await expect(page.locator(".guided-intake").getByRole("alert")).toContainText(
+    "一次最多选择 20 页",
+  );
   expect(selections).toEqual([]);
   await page.getByLabel("fixture-long.pdf 的页码", { exact: true }).fill("1-2, 8");
   await page.getByRole("button", { name: "读取所选页", exact: true }).click();

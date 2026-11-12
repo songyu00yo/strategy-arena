@@ -85,7 +85,9 @@ test("real unconfigured homepage explains missing key and prevents starting a pa
   await expect(page.getByRole("button", { name: "模型待配置" })).toBeVisible();
   await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeDisabled();
   await expect(
-    page.getByText("配置完成前，新的推演不会发起收费调用。", { exact: false }),
+    page.getByText("你可以先看需求梳理示例。模型配置完成后才能开始新的梳理。", {
+      exact: true,
+    }),
   ).toBeVisible();
 });
 

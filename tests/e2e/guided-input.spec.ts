@@ -537,7 +537,7 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  const advanced = page.getByRole("button", { name: "预算、时间与备选方案", exact: true });
+  const advanced = page.getByRole("button", { name: "预算、时间与已有想法", exact: true });
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByLabel("可投入金额（人民币）", { exact: true })).toBeVisible();

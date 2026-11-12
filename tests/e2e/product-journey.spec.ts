@@ -96,8 +96,9 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
         });
       if (path === "/api/intakes" && method === "POST") {
         const body = request.postDataJSON();
-        expect(body).toEqual({ goal, modelMode: "gpt-6.1-terra" });
-        draft = fixtureIntake({ ...body, id: draft.id });
+        expect(body).toEqual({ goal, modelMode: "gpt-6.1-terra", workflow: "clarification" });
+        // Keep this existing five-stage fixture on the legacy record contract.
+        draft = fixtureIntake({ goal: body.goal, modelMode: body.modelMode, id: draft.id });
         return route.fulfill({ status: 201, json: draft });
       }
       if (path === `/api/intakes/${draft.id}/attachments` && method === "POST") {

@@ -2,10 +2,19 @@
 import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
+import type { ClarificationState } from "@/lib/clarification-contracts";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
-import { latestShownRevision, nameOf, outputOf, type Beat } from "./beats";
+import {
+  beatName,
+  clarificationLines,
+  latestShownRevision,
+  nameOf,
+  outputOf,
+  stageName,
+  type Beat,
+} from "./beats";
 import { Decode, reducedMotion, ROUTE_COLOR } from "./effects";
-import { STAGE_LABELS, type Stage } from "@/lib/contracts";
+import { type Stage } from "@/lib/contracts";
 import { verdictLabel } from "@/lib/verdict-label";
 
 import { createMotionLoop, createMotionScope, useReducedMotion } from "./motion-runtime";
@@ -14,13 +23,21 @@ const reduced = reducedMotion;
 
 /** Cold open: the question on black, what this game holds, then a shutter opens on the room. */
 /** The verdict lands on the page, not over it: a vermilion seal is pressed onto the chosen board. */
-export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () => void }) {
+export function VerdictFilm({
+  verdict,
+  clarification,
+  onDone,
+}: {
+  verdict?: Verdict;
+  clarification?: ClarificationState;
+  onDone: () => void;
+}) {
   const reducePreference = useReducedMotion();
   const seal = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = seal.current;
     const board = document
-      .querySelector(`[data-board="${verdict.preferred ?? "B"}"]`)
+      .querySelector(`[data-board="${clarification ? "C" : (verdict?.preferred ?? "B")}"]`)
       ?.getBoundingClientRect();
     if (!el || !board || reducedMotion()) return onDone();
     el.style.left = `${board.left + board.width * 0.62}px`;
@@ -48,7 +65,13 @@ export function VerdictFilm({ verdict, onDone }: { verdict: Verdict; onDone: () 
   }, [reducePreference]);
   return (
     <div className="c-seal" ref={seal} aria-hidden="true">
-      <b>{verdictLabel(verdict)}</b>
+      <b>
+        {clarification
+          ? clarification.review?.ready && !clarification.draftOnly
+            ? "查漏完成"
+            : "待确认"
+          : verdictLabel(verdict!)}
+      </b>
     </div>
   );
 }
@@ -66,6 +89,8 @@ const WALL_LIMIT = 24;
 
 function linesOf(version: ArenaVersion, beat: Beat): string[] {
   let lines: string[] = [];
+  if (beat.clarificationRun)
+    return [beat.clarificationRun.summary, ...clarificationLines(beat.clarificationRun)];
   if (beat.strategy) {
     const s = beat.strategy;
     lines = [
@@ -118,14 +143,14 @@ function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[])
   const records: WallRecord[] = [];
   for (const beat of shown) {
     const row = WALL_ROW[beat.stage];
-    const label = `${String(shown.indexOf(beat) + 1).padStart(2, "0")} ${STAGE_LABELS[beat.stage]}`;
+    const label = `${String(shown.indexOf(beat) + 1).padStart(2, "0")} ${stageName(version, beat.stage)}`;
     const lines = linesOf(version, beat);
     records.push({
       id: beat.id,
       agent: beat.agent,
       row,
       title: label,
-      meta: `${nameOf(beat.agent)}${beat.to ? ` → ${nameOf(beat.to)}` : ""}`,
+      meta: `${beatName(beat)}${beat.to ? ` → ${nameOf(beat.to)}` : ""}`,
       lines,
     });
   }
@@ -314,6 +339,7 @@ export function RecordWall({
 
 /** The record behind the step in front, so the card carries substance and not only a caption. */
 function detailsOf(version: ArenaVersion, beat: Beat): string[] {
+  if (beat.clarificationRun) return clarificationLines(beat.clarificationRun).slice(0, 3);
   if (beat.strategy)
     return beat.strategy.claims
       .slice(0, 3)
@@ -443,8 +469,8 @@ export function ChainDeck({
           }
         >
           <em>
-            第 {peek! + 1} 步 · {nameOf(peeked.agent)}
-            {peeked.to ? ` → ${nameOf(peeked.to)}` : ""} · {STAGE_LABELS[peeked.stage]}
+            第 {peek! + 1} 步 · {beatName(peeked)}
+            {peeked.to ? ` → ${nameOf(peeked.to)}` : ""} · {stageName(version, peeked.stage)}
             {peeked.stage === "verify" && peeked.attack && reviewing
               ? ` · ${attackMeta[peeked.attack.status].label}`
               : ""}
@@ -502,7 +528,7 @@ export function ChainDeck({
             <div className="tb">
               <b>
                 {String(i + 1).padStart(2, "0")}{" "}
-                {isFront ? nameOf(beat.agent) : (SHORT[beat.agent] ?? beat.agent)}
+                {isFront ? beatName(beat) : (SHORT[beat.agent] ?? beat.agent)}
                 {beat.to ? ` → ${isFront ? nameOf(beat.to) : beat.to}` : ""}
               </b>
               <span>
@@ -512,7 +538,7 @@ export function ChainDeck({
                     : "核验中"
                   : state
                     ? attackMeta[beat.attack!.status].label
-                    : STAGE_LABELS[beat.stage]}
+                    : stageName(version, beat.stage)}
               </span>
               {isFront && (
                 <button
@@ -598,10 +624,10 @@ export function LiveRecord({
     >
       <div className="tb">
         <b>
-          {String(index + 1).padStart(2, "0")} {STAGE_LABELS[beat.stage]}
+          {String(index + 1).padStart(2, "0")} {stageName(version, beat.stage)}
         </b>
         <span>
-          {nameOf(beat.agent)} {beat.to ? ` → ${nameOf(beat.to)}` : ""}
+          {beatName(beat)} {beat.to ? ` → ${nameOf(beat.to)}` : ""}
         </span>
       </div>
       {beat.attack && (

@@ -3,12 +3,19 @@ import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useLayoutEffect, useRef, type CSSProperties } from "react";
 import { X } from "lucide-react";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
-import { STAGE_LABELS, type ArenaVersion, type Attack } from "@/lib/contracts";
+import { type ArenaVersion, type Attack } from "@/lib/contracts";
 import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
 import { readMotionOrigin } from "../motion-origin";
 import "./step-card-motion.css";
-import { latestShownRevision, nameOf, type Beat } from "./beats";
+import {
+  beatName,
+  clarificationLines,
+  latestShownRevision,
+  nameOf,
+  stageName,
+  type Beat,
+} from "./beats";
 import { stepContext, type StepContext } from "@/lib/step-context";
 
 type Point = { x: number; y: number };
@@ -186,6 +193,32 @@ function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
     rows
       .filter((row) => row.text)
       .map((row) => ({ ...row, text: readableClaimText(version, row.text) }));
+  if (beat.clarificationRun) {
+    const run = beat.clarificationRun;
+    return [
+      { label: "本次审查", text: run.summary },
+      { label: "完整输出", text: clarificationLines(run).join("\n") || "本次没有新增事项。" },
+      { label: "结构化记录", text: JSON.stringify(run.output, null, 2) },
+      {
+        label: "调用依据",
+        text: `第 ${run.round} 轮，依据修订 ${run.basedOnRevision}，调用 ${run.operationId}，记录 ${run.id}`,
+      },
+      { label: "实际调用记录", text: run.callIds?.join("\n") || "本条角色记录未提供请求编号。" },
+      {
+        label: "调用状态",
+        text: { completed: "已完成", failed: "失败", uncertain: "结果与费用待核对" }[run.status],
+      },
+      {
+        label: "实际用量",
+        text: run.usage
+          .map(
+            (usage) =>
+              `${usage.model}，输入 ${usage.inputTokens} Token，输出 ${usage.outputTokens} Token，${usage.estimatedUsd !== undefined ? `估算 USD ${usage.estimatedUsd}` : `估算人民币 ${usage.estimatedCny} 元`}`,
+          )
+          .join("\n"),
+      },
+    ];
+  }
   if (beat.attack) {
     const a = beat.attack;
     const checked = known.some((b) => b.id === `v:${a.id}`);
@@ -820,10 +853,10 @@ export function StepCard({
       <div className="c-pull-bg" />
       <div className="tb">
         <b id="c-pull-title">
-          第 {index + 1} 步 · {STAGE_LABELS[beat.stage]}
+          第 {index + 1} 步 · {stageName(version, beat.stage)}
         </b>
         <span>
-          {nameOf(beat.agent)}
+          {beatName(beat)}
           {beat.to ? ` → ${nameOf(beat.to)}` : ""}
           {verified ? ` · ${attackMeta[beat.attack!.status].label}` : ""}
         </span>

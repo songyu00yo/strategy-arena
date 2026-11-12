@@ -8,6 +8,22 @@ export interface StepContext {
 
 /** Canonical persisted step text shared by the reader and the source check. No generated explanation. */
 export function stepContext(version: ArenaVersion, stepId: string): StepContext | null {
+  if (version.workflow === "clarification" && stepId.startsWith("clarification:")) {
+    const run = version.clarification?.runs.find((entry) => `clarification:${entry.id}` === stepId);
+    if (!run) return null;
+    const title = `${run.role} · 第 ${run.round} 轮需求审查`;
+    return {
+      stepId,
+      title,
+      quote: [
+        title,
+        run.summary,
+        `记录 ${run.id}`,
+        `调用 ${run.operationId}`,
+        `依据修订 ${run.basedOnRevision}`,
+      ].join("\n"),
+    };
+  }
   const kind = stepId.slice(0, 2);
   const key = stepId.slice(2);
   let title: string;

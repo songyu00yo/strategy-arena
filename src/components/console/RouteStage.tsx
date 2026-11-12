@@ -5,7 +5,7 @@ import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
-import { latestShownRevision, type Beat } from "./beats";
+import { clarificationLines, CLARIFICATION_ROLES, latestShownRevision, type Beat } from "./beats";
 import {
   createMotionLoop,
   createMotionScope,
@@ -85,7 +85,7 @@ export function RouteStage({
   const shown = beats.slice(0, index + 1);
   const current = beats[index] ?? null;
   const seen = new Set(shown.map((b) => b.id));
-  const attacks = shown.filter((b) => b.stage === "attack").map((b) => b.attack!);
+  const attacks = shown.filter((b) => b.stage === "attack" && b.attack).map((b) => b.attack!);
   const activeAttack = current?.attack;
   const stateOf = (a: Attack) => (seen.has(`v:${a.id}`) ? a.status : "pending");
   const hot = activeAttack ? `${activeAttack.targetStrategyId}:${activeAttack.targetClaimId}` : "";
@@ -804,8 +804,10 @@ export function RouteStage({
   };
 
   const board = (id: "A" | "B" | "C") => {
+    const clarification = version.workflow === "clarification";
+    const run = shown.findLast((beat) => beat.clarificationRun?.role === id)?.clarificationRun;
     const strategy = version.strategies.find((s) => s.id === id);
-    const present = !!strategy && seen.has(`p:${id}`);
+    const present = clarification ? !!run : !!strategy && seen.has(`p:${id}`);
     const revision = latestShownRevision(shown, id)?.revision;
     const view = revision?.strategy ?? strategy;
     const taken = attacks.filter((a) => a.targetStrategyId === id);
@@ -813,13 +815,15 @@ export function RouteStage({
     const pick = seen.has("judge") && version.verdict?.preferred === id;
     const speaking = current?.agent === id;
     const target = !speaking && current?.to === id;
-    const enter = directed && current?.id === `p:${id}`;
+    const enter =
+      directed &&
+      (clarification ? current?.clarificationRun?.role === id : current?.id === `p:${id}`);
     const rewriting = directed && current?.revision?.strategyId === id;
     return (
       <section
         key={id}
         data-board={id}
-        aria-label={`路线 ${id}`}
+        aria-label={clarification ? `${id} ${CLARIFICATION_ROLES[id]}` : `路线 ${id}`}
         className={`c-board c-board-${id} ${speaking ? "speaking" : ""} ${target ? "target" : ""} ${pick ? "pick" : ""} ${involved(id) ? "" : "dim"} ${enter ? "enter" : ""}`}
         style={{ "--route": spaced(ROUTE_COLOR[id]) } as CSSProperties}
       >
@@ -828,30 +832,48 @@ export function RouteStage({
         </svg>
         <header>
           <b>{id}</b>
-          <span>{pick ? "当前建议" : revision ? "已修订" : present ? "已提案" : "等待提案"}</span>
+          <span>
+            {clarification
+              ? run
+                ? { completed: "调用完成", failed: "调用失败", uncertain: "调用待核对" }[run.status]
+                : "尚未调用"
+              : pick
+                ? "当前建议"
+                : revision
+                  ? "已修订"
+                  : present
+                    ? "已提案"
+                    : "等待提案"}
+          </span>
           <em>
-            发出 {sent.length} · 收到 {taken.length}
+            {clarification
+              ? `用量记录 ${run?.usage.length ?? 0} 笔`
+              : `发出 ${sent.length} · 收到 ${taken.length}`}
           </em>
         </header>
-        {present && strategy && view ? (
+        {present && (run || (strategy && view)) ? (
           <div className="c-board-body">
             <h3>
               <Chars
-                text={readableClaimText(version, view.title)}
+                text={run ? CLARIFICATION_ROLES[id] : readableClaimText(version, view!.title)}
                 active={enter}
                 delay={lead + 700}
               />
             </h3>
-            <p>{readableClaimText(version, view.thesis)}</p>
+            <p>{run ? run.summary : readableClaimText(version, view!.thesis)}</p>
             <div className="est">
-              {strategy.estimatedHours === view.estimatedHours
-                ? `${view.estimatedHours ?? "待核实"} 小时`
-                : `${strategy.estimatedHours ?? "待核实"} → ${view.estimatedHours ?? "待核实"} 小时`}
-              {" · "}¥{view.estimatedCost ?? "?"}
+              {run
+                ? `第 ${run.round} 轮 · 依据修订 ${run.basedOnRevision}`
+                : strategy!.estimatedHours === view!.estimatedHours
+                  ? `${view!.estimatedHours ?? "待核实"} 小时`
+                  : `${strategy!.estimatedHours ?? "待核实"} → ${view!.estimatedHours ?? "待核实"} 小时`}
+              {run ? "" : ` · ¥${view!.estimatedCost ?? "?"}`}
             </div>
-            {[...new Set([...strategy.claims, ...view.claims].map((c) => c.id))].map((claimId) => {
-              const before = strategy.claims.find((c) => c.id === claimId);
-              const after = view.claims.find((c) => c.id === claimId);
+            {[
+              ...new Set([...(strategy?.claims ?? []), ...(view?.claims ?? [])].map((c) => c.id)),
+            ].map((claimId) => {
+              const before = strategy!.claims.find((c) => c.id === claimId);
+              const after = view!.claims.find((c) => c.id === claimId);
               const claim = after ?? before!;
               const hits = taken.filter((a) => a.targetClaimId === claimId);
               const lost = hits.some((a) => stateOf(a) === "supported");
@@ -863,7 +885,7 @@ export function RouteStage({
                   className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
                   disabled={readOnly || !after}
                   title={after ? "质疑这条判断" : "这条主张已撤回"}
-                  onClick={() => onClaim(view, claimId)}
+                  onClick={() => onClaim(view!, claimId)}
                 >
                   <em>
                     {claimLabel(version, id, claimId)} · {CLAIM[claim.status]}
@@ -894,17 +916,22 @@ export function RouteStage({
               );
             })}
             <ol className="steps">
-              {view.steps.map((step) => (
+              {(run ? clarificationLines(run).slice(0, 6) : view!.steps).map((step) => (
                 <li key={step}>{step}</li>
               ))}
             </ol>
             <div className="first">
-              <b>第一步</b> {view.firstAction}
+              <b>{run ? "记录" : "第一步"}</b>{" "}
+              {run ? "在原步骤卡片中查看本次调用的完整输出。" : view!.firstAction}
             </div>
           </div>
         ) : (
           <div className="c-board-body quiet">
-            {demo ? "等待演示步骤，内容为预设。" : "只显示真实生成的结果。"}
+            {clarification
+              ? `${CLARIFICATION_ROLES[id]}尚无已完成的调用记录。`
+              : demo
+                ? "等待演示步骤，内容为预设。"
+                : "只显示真实生成的结果。"}
           </div>
         )}
       </section>

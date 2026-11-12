@@ -95,12 +95,18 @@ function RunNotice({
       next: "这笔预留暂不释放，也不会自动重试。请让运行服务的人核对调用结果和费用。下方保留了已有结果。",
     },
     paused: {
-      title: version.waitingForIntake ? "等待你回答，进度已保存" : "本轮已停止",
+      title: version.waitingForIntake
+        ? "等待你回答，进度已保存"
+        : version.workflow === "clarification"
+          ? "需求草稿包含待确认事项"
+          : "本轮已停止",
       next: version.waitingForIntake
         ? "打开“我的历史”中的对应补问草稿，确认回答后回到当前任务继续。"
-        : demo
-          ? "演示已停止，已展示的预设内容会保留。未调用模型，不产生费用。"
-          : "不再发起新步骤。已发出的请求仍可能返回并计费，迟到的结果归入这一版本。",
+        : version.workflow === "clarification"
+          ? "原补充与调整入口可继续修订，已确认记录与旧版本保留。"
+          : demo
+            ? "演示已停止，已展示的预设内容会保留。未调用模型，不产生费用。"
+            : "不再发起新步骤。已发出的请求仍可能返回并计费，迟到的结果归入这一版本。",
     },
   }[version.status as "failed" | "uncertain" | "paused"];
   if (!copy && !version.error) return null;

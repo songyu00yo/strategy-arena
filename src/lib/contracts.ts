@@ -249,6 +249,8 @@ export interface ArenaEvent {
   createdAt: string;
 }
 export interface ArenaVersion {
+  workflow?: "clarification";
+  clarification?: import("./clarification-contracts").ClarificationState;
   waitingForIntake?: { id: string; versionId: string };
   continuedFrom?: { versionId: string; modelRequests: number };
   requirements?: {

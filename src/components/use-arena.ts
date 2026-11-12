@@ -84,7 +84,11 @@ export function useArena() {
       if (latest.current && snapshotIsOlder(value, latest.current)) return false;
       latest.current = value;
       setSnapshot(value);
-      if (value.versions.find((version) => version.id === value.activeVersionId)?.waitingForIntake)
+      if (
+        value.versions.find((version) => version.id === value.activeVersionId)?.waitingForIntake ||
+        value.versions.find((version) => version.id === value.activeVersionId)?.workflow ===
+          "clarification"
+      )
         setAuto(false);
       saveArenaPointer(value.id, created);
       return true;
@@ -278,6 +282,7 @@ export function useArena() {
           !active ||
           active.id !== activeId ||
           active.waitingForIntake ||
+          active.workflow === "clarification" ||
           !["ready", "running"].includes(active.status)
         )
           return;
@@ -341,6 +346,8 @@ export function useArena() {
         accept(value, epoch, path === "/api/arenas");
         setAuto(
           keepDriving &&
+            value.versions.find((version) => version.id === value.activeVersionId)?.workflow !==
+              "clarification" &&
             !value.versions.find((version) => version.id === value.activeVersionId)
               ?.waitingForIntake,
         );
@@ -425,7 +432,9 @@ export function useArena() {
       setError("");
       accept(value, epoch, readArenaPointer() !== value.id);
       setAuto(
-        !value.versions.find((version) => version.id === value.activeVersionId)?.waitingForIntake,
+        value.versions.find((version) => version.id === value.activeVersionId)?.workflow !==
+          "clarification" &&
+          !value.versions.find((version) => version.id === value.activeVersionId)?.waitingForIntake,
       );
       setDriverRevision((revision) => revision + 1);
     },

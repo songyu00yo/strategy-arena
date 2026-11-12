@@ -216,8 +216,10 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
       expect(body).toEqual({
         goal: "测试：我想在一个月内学会剪辑并完成自己的第一支视频",
         modelMode: "gpt-6.1-terra",
+        workflow: "clarification",
       });
-      draft = fixtureIntake(body);
+      // The response intentionally represents a legacy draft for compatibility coverage.
+      draft = fixtureIntake({ goal: body.goal, modelMode: body.modelMode });
     } else if (method === "PATCH") {
       const body = route.request().postDataJSON();
       if (body.answers) answers.push(body.answers);

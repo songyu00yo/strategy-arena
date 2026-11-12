@@ -476,6 +476,7 @@ export function GuidedIntake({
       saved = await request<IntakeDraft>("/api/intakes", "POST", {
         goal: goalRef.current,
         modelMode: modeRef.current,
+        workflow: "clarification",
       });
       if (!alive.current) throw new DOMException("Aborted", "AbortError");
       saveIntakeDraftPointer(saved.id, true);
@@ -1439,7 +1440,7 @@ export function GuidedIntake({
                   );
                 if (!current.current) return;
                 const submittedDraftId = current.current.id;
-                const snapshot = await request<ArenaSnapshot>(
+                const result = await request<ArenaSnapshot | IntakeDraft>(
                   `/api/intakes/${submittedDraftId}/submit`,
                   "POST",
                   {
@@ -1449,14 +1450,18 @@ export function GuidedIntake({
                   },
                 );
                 if (!alive.current || epoch !== generation.current) return;
-                onCreated(snapshot);
+                if (!("versions" in result)) {
+                  apply(result);
+                  return;
+                }
+                onCreated(result);
                 resetSummary();
                 clearIntakeDraftPointer(submittedDraftId);
               })
             }
           >
             {busy ? <LoaderCircle size={17} className="gi-spin" /> : <ArrowRight size={17} />}
-            确认摘要并开始推演
+            {draft?.workflow === "clarification" ? "确认要求并查漏交接" : "确认摘要并开始推演"}
           </button>
         </DisclosureMotion>
       </DisclosureMotion>

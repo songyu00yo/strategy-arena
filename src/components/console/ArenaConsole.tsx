@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   STAGES,
-  STAGE_LABELS,
   type ArenaEvent,
   type ArenaStep,
   type ArenaVersion,
@@ -28,7 +27,7 @@ import { StepCard } from "./StepCard";
 import { ResultRegion } from "./ResultRegion";
 import { acquireMotionHold, createMotionScope, motionNow, useMotionPaused } from "./motion-runtime";
 import "./console-motion.css";
-import { beatsOf, clock, nameOf, usageOf } from "./beats";
+import { beatName, beatsOf, clock, nameOf, stageName, usageOf } from "./beats";
 
 /** Joins sentences without doubling their end marks. */
 const listOf = (items: string[]) => items.map((item) => item.replace(/[。；;.]+$/, "")).join("；");
@@ -97,6 +96,7 @@ export function ArenaConsole({
   onAdjustConditions?: (trigger: HTMLElement | null) => void;
 }) {
   const beats = beatsOf(version);
+  const clarification = version.workflow === "clarification" ? version.clarification : undefined;
   const last = beats.length - 1;
   const [cursor, setCursor] = useState<number | null>(startFromBeginning ? -1 : null);
   const [playing, setPlaying] = useState(startFromBeginning);
@@ -276,18 +276,19 @@ export function ArenaConsole({
       ? events
       : events.slice(0, Math.ceil(((index + 1) / Math.max(beats.length, 1)) * events.length));
   const used = logged.flatMap((e) => usageOf(e) ?? []);
-  const attacks = shown.filter((b) => b.stage === "attack").map((b) => b.attack!);
+  const attacks = shown.filter((b) => b.stage === "attack" && b.attack).map((b) => b.attack!);
   const checked = attacks.filter((a) => seen.has(`v:${a.id}`));
   const count = (status: Attack["status"]) => checked.filter((a) => a.status === status).length;
   const tokens = used.reduce((t, u) => t + u.inputTokens + u.outputTokens, 0);
   const peak = Math.max(1, ...used.map((u) => u.inputTokens + u.outputTokens));
   const verdict = version.verdict;
+  const hasResult = !!verdict || !!clarification;
   const directed = motion;
   // The result takes the lead once the game has reached it. Looking back at a step hides it.
-  const atResult = !!verdict && index === last;
+  const atResult = hasResult && index === last;
   // Looking back over a finished game, each step shows how it turned out.
-  const reviewing = !!version.verdict && !live && !playing;
-  const canReturn = !!version.verdict && index < last && !playing;
+  const reviewing = hasResult && !live && !playing;
+  const canReturn = hasResult && index < last && !playing;
   const speedLabel = SPEEDS.find((s) => s.value === speed)?.label ?? "常速";
   // Counts roll when the energy reaches them, not before.
   const rollDelay = !directed
@@ -297,14 +298,48 @@ export function ArenaConsole({
       : stage === "verify"
         ? lead + 1280 / speed
         : 0;
-  const metrics: [string, number, string][] = [
-    ["质疑", attacks.length, ""],
-    ["成立", count("supported"), "bad"],
-    ["已反驳", count("refuted"), "ok"],
-    ["未决", attacks.length - count("supported") - count("refuted"), "warn"],
-    [demo ? "演示调用" : startFromBeginning ? "原记录调用" : "模型调用", used.length, ""],
-    [demo ? "Token（预设）" : startFromBeginning ? "原记录 Token" : "Token", tokens, ""],
-  ];
+  const hasCallIds = clarification?.runs.every((run) => run.callIds !== undefined);
+  const callIds = new Set(clarification?.runs.flatMap((run) => run.callIds ?? []) ?? []);
+  const metrics: [string, number, string][] = clarification
+    ? [
+        [
+          "事项",
+          clarification.items.filter((item) => !clarification.retiredIds.includes(item.id)).length,
+          "",
+        ],
+        [
+          "已确认",
+          version.intake?.answers.filter((answer) => answer.confirmation === "confirmed").length ??
+            0,
+          "ok",
+        ],
+        ["已排除", clarification.retiredIds.length, ""],
+        [
+          "需核对",
+          new Set([...clarification.conflicts, ...(version.requirements?.unresolved ?? [])]).size,
+          "warn",
+        ],
+        [
+          hasCallIds ? "模型调用" : "角色记录",
+          hasCallIds ? callIds.size : clarification.runs.length,
+          "",
+        ],
+        [
+          "Token",
+          clarification.runs
+            .flatMap((run) => run.usage)
+            .reduce((total, use) => total + use.inputTokens + use.outputTokens, 0),
+          "",
+        ],
+      ]
+    : [
+        ["质疑", attacks.length, ""],
+        ["成立", count("supported"), "bad"],
+        ["已反驳", count("refuted"), "ok"],
+        ["未决", attacks.length - count("supported") - count("refuted"), "warn"],
+        [demo ? "演示调用" : startFromBeginning ? "原记录调用" : "模型调用", used.length, ""],
+        [demo ? "Token（预设）" : startFromBeginning ? "原记录 Token" : "Token", tokens, ""],
+      ];
 
   // Keep controls mounted. Interruptions start from the displayed pose, not the start keyframe.
   useLayoutEffect(() => {
@@ -366,7 +401,7 @@ export function ArenaConsole({
       />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
-        {verdict && (
+        {hasResult && (
           <ResultRegion open={atResult} expanded={wholeResult}>
             <section
               className={`c-result ${wholeResult ? "whole" : ""}`}
@@ -376,74 +411,116 @@ export function ArenaConsole({
               <div className="lead">
                 <div className="tag">
                   <b
-                    className={verdict.preferred ? "pick" : "none"}
+                    className={verdict?.preferred ? "pick" : "none"}
                     style={
-                      verdict.preferred
+                      verdict?.preferred
                         ? ({
                             "--route": ROUTE_COLOR[verdict.preferred].replaceAll(",", " "),
                           } as CSSProperties)
                         : undefined
                     }
                   >
-                    {verdictLabel(verdict)}
+                    {clarification
+                      ? clarification.draftOnly
+                        ? "需求草稿"
+                        : "已确认"
+                      : verdictLabel(verdict!)}
                   </b>
-                  <span>{OUTCOME[verdict.outcome]}</span>
+                  <span>
+                    {clarification
+                      ? clarification.draftOnly
+                        ? "保留未决事项"
+                        : "依据本版本确认记录"
+                      : OUTCOME[verdict!.outcome]}
+                  </span>
                 </div>
                 <h2>
-                  {version.requirements
-                    ? "已确认需求与执行提示词"
-                    : readableClaimText(version, verdict.headline)}
+                  {clarification
+                    ? "需求说明与执行提示词"
+                    : version.requirements
+                      ? "已确认需求与执行提示词"
+                      : readableClaimText(version, verdict!.headline)}
                 </h2>
-                <p>
-                  {version.requirements
+                <p style={clarification ? { whiteSpace: "pre-wrap" } : undefined}>
+                  {clarification
                     ? wholeResult
-                      ? listOf(version.requirements.confirmed) || "当前要求尚待确认"
-                      : `已确认 ${version.requirements.confirmed.length} 项要求，展开完整结论查看。`
-                    : readableClaimText(version, verdict.rationale)}
+                      ? clarification.specification
+                      : "展开完整结论查看需求说明、未决事项和材料交接。"
+                    : version.requirements
+                      ? wholeResult
+                        ? listOf(version.requirements.confirmed) || "当前要求尚待确认"
+                        : `已确认 ${version.requirements.confirmed.length} 项要求，展开完整结论查看。`
+                      : readableClaimText(version, verdict!.rationale)}
                 </p>
               </div>
               <div className="act">
                 <div className="first">
-                  <small>{version.requirements ? "执行提示词" : "现在该做的第一步"}</small>
-                  <strong>
-                    {version.requirements
+                  <small>
+                    {clarification?.draftOnly
+                      ? "交接草稿提示词"
+                      : version.requirements || clarification
+                        ? "执行提示词"
+                        : "现在该做的第一步"}
+                  </small>
+                  <strong style={clarification ? { whiteSpace: "pre-wrap" } : undefined}>
+                    {clarification
                       ? wholeResult
-                        ? version.requirements.executionPrompt
+                        ? clarification.executionPrompt
                         : "展开完整结论查看本版本执行提示词"
-                      : readableClaimText(version, verdict.nextActions[0])}
+                      : version.requirements
+                        ? wholeResult
+                          ? version.requirements.executionPrompt
+                          : "展开完整结论查看本版本执行提示词"
+                        : readableClaimText(version, verdict!.nextActions[0])}
                   </strong>
                 </div>
                 <dl>
                   <div>
-                    <dt>{version.requirements ? "AI 建议及暂定假设（待确认）" : "前提"}</dt>
+                    <dt>
+                      {version.requirements || clarification
+                        ? "AI 建议及暂定假设（待确认）"
+                        : "前提"}
+                    </dt>
                     <dd>
-                      {version.requirements
-                        ? listOf(version.requirements.suggestions) || "未列出"
-                        : readableClaimText(version, listOf(verdict.conditions)) || "未给出"}
+                      {clarification
+                        ? listOf(clarification.suggestions) || "未列出"
+                        : version.requirements
+                          ? listOf(version.requirements.suggestions) || "未列出"
+                          : readableClaimText(version, listOf(verdict!.conditions)) || "未给出"}
                     </dd>
                   </div>
                   <div>
                     <dt>仍需确认</dt>
                     <dd>
-                      {version.requirements
-                        ? listOf(version.requirements.unresolved) || "未列出"
-                        : readableClaimText(version, listOf(verdict.uncertainties)) || "未列出"}
+                      {clarification
+                        ? listOf([
+                            ...new Set([
+                              ...(version.requirements?.unresolved ?? []),
+                              ...clarification.conflicts,
+                              ...(clarification.review?.gaps.map((item) => item.title) ?? []),
+                            ]),
+                          ]) || "未列出"
+                        : version.requirements
+                          ? listOf(version.requirements.unresolved) || "未列出"
+                          : readableClaimText(version, listOf(verdict!.uncertainties)) || "未列出"}
                     </dd>
                   </div>
                   <div>
-                    <dt>{version.requirements ? "待提供材料" : "退出条件"}</dt>
+                    <dt>{version.requirements || clarification ? "待提供材料" : "退出条件"}</dt>
                     <dd>
                       {version.requirements
                         ? listOf(version.requirements.missingMaterials) || "未列出缺失材料"
-                        : readableClaimText(version, verdict.exitCondition)}
+                        : clarification
+                          ? "材料状态详见需求说明中的材料交接记录"
+                          : readableClaimText(version, verdict!.exitCondition)}
                     </dd>
                   </div>
                 </dl>
-                {verdict.nextActions.length > 1 && (
+                {(clarification || verdict!.nextActions.length > 1) && (
                   <p className="more">
-                    {version.requirements
+                    {version.requirements || clarification
                       ? `材料引用 ${version.intake?.usedSources.map((source) => `${source.filename} ${source.location} [${source.id}]`).join("、") || "暂无材料引用"}`
-                      : `接着做：${readableClaimText(version, listOf(verdict.nextActions.slice(1)))}`}
+                      : `接着做：${readableClaimText(version, listOf(verdict!.nextActions.slice(1)))}`}
                   </p>
                 )}
                 <button
@@ -466,18 +543,30 @@ export function ArenaConsole({
             {STAGES.map((stage) => {
               const own = steps.filter((s) => s.stage === stage);
               const list = beats.flatMap((b, i) => (b.stage === stage ? [{ b, i }] : []));
-              const done =
-                own.length > 0 &&
-                own.every((s) => s.status === "completed" || s.status === "skipped") &&
-                (!startFromBeginning || list.every(({ i }) => i <= index));
-              const bad = own.some((s) => s.status === "failed" || s.status === "uncertain");
+              const done = clarification
+                ? stage === "judge"
+                  ? clarification.next === "completed"
+                  : stage === "revise"
+                    ? !clarification.draftOnly
+                    : list.length > 0 &&
+                      list.every(({ b }) => b.clarificationRun?.status === "completed")
+                : own.length > 0 &&
+                  own.every((s) => s.status === "completed" || s.status === "skipped") &&
+                  (!startFromBeginning || list.every(({ i }) => i <= index));
+              const bad = clarification
+                ? list.some(
+                    ({ b }) =>
+                      b.clarificationRun?.status === "failed" ||
+                      b.clarificationRun?.status === "uncertain",
+                  )
+                : own.some((s) => s.status === "failed" || s.status === "uncertain");
               return (
                 <div
                   key={stage}
                   className={`seg ${bad ? "bad" : done ? "done" : version.stage === stage ? "live" : ""} ${current?.stage === stage ? "here" : ""}`}
                   style={{ flexGrow: Math.max(list.length, 2) }}
                 >
-                  <span>{STAGE_LABELS[stage]}</span>
+                  <span>{stageName(version, stage)}</span>
                   <div className="ticks">
                     {list.map(({ b, i }) => (
                       <button
@@ -536,7 +625,7 @@ export function ArenaConsole({
               <div className="fl">
                 {current ? (
                   <>
-                    <b>{nameOf(current.agent)}</b>
+                    <b>{beatName(current)}</b>
                     {current.to && (
                       <>
                         {" → "}
@@ -563,7 +652,9 @@ export function ArenaConsole({
                   ? current.plain
                   : demo
                     ? "等待演示步骤，三条路线与步骤内容均为预设，未调用模型。"
-                    : "同一模型分成五个角色，替你比较三条路线。"}
+                    : clarification
+                      ? "A 拆解需求、B 审查选项、C 检查遗漏，所有要求由本人确认。"
+                      : "同一模型分成五个角色，替你比较三条路线。"}
               </p>
               {canReturn && (
                 <button type="button" className="c-back" onClick={() => goTo(last)}>
@@ -650,12 +741,22 @@ export function ArenaConsole({
         </main>
         <div className="c-bottom">
           <RouteChart version={version} beats={beats} index={index} onStep={setOpenStep} />
-          <section className="c-list" aria-label="全部质疑">
+          <section className="c-list" aria-label={clarification ? "待核对事项" : "全部质疑"}>
             <h2>
-              全部质疑 <span>点击看证据</span>
+              {clarification ? "待核对事项" : "全部质疑"}{" "}
+              <span>{clarification ? "问题继续在原补问入口处理" : "点击看证据"}</span>
             </h2>
             <div className="rows">
-              {attacks.length === 0 && <div className="quiet">交叉质疑尚未开始。</div>}
+              {attacks.length === 0 && (
+                <div className="quiet">
+                  {clarification
+                    ? [
+                        ...clarification.conflicts,
+                        ...(version.requirements?.unresolved ?? []),
+                      ].join("；") || "本版本没有新增待核对事项。"
+                    : "交叉质疑尚未开始。"}
+                </div>
+              )}
               {attacks.map((a) => {
                 const state = seen.has(`v:${a.id}`) ? a.status : "pending";
                 return (
@@ -679,9 +780,16 @@ export function ArenaConsole({
           </section>
         </div>
       </div>
-      {verdict && directed && !filmDone && current?.id === "judge" && (
-        <VerdictFilm verdict={verdict} onDone={endFilm} />
-      )}
+      {hasResult &&
+        directed &&
+        !filmDone &&
+        (clarification ? index === last : current?.id === "judge") && (
+          <VerdictFilm
+            verdict={verdict ?? undefined}
+            clarification={clarification}
+            onDone={endFilm}
+          />
+        )}
       {openStep !== null && beats[openStep] && (
         <StepCard
           version={version}

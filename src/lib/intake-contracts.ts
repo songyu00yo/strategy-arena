@@ -24,6 +24,7 @@ export const QuestionSchema = z.object({
     .max(7)
     .optional(),
   authorization: z.string().max(300).optional(),
+  decisionId: z.string().max(40).optional(),
 });
 export type IntakeQuestion = z.infer<typeof QuestionSchema>;
 export const AnswerSchema = z.object({
@@ -71,6 +72,8 @@ export interface IntakeAttachment {
   sourceAttachmentId?: string;
 }
 export interface IntakeDraft {
+  workflow?: "clarification";
+  clarification?: import("./clarification-contracts").ClarificationState;
   id: string;
   revision: number;
   goal: string;
@@ -96,6 +99,7 @@ export interface IntakeDraft {
   confirmation?: IntakeConfirmation;
 }
 export const CreateIntakeSchema = z.object({
+  workflow: z.literal("clarification").optional(),
   goal: z.string().max(3000).default(""),
   modelMode: ModelModeSchema.default("gpt-6.1-terra"),
 });

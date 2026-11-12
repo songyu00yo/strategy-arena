@@ -45,6 +45,7 @@ import { CostPlanValidationError } from "./resource-totals";
 import { allSources, createFollowUpIntake } from "./intakes";
 import type { IntakeDraft, SubmitIntakeSchema } from "@/lib/intake-contracts";
 import { freezeCorpus } from "./retrieval";
+import { clarificationFingerprint } from "./clarification";
 import { SCHEMA_VERSION, ChallengeSchema } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
@@ -309,6 +310,20 @@ export function createArena(
         throw new ArenaError("任务草稿已更新，请刷新后确认最新摘要。", 409, "STALE_INTAKE");
     }
     let frozen: SelectedConfig | undefined;
+    if (draftBody?.workflow === "clarification") {
+      const state = draftBody.clarification as ArenaVersion["clarification"];
+      if (
+        !state ||
+        state.next !== "completed" ||
+        (!state.review?.ready && !state.requestedDraft) ||
+        state.review?.fingerprint !==
+          clarificationFingerprint(draftBody as unknown as IntakeDraft, {
+            challenge,
+            assumptions: [],
+          })
+      )
+        throw new ArenaError("需求尚未完成当前版本的查漏与确认。", 409, "CLARIFICATION_NOT_READY");
+    }
     if (
       draftBody &&
       typeof draftBody.configHash === "string" &&
@@ -330,11 +345,29 @@ export function createArena(
         );
     }
     consumeRun(owner);
-    const arenaId = id();
-    db()
-      .prepare("INSERT INTO arenas(id,owner,active_version_id,created_at) VALUES(?,?,?,?)")
-      .run(arenaId, owner, "", now());
-    const version = addVersion(arenaId, challenge, "首次讨论", null);
+    const link =
+      draftBody?.workflow === "clarification" ? (draftBody.link as IntakeDraft["link"]) : undefined;
+    const arenaId = link?.arenaId ?? id();
+    if (link) {
+      const source = assertOwner(arenaId, owner);
+      const previous = getVersion(link.versionId);
+      if (
+        source.active_version_id !== link.versionId ||
+        previous.waitingForIntake?.id !== options?.intakeId
+      )
+        throw new ArenaError("关联任务版本已更新，请核对最新需求。", 409, "STALE_INTAKE");
+      previous.status = "superseded";
+      saveVersion(previous);
+    } else
+      db()
+        .prepare("INSERT INTO arenas(id,owner,active_version_id,created_at) VALUES(?,?,?,?)")
+        .run(arenaId, owner, "", now());
+    const version = addVersion(
+      arenaId,
+      challenge,
+      link ? "用户确认需求修改并重新查漏" : "首次讨论",
+      link?.versionId ?? null,
+    );
     if (options && draftBody) {
       draftBody.challenge = challenge;
       if (options.assumptions) draftBody.assumptions = options.assumptions;
@@ -346,8 +379,29 @@ export function createArena(
       );
       draftBody.confirmation = version.intake.confirmation;
       refreshRequirements(version);
+      if (draftBody.workflow === "clarification" && draftBody.clarification) {
+        version.workflow = "clarification";
+        version.clarification = structuredClone(draftBody.clarification) as NonNullable<
+          ArenaVersion["clarification"]
+        >;
+        version.status = version.clarification.draftOnly ? "paused" : "completed";
+        db().prepare("DELETE FROM steps WHERE version_id=? AND status='pending'").run(version.id);
+        for (const run of version.clarification.runs)
+          event(
+            arenaId,
+            version.id,
+            "clarification_role_recorded",
+            run.summary,
+            null,
+            run.role,
+            run,
+          );
+        if (version.requirements)
+          version.requirements.executionPrompt = version.clarification.executionPrompt;
+      }
     }
-    if (executionMode === "agent")
+    if (version.workflow === "clarification") version.executionMode = "fixed";
+    else if (executionMode === "agent")
       seedAgent(arenaId, version, options ? allSources(options.intakeId) : []);
     else version.executionMode = "fixed";
     pinConfiguration(version, mode, frozen);
@@ -586,6 +640,18 @@ export function newVersion(
     }
     const version = addVersion(arenaId, challenge, reason, previous.id);
     if (previous.intake) version.intake = structuredClone(previous.intake);
+    if (previous.workflow === "clarification") {
+      version.workflow = "clarification";
+      version.clarification = structuredClone(previous.clarification);
+      if (version.clarification) {
+        version.clarification.review = null;
+        version.clarification.next = "questions";
+        version.clarification.draftOnly = true;
+        version.clarification.specification = "需求修改已保存，受影响内容等待重新确认与查漏。";
+        version.clarification.executionPrompt = "";
+      }
+      db().prepare("DELETE FROM steps WHERE version_id=? AND status='pending'").run(version.id);
+    }
     if (version.intake?.confirmation) {
       const fields = (Object.keys(challenge) as (keyof Challenge)[]).filter(
         (field) =>
@@ -616,7 +682,10 @@ export function newVersion(
       db()
         .prepare("INSERT INTO interventions(id,version_id,body) VALUES(?,?,?)")
         .run(id(), version.id, text);
-    if (version.intake?.confirmation?.pendingSummaryFields?.length) {
+    if (
+      version.intake?.confirmation?.pendingSummaryFields?.length ||
+      version.workflow === "clarification"
+    ) {
       const labels: Partial<Record<keyof Challenge, string>> = {
         goal: "目标",
         constraints: "必须满足的要求",
@@ -626,9 +695,10 @@ export function newVersion(
         timeHours: "时间",
         domain: "成果类型",
       };
-      const questions = version.intake.confirmation.pendingSummaryFields.map(
+      const questions = (version.intake?.confirmation?.pendingSummaryFields ?? []).map(
         (field) => `请确认最新修改后的${labels[field] ?? field}要求，或填写需要进一步调整的内容。`,
       );
+      if (!questions.length) questions.push("请说明本次补充后需要怎样调整需求范围或具体要求。");
       const followUp = createFollowUpIntake(arenaId, version, owner, questions);
       if (followUp) {
         version.waitingForIntake = { id: followUp.id, versionId: version.id };
@@ -885,6 +955,7 @@ function claim(
     if (
       arena.active_version_id !== versionId ||
       version.waitingForIntake ||
+      version.workflow === "clarification" ||
       !["ready", "running"].includes(version.status)
     )
       return null;

@@ -552,7 +552,7 @@ export function ReplayQuestionScene({
       if (!scheduled && !disposed) scheduled = requestAnimationFrame(measure);
     };
     const receive = (frame: PlaybackFrame) => {
-      if (frame.stepId !== activeStepId) return;
+      if (disposed || frame.stepId !== activeStepId) return;
       frameRef.current = frame;
       const key = localSignature(frame);
       if (signature !== key) {

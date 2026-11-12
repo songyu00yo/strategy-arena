@@ -1,6 +1,8 @@
 import type { ArenaVersion } from "./contracts";
 import type { ClarificationRun } from "./clarification-contracts";
 import type { IntakeQuestion, RecordedAnswer } from "./intake-contracts";
+import type { ReplayAction } from "./replay-contracts";
+import { buildClarificationReplay, pendingReplayAnswer, REPLAY_ACTION_TITLES } from "./replay";
 
 export interface StepContext {
   stepId: string;
@@ -56,13 +58,102 @@ export function clarificationQuestionText(
     .join("\n");
 }
 
+export function replaySummaryLines(summary: ReplayAction["summary"]): string[] {
+  if (!summary) return ["本次操作未记录完整摘要，保留现有来源记录。"];
+  const { challenge, assumptions } = summary;
+  const domains = {
+    general: "不限领域",
+    learning: "学习成长",
+    life: "生活决策",
+    work: "工作业务",
+    creation: "内容创作",
+  };
+  return [
+    `目标 — ${challenge.goal}`,
+    `要求 — ${challenge.constraints || "未填写"}`,
+    `偏好与风格 — ${challenge.preferences || "未填写"}`,
+    `已有想法 — ${challenge.options.join("、") || "未填写"}`,
+    `预算上限 — ${challenge.budget === null ? "未填写" : `${challenge.budget} 元`}`,
+    `时间上限 — ${challenge.timeHours === null ? "未填写" : `${challenge.timeHours} 小时`}`,
+    `成果领域 — ${domains[challenge.domain]}`,
+    `材料 — ${challenge.materials || "未提供"}`,
+    `暂定假设（待核对） — ${assumptions.join("、") || "未列出"}`,
+  ];
+}
+
+/** Render accepted records as source text without pretending that a selected value is confirmed. */
+export function replayActionLines(
+  action: ReplayAction,
+  visibleAnswers?: readonly RecordedAnswer[],
+  committed = true,
+): string[] {
+  const answers =
+    visibleAnswers ??
+    (action.kind === "answer"
+      ? action.answers?.map(pendingReplayAnswer)
+      : action.kind === "questions"
+        ? []
+        : action.answers) ??
+    [];
+  return [
+    REPLAY_ACTION_TITLES[action.kind],
+    ...(action.questions ?? []).map((question) =>
+      clarificationQuestionText(
+        question,
+        answers.find((answer) => answer.questionId === question.id),
+      ),
+    ),
+    ...(["summary_submit", "summary_confirm"].includes(action.kind)
+      ? replaySummaryLines(action.summary)
+      : []),
+    action.kind === "summary_submit" ? "已提交摘要，等待模型查漏与提交结果。" : "",
+    action.kind === "summary_confirm"
+      ? committed
+        ? "保存记录显示需求摘要已明确确认。"
+        : "正在展示摘要确认过程。"
+      : "",
+    action.kind === "handoff"
+      ? committed
+        ? "保存记录中的需求说明与执行提示词已生成。"
+        : "正在整理保存记录中的交接结果。"
+      : "",
+    action.source?.kind === "snapshot"
+      ? "按保存记录重建，原始点击顺序和输入速度未记录。"
+      : "依据保存的请求记录。",
+  ].filter(Boolean);
+}
+
 /** Canonical persisted step text shared by the reader and the source check. No generated explanation. */
-export function stepContext(version: ArenaVersion, stepId: string): StepContext | null {
+export function stepContext(
+  version: ArenaVersion,
+  stepId: string,
+  replayActions?: readonly ReplayAction[],
+): StepContext | null {
+  if (version.workflow === "clarification" && stepId.startsWith("replay:")) {
+    const action = buildClarificationReplay(version, replayActions).find(
+      (step) => step.id === stepId,
+    )?.replayAction;
+    if (!action) return null;
+    const source = version.clarification?.runs.find((run) => run.id === action.sourceRunId);
+    return {
+      stepId,
+      title: `${REPLAY_ACTION_TITLES[action.kind]} · 第 ${action.round} 轮`,
+      quote: [
+        ...replayActionLines(action),
+        `依据修订 ${action.revision}`,
+        source ? `原模型记录 ${source.id}\n${source.summary}` : "",
+        action.source
+          ? `操作来源 ${action.source.reference}${action.source.sha256 ? `\n来源校验 ${action.source.sha256}` : ""}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    };
+  }
   if (version.workflow === "clarification" && stepId.startsWith("clarification:")) {
     const run = version.clarification?.runs.find((entry) => `clarification:${entry.id}` === stepId);
     if (!run) return null;
     const title = `${run.role} · 第 ${run.round} 轮需求审查`;
-    const answers = clarificationAnswersForRun(version, run);
     return {
       stepId,
       title,
@@ -70,12 +161,7 @@ export function stepContext(version: ArenaVersion, stepId: string): StepContext 
         title,
         run.summary,
         ...("questions" in run.output
-          ? run.output.questions.map((question) =>
-              clarificationQuestionText(
-                question,
-                answers.find((answer) => answer.questionId === question.id),
-              ),
-            )
+          ? run.output.questions.map((question) => clarificationQuestionText(question, undefined))
           : []),
         `记录 ${run.id}`,
         `调用 ${run.operationId}`,

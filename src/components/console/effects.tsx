@@ -261,29 +261,38 @@ export function Chars({
   text,
   active,
   delay = 0,
+  speed = 1,
 }: {
   text: string;
   active: boolean;
   delay?: number;
+  speed?: number;
 }) {
   if (!active) return <>{text}</>;
   const glyphs = Array.from(text);
   const step = Math.min(34, 900 / Math.max(glyphs.length, 1));
   return (
-    <>
-      <span className="sr-only">{text}</span>
-      <span aria-hidden="true">
+    <span className="c-text-with-motion">
+      <span className="c-readable-text">{text}</span>
+      <span className="c-text-ornament" aria-hidden="true">
         {glyphs.map((glyph, i) =>
           glyph === " " ? (
             " "
           ) : (
-            <span key={i} className="c-char" style={{ animationDelay: `${delay + i * step}ms` }}>
+            <span
+              key={i}
+              className="c-char"
+              style={{
+                animationDelay: `${(delay + i * step) / speed}ms`,
+                animationDuration: `${800 / speed}ms`,
+              }}
+            >
               {glyph}
             </span>
           ),
         )}
       </span>
-    </>
+    </span>
   );
 }
 
@@ -293,28 +302,52 @@ export function Decode({
   active,
   delay = 0,
   origin = "story",
+  speed = 1,
 }: {
   text: string;
   active: boolean;
   delay?: number;
   origin?: MotionOrigin;
+  speed?: number;
 }) {
   const reducePreference = useReducedMotion();
   const ref = useRef<HTMLSpanElement>(null);
+  const inkAnimation = useRef<Animation | null>(null);
+  const playbackRate = useRef(speed);
+  useLayoutEffect(() => {
+    playbackRate.current = speed;
+    inkAnimation.current?.updatePlaybackRate(speed);
+  }, [speed]);
   useEffect(() => {
     const el = ref.current;
     if (!el || !active || reducedMotion() || !text) return;
     // Ink settles into the paper: out of focus, then sharp. The text itself never changes.
     const scope = createMotionScope(origin);
-    scope.animate(el, [{ opacity: 0 }, { opacity: 1 }], {
-      duration: 760,
-      delay,
-      easing: "cubic-bezier(.19,1,.22,1)",
-      fill: "backwards",
-    });
-    return () => scope.dispose();
+    const animation = scope.animate(
+      el,
+      [{ opacity: 0 }, { opacity: 0.16, offset: 0.5 }, { opacity: 0 }],
+      {
+        duration: 760,
+        delay,
+        easing: "cubic-bezier(.19,1,.22,1)",
+        fill: "backwards",
+      },
+    );
+    animation.playbackRate = playbackRate.current;
+    inkAnimation.current = animation;
+    return () => {
+      scope.dispose();
+      if (inkAnimation.current === animation) inkAnimation.current = null;
+    };
   }, [text, active, delay, origin, reducePreference]);
-  return <span ref={ref}>{text}</span>;
+  return (
+    <span className="c-readable-decode">
+      <span>{text}</span>
+      <span ref={ref} className="c-decode-ornament" aria-hidden="true">
+        {text}
+      </span>
+    </span>
+  );
 }
 
 /** A number that rolls to its new value and jumps as it lands. */

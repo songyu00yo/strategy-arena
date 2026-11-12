@@ -16,7 +16,7 @@
       "07086bec538ee2215c75ca7db8324ece31d7a5b5",
       "d3d328d6fd35381ad407e07e513e31a79528aa87"
     ],
-    "qualityNote": "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。",
+    "qualityNote": "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。操作回放依据保存的API请求与快照重建，播放节奏为示意。",
     "versionCount": 1,
     "sourceFile": "work/new-clarification-examples/document/completed-record.json",
     "sourceFileSha256": "6a9474c318ef106de0687a23fe3c09d2264cb26b97807cdca37eb4e5f849e842",
@@ -5159,5 +5159,1099 @@
       "promptVersion": "1.4.4",
       "schemaVersion": "1.3.1"
     }
-  }
+  },
+  "replayActions": [
+    {
+      "id": "replay-3-questions-0",
+      "kind": "questions",
+      "round": 1,
+      "revision": 2,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-5042f4625da9ad05ff55",
+      "questions": [
+        {
+          "id": "subject_purpose",
+          "title": "文档要说明什么，用于什么场景？",
+          "reason": "主题和用途决定后续内容范围与组织方式。",
+          "placeholder": "例如：说明新员工入职流程，供新人办理入职时参考",
+          "type": "text",
+          "options": [],
+          "unit": "",
+          "dependsOn": [],
+          "affects": ["goal", "domain", "constraints"],
+          "authorization": "",
+          "decisionId": "subject_purpose"
+        }
+      ],
+      "createdAt": "2026-11-12T06:16:08.947Z",
+      "source": {
+        "kind": "snapshot",
+        "reference": "work/new-clarification-examples/document/raw/003-response.json",
+        "sha256": "2edd8b49659b762bef6836014f2185159eb11bcfff08b53478c5219df624bf3d",
+        "requestIndex": 3,
+        "method": "POST",
+        "path": "/api/intakes/recording-3043db6d3e476017afae/analyze"
+      }
+    },
+    {
+      "id": "replay-6-answer-1",
+      "kind": "answer",
+      "round": 1,
+      "revision": 2,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-5042f4625da9ad05ff55",
+      "questions": [
+        {
+          "id": "subject_purpose",
+          "title": "文档要说明什么，用于什么场景？",
+          "reason": "主题和用途决定后续内容范围与组织方式。",
+          "placeholder": "例如：说明新员工入职流程，供新人办理入职时参考",
+          "type": "text",
+          "options": [],
+          "unit": "",
+          "dependsOn": [],
+          "affects": ["goal", "domain", "constraints"],
+          "authorization": "",
+          "decisionId": "subject_purpose"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "subject_purpose",
+          "state": "answered",
+          "value": "整理一份个人读书笔记入门说明，给刚开始做笔记的大学生阅读，帮助他们完成“记录一本书的信息、摘录一段内容、写下自己的理解、每周回看一次”的小流程。使用明确标注的虚构书名和演示摘录作为示例。",
+          "question": {
+            "id": "subject_purpose",
+            "title": "文档要说明什么，用于什么场景？",
+            "reason": "主题和用途决定后续内容范围与组织方式。",
+            "placeholder": "例如：说明新员工入职流程，供新人办理入职时参考",
+            "type": "text",
+            "options": [],
+            "unit": "",
+            "dependsOn": [],
+            "affects": ["goal", "domain", "constraints"],
+            "authorization": "",
+            "decisionId": "subject_purpose"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 3,
+          "confirmedAt": "2026-11-12T06:17:09.836Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:17:09.637Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/006-request.json",
+        "sha256": "f70da70971929814437410dcb49017619dca78b072746e42cf275dc7352594e1",
+        "requestIndex": 6,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-6-round_confirm-2",
+      "kind": "round_confirm",
+      "round": 1,
+      "revision": 2,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-5042f4625da9ad05ff55",
+      "questions": [
+        {
+          "id": "subject_purpose",
+          "title": "文档要说明什么，用于什么场景？",
+          "reason": "主题和用途决定后续内容范围与组织方式。",
+          "placeholder": "例如：说明新员工入职流程，供新人办理入职时参考",
+          "type": "text",
+          "options": [],
+          "unit": "",
+          "dependsOn": [],
+          "affects": ["goal", "domain", "constraints"],
+          "authorization": "",
+          "decisionId": "subject_purpose"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "subject_purpose",
+          "state": "answered",
+          "value": "整理一份个人读书笔记入门说明，给刚开始做笔记的大学生阅读，帮助他们完成“记录一本书的信息、摘录一段内容、写下自己的理解、每周回看一次”的小流程。使用明确标注的虚构书名和演示摘录作为示例。",
+          "question": {
+            "id": "subject_purpose",
+            "title": "文档要说明什么，用于什么场景？",
+            "reason": "主题和用途决定后续内容范围与组织方式。",
+            "placeholder": "例如：说明新员工入职流程，供新人办理入职时参考",
+            "type": "text",
+            "options": [],
+            "unit": "",
+            "dependsOn": [],
+            "affects": ["goal", "domain", "constraints"],
+            "authorization": "",
+            "decisionId": "subject_purpose"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 3,
+          "confirmedAt": "2026-11-12T06:17:09.836Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:17:09.637Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/006-request.json",
+        "sha256": "f70da70971929814437410dcb49017619dca78b072746e42cf275dc7352594e1",
+        "requestIndex": 6,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-7-questions-3",
+      "kind": "questions",
+      "round": 2,
+      "revision": 5,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-43e74314c8764eda5ba7",
+      "questions": [
+        {
+          "id": "source_materials",
+          "title": "是否有现成材料需要整理？",
+          "reason": "确定文档依据及是否需要补充材料。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "有现成笔记或资料，下一步提供",
+            "没有现成材料，请围绕已确定的流程编写",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "source_materials"
+        },
+        {
+          "id": "content_scope",
+          "title": "四步流程之外还需要哪些内容？",
+          "reason": "确定文档的补充内容范围。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "提供一份可填写的读书笔记模板",
+            "说明常见困难及应对方法",
+            "提供每周回看的具体问题清单",
+            "仅说明四步流程及虚构示例，不添加其他内容",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "content_scope"
+        },
+        {
+          "id": "writing_style",
+          "title": "希望采用哪种表达方式？",
+          "reason": "确定面向初学者的语气和详略。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "亲切直白：短句配步骤列表，重点说明如何操作",
+            "耐心讲解：分段解释每一步的目的和做法，辅以示例",
+            "手册式：用小标题、清单和提示框，方便快速查阅",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["audience"],
+          "affects": ["preferences"],
+          "authorization": "",
+          "decisionId": "writing_style"
+        }
+      ],
+      "createdAt": "2026-11-12T06:17:27.597Z",
+      "source": {
+        "kind": "snapshot",
+        "reference": "work/new-clarification-examples/document/raw/007-response.json",
+        "sha256": "18907f697e099f6706a366d860ef495438754207b92d71f152262c03a53ef87d",
+        "requestIndex": 7,
+        "method": "POST",
+        "path": "/api/intakes/recording-3043db6d3e476017afae/analyze"
+      }
+    },
+    {
+      "id": "replay-10-answer-4",
+      "kind": "answer",
+      "round": 2,
+      "revision": 5,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-43e74314c8764eda5ba7",
+      "questions": [
+        {
+          "id": "source_materials",
+          "title": "是否有现成材料需要整理？",
+          "reason": "确定文档依据及是否需要补充材料。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "有现成笔记或资料，下一步提供",
+            "没有现成材料，请围绕已确定的流程编写",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "source_materials"
+        },
+        {
+          "id": "content_scope",
+          "title": "四步流程之外还需要哪些内容？",
+          "reason": "确定文档的补充内容范围。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "提供一份可填写的读书笔记模板",
+            "说明常见困难及应对方法",
+            "提供每周回看的具体问题清单",
+            "仅说明四步流程及虚构示例，不添加其他内容",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "content_scope"
+        },
+        {
+          "id": "writing_style",
+          "title": "希望采用哪种表达方式？",
+          "reason": "确定面向初学者的语气和详略。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "亲切直白：短句配步骤列表，重点说明如何操作",
+            "耐心讲解：分段解释每一步的目的和做法，辅以示例",
+            "手册式：用小标题、清单和提示框，方便快速查阅",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["audience"],
+          "affects": ["preferences"],
+          "authorization": "",
+          "decisionId": "writing_style"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "source_materials",
+          "state": "answered",
+          "value": "没有现成材料，请围绕已确定的流程编写",
+          "question": {
+            "id": "source_materials",
+            "title": "是否有现成材料需要整理？",
+            "reason": "确定文档依据及是否需要补充材料。",
+            "placeholder": "",
+            "type": "single",
+            "options": [
+              "有现成笔记或资料，下一步提供",
+              "没有现成材料，请围绕已确定的流程编写",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["subject_purpose"],
+            "affects": ["constraints"],
+            "authorization": "",
+            "decisionId": "source_materials"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 6,
+          "confirmedAt": "2026-11-12T06:18:06.497Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:18:06.347Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/010-request.json",
+        "sha256": "59adb2bb13cace5443b8fa5d95c2311506c3b39743b330a143345d8b0d9d7c15",
+        "requestIndex": 10,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-10-answer-5",
+      "kind": "answer",
+      "round": 2,
+      "revision": 5,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-43e74314c8764eda5ba7",
+      "questions": [
+        {
+          "id": "source_materials",
+          "title": "是否有现成材料需要整理？",
+          "reason": "确定文档依据及是否需要补充材料。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "有现成笔记或资料，下一步提供",
+            "没有现成材料，请围绕已确定的流程编写",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "source_materials"
+        },
+        {
+          "id": "content_scope",
+          "title": "四步流程之外还需要哪些内容？",
+          "reason": "确定文档的补充内容范围。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "提供一份可填写的读书笔记模板",
+            "说明常见困难及应对方法",
+            "提供每周回看的具体问题清单",
+            "仅说明四步流程及虚构示例，不添加其他内容",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "content_scope"
+        },
+        {
+          "id": "writing_style",
+          "title": "希望采用哪种表达方式？",
+          "reason": "确定面向初学者的语气和详略。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "亲切直白：短句配步骤列表，重点说明如何操作",
+            "耐心讲解：分段解释每一步的目的和做法，辅以示例",
+            "手册式：用小标题、清单和提示框，方便快速查阅",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["audience"],
+          "affects": ["preferences"],
+          "authorization": "",
+          "decisionId": "writing_style"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "content_scope",
+          "state": "answered",
+          "value": ["提供一份可填写的读书笔记模板", "提供每周回看的具体问题清单"],
+          "question": {
+            "id": "content_scope",
+            "title": "四步流程之外还需要哪些内容？",
+            "reason": "确定文档的补充内容范围。",
+            "placeholder": "",
+            "type": "multiple",
+            "options": [
+              "提供一份可填写的读书笔记模板",
+              "说明常见困难及应对方法",
+              "提供每周回看的具体问题清单",
+              "仅说明四步流程及虚构示例，不添加其他内容",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["subject_purpose"],
+            "affects": ["constraints"],
+            "authorization": "",
+            "decisionId": "content_scope"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 6,
+          "confirmedAt": "2026-11-12T06:18:06.497Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:18:06.347Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/010-request.json",
+        "sha256": "59adb2bb13cace5443b8fa5d95c2311506c3b39743b330a143345d8b0d9d7c15",
+        "requestIndex": 10,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-10-answer-6",
+      "kind": "answer",
+      "round": 2,
+      "revision": 5,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-43e74314c8764eda5ba7",
+      "questions": [
+        {
+          "id": "source_materials",
+          "title": "是否有现成材料需要整理？",
+          "reason": "确定文档依据及是否需要补充材料。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "有现成笔记或资料，下一步提供",
+            "没有现成材料，请围绕已确定的流程编写",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "source_materials"
+        },
+        {
+          "id": "content_scope",
+          "title": "四步流程之外还需要哪些内容？",
+          "reason": "确定文档的补充内容范围。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "提供一份可填写的读书笔记模板",
+            "说明常见困难及应对方法",
+            "提供每周回看的具体问题清单",
+            "仅说明四步流程及虚构示例，不添加其他内容",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "content_scope"
+        },
+        {
+          "id": "writing_style",
+          "title": "希望采用哪种表达方式？",
+          "reason": "确定面向初学者的语气和详略。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "亲切直白：短句配步骤列表，重点说明如何操作",
+            "耐心讲解：分段解释每一步的目的和做法，辅以示例",
+            "手册式：用小标题、清单和提示框，方便快速查阅",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["audience"],
+          "affects": ["preferences"],
+          "authorization": "",
+          "decisionId": "writing_style"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "writing_style",
+          "state": "answered",
+          "value": "亲切直白：短句配步骤列表，重点说明如何操作",
+          "question": {
+            "id": "writing_style",
+            "title": "希望采用哪种表达方式？",
+            "reason": "确定面向初学者的语气和详略。",
+            "placeholder": "",
+            "type": "single",
+            "options": [
+              "亲切直白：短句配步骤列表，重点说明如何操作",
+              "耐心讲解：分段解释每一步的目的和做法，辅以示例",
+              "手册式：用小标题、清单和提示框，方便快速查阅",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["audience"],
+            "affects": ["preferences"],
+            "authorization": "",
+            "decisionId": "writing_style"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 6,
+          "confirmedAt": "2026-11-12T06:18:06.497Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:18:06.347Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/010-request.json",
+        "sha256": "59adb2bb13cace5443b8fa5d95c2311506c3b39743b330a143345d8b0d9d7c15",
+        "requestIndex": 10,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-10-round_confirm-7",
+      "kind": "round_confirm",
+      "round": 2,
+      "revision": 5,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-43e74314c8764eda5ba7",
+      "questions": [
+        {
+          "id": "source_materials",
+          "title": "是否有现成材料需要整理？",
+          "reason": "确定文档依据及是否需要补充材料。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "有现成笔记或资料，下一步提供",
+            "没有现成材料，请围绕已确定的流程编写",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "source_materials"
+        },
+        {
+          "id": "content_scope",
+          "title": "四步流程之外还需要哪些内容？",
+          "reason": "确定文档的补充内容范围。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "提供一份可填写的读书笔记模板",
+            "说明常见困难及应对方法",
+            "提供每周回看的具体问题清单",
+            "仅说明四步流程及虚构示例，不添加其他内容",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["subject_purpose"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "content_scope"
+        },
+        {
+          "id": "writing_style",
+          "title": "希望采用哪种表达方式？",
+          "reason": "确定面向初学者的语气和详略。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "亲切直白：短句配步骤列表，重点说明如何操作",
+            "耐心讲解：分段解释每一步的目的和做法，辅以示例",
+            "手册式：用小标题、清单和提示框，方便快速查阅",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["audience"],
+          "affects": ["preferences"],
+          "authorization": "",
+          "decisionId": "writing_style"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "source_materials",
+          "state": "answered",
+          "value": "没有现成材料，请围绕已确定的流程编写",
+          "question": {
+            "id": "source_materials",
+            "title": "是否有现成材料需要整理？",
+            "reason": "确定文档依据及是否需要补充材料。",
+            "placeholder": "",
+            "type": "single",
+            "options": [
+              "有现成笔记或资料，下一步提供",
+              "没有现成材料，请围绕已确定的流程编写",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["subject_purpose"],
+            "affects": ["constraints"],
+            "authorization": "",
+            "decisionId": "source_materials"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 6,
+          "confirmedAt": "2026-11-12T06:18:06.497Z"
+        },
+        {
+          "questionId": "content_scope",
+          "state": "answered",
+          "value": ["提供一份可填写的读书笔记模板", "提供每周回看的具体问题清单"],
+          "question": {
+            "id": "content_scope",
+            "title": "四步流程之外还需要哪些内容？",
+            "reason": "确定文档的补充内容范围。",
+            "placeholder": "",
+            "type": "multiple",
+            "options": [
+              "提供一份可填写的读书笔记模板",
+              "说明常见困难及应对方法",
+              "提供每周回看的具体问题清单",
+              "仅说明四步流程及虚构示例，不添加其他内容",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["subject_purpose"],
+            "affects": ["constraints"],
+            "authorization": "",
+            "decisionId": "content_scope"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 6,
+          "confirmedAt": "2026-11-12T06:18:06.497Z"
+        },
+        {
+          "questionId": "writing_style",
+          "state": "answered",
+          "value": "亲切直白：短句配步骤列表，重点说明如何操作",
+          "question": {
+            "id": "writing_style",
+            "title": "希望采用哪种表达方式？",
+            "reason": "确定面向初学者的语气和详略。",
+            "placeholder": "",
+            "type": "single",
+            "options": [
+              "亲切直白：短句配步骤列表，重点说明如何操作",
+              "耐心讲解：分段解释每一步的目的和做法，辅以示例",
+              "手册式：用小标题、清单和提示框，方便快速查阅",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["audience"],
+            "affects": ["preferences"],
+            "authorization": "",
+            "decisionId": "writing_style"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 6,
+          "confirmedAt": "2026-11-12T06:18:06.497Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:18:06.347Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/010-request.json",
+        "sha256": "59adb2bb13cace5443b8fa5d95c2311506c3b39743b330a143345d8b0d9d7c15",
+        "requestIndex": 10,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-11-questions-8",
+      "kind": "questions",
+      "round": 3,
+      "revision": 8,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-0f55da2b37e0adb0c2a1",
+      "questions": [
+        {
+          "id": "organization",
+          "title": "文档希望如何组织？",
+          "reason": "确定步骤、示例和模板的阅读顺序。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+            "先展示完整虚构示例，再逐步说明；最后提供模板和回看问题清单",
+            "先提供填写模板，再按模板字段说明四步并配示例；最后提供回看问题清单",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["preferences", "constraints"],
+          "authorization": "",
+          "decisionId": "organization"
+        },
+        {
+          "id": "acceptance_criteria",
+          "title": "还有哪些额外完成标准？",
+          "reason": "确定已有内容要求之外的验收依据。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "每个步骤都有可直接照做的操作指引",
+            "模板包含四步所需的填写位置",
+            "回看问题可以直接用于每周复盘",
+            "没有额外完成标准",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "acceptance_criteria"
+        }
+      ],
+      "createdAt": "2026-11-12T06:18:22.694Z",
+      "source": {
+        "kind": "snapshot",
+        "reference": "work/new-clarification-examples/document/raw/011-response.json",
+        "sha256": "69f823a84705c59f7b40941da10507d843c282bba6dcd9a94642684502dc7f78",
+        "requestIndex": 11,
+        "method": "POST",
+        "path": "/api/intakes/recording-3043db6d3e476017afae/analyze"
+      }
+    },
+    {
+      "id": "replay-14-answer-9",
+      "kind": "answer",
+      "round": 3,
+      "revision": 8,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-0f55da2b37e0adb0c2a1",
+      "questions": [
+        {
+          "id": "organization",
+          "title": "文档希望如何组织？",
+          "reason": "确定步骤、示例和模板的阅读顺序。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+            "先展示完整虚构示例，再逐步说明；最后提供模板和回看问题清单",
+            "先提供填写模板，再按模板字段说明四步并配示例；最后提供回看问题清单",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["preferences", "constraints"],
+          "authorization": "",
+          "decisionId": "organization"
+        },
+        {
+          "id": "acceptance_criteria",
+          "title": "还有哪些额外完成标准？",
+          "reason": "确定已有内容要求之外的验收依据。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "每个步骤都有可直接照做的操作指引",
+            "模板包含四步所需的填写位置",
+            "回看问题可以直接用于每周复盘",
+            "没有额外完成标准",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "acceptance_criteria"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "organization",
+          "state": "answered",
+          "value": "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+          "question": {
+            "id": "organization",
+            "title": "文档希望如何组织？",
+            "reason": "确定步骤、示例和模板的阅读顺序。",
+            "placeholder": "",
+            "type": "single",
+            "options": [
+              "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+              "先展示完整虚构示例，再逐步说明；最后提供模板和回看问题清单",
+              "先提供填写模板，再按模板字段说明四步并配示例；最后提供回看问题清单",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["content_scope"],
+            "affects": ["preferences", "constraints"],
+            "authorization": "",
+            "decisionId": "organization"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 9,
+          "confirmedAt": "2026-11-12T06:19:26.890Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:19:26.715Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/014-request.json",
+        "sha256": "6dbfa8e29a5707c972655d382b8cf36e554cf48bd6cb4620b391e8578aebb7f1",
+        "requestIndex": 14,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-14-answer-10",
+      "kind": "answer",
+      "round": 3,
+      "revision": 8,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-0f55da2b37e0adb0c2a1",
+      "questions": [
+        {
+          "id": "organization",
+          "title": "文档希望如何组织？",
+          "reason": "确定步骤、示例和模板的阅读顺序。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+            "先展示完整虚构示例，再逐步说明；最后提供模板和回看问题清单",
+            "先提供填写模板，再按模板字段说明四步并配示例；最后提供回看问题清单",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["preferences", "constraints"],
+          "authorization": "",
+          "decisionId": "organization"
+        },
+        {
+          "id": "acceptance_criteria",
+          "title": "还有哪些额外完成标准？",
+          "reason": "确定已有内容要求之外的验收依据。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "每个步骤都有可直接照做的操作指引",
+            "模板包含四步所需的填写位置",
+            "回看问题可以直接用于每周复盘",
+            "没有额外完成标准",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "acceptance_criteria"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "acceptance_criteria",
+          "state": "answered",
+          "value": [
+            "每个步骤都有可直接照做的操作指引",
+            "模板包含四步所需的填写位置",
+            "回看问题可以直接用于每周复盘"
+          ],
+          "question": {
+            "id": "acceptance_criteria",
+            "title": "还有哪些额外完成标准？",
+            "reason": "确定已有内容要求之外的验收依据。",
+            "placeholder": "",
+            "type": "multiple",
+            "options": [
+              "每个步骤都有可直接照做的操作指引",
+              "模板包含四步所需的填写位置",
+              "回看问题可以直接用于每周复盘",
+              "没有额外完成标准",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["content_scope"],
+            "affects": ["constraints"],
+            "authorization": "",
+            "decisionId": "acceptance_criteria"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 9,
+          "confirmedAt": "2026-11-12T06:19:26.890Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:19:26.715Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/014-request.json",
+        "sha256": "6dbfa8e29a5707c972655d382b8cf36e554cf48bd6cb4620b391e8578aebb7f1",
+        "requestIndex": 14,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-14-round_confirm-11",
+      "kind": "round_confirm",
+      "round": 3,
+      "revision": 8,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-0f55da2b37e0adb0c2a1",
+      "questions": [
+        {
+          "id": "organization",
+          "title": "文档希望如何组织？",
+          "reason": "确定步骤、示例和模板的阅读顺序。",
+          "placeholder": "",
+          "type": "single",
+          "options": [
+            "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+            "先展示完整虚构示例，再逐步说明；最后提供模板和回看问题清单",
+            "先提供填写模板，再按模板字段说明四步并配示例；最后提供回看问题清单",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["preferences", "constraints"],
+          "authorization": "",
+          "decisionId": "organization"
+        },
+        {
+          "id": "acceptance_criteria",
+          "title": "还有哪些额外完成标准？",
+          "reason": "确定已有内容要求之外的验收依据。",
+          "placeholder": "",
+          "type": "multiple",
+          "options": [
+            "每个步骤都有可直接照做的操作指引",
+            "模板包含四步所需的填写位置",
+            "回看问题可以直接用于每周复盘",
+            "没有额外完成标准",
+            "其他，下一步由我描述"
+          ],
+          "unit": "",
+          "dependsOn": ["content_scope"],
+          "affects": ["constraints"],
+          "authorization": "",
+          "decisionId": "acceptance_criteria"
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "organization",
+          "state": "answered",
+          "value": "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+          "question": {
+            "id": "organization",
+            "title": "文档希望如何组织？",
+            "reason": "确定步骤、示例和模板的阅读顺序。",
+            "placeholder": "",
+            "type": "single",
+            "options": [
+              "按四步依次说明，每步附示例；最后提供模板和回看问题清单",
+              "先展示完整虚构示例，再逐步说明；最后提供模板和回看问题清单",
+              "先提供填写模板，再按模板字段说明四步并配示例；最后提供回看问题清单",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["content_scope"],
+            "affects": ["preferences", "constraints"],
+            "authorization": "",
+            "decisionId": "organization"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 9,
+          "confirmedAt": "2026-11-12T06:19:26.890Z"
+        },
+        {
+          "questionId": "acceptance_criteria",
+          "state": "answered",
+          "value": [
+            "每个步骤都有可直接照做的操作指引",
+            "模板包含四步所需的填写位置",
+            "回看问题可以直接用于每周复盘"
+          ],
+          "question": {
+            "id": "acceptance_criteria",
+            "title": "还有哪些额外完成标准？",
+            "reason": "确定已有内容要求之外的验收依据。",
+            "placeholder": "",
+            "type": "multiple",
+            "options": [
+              "每个步骤都有可直接照做的操作指引",
+              "模板包含四步所需的填写位置",
+              "回看问题可以直接用于每周复盘",
+              "没有额外完成标准",
+              "其他，下一步由我描述"
+            ],
+            "unit": "",
+            "dependsOn": ["content_scope"],
+            "affects": ["constraints"],
+            "authorization": "",
+            "decisionId": "acceptance_criteria"
+          },
+          "confirmation": "confirmed",
+          "confirmedRevision": 9,
+          "confirmedAt": "2026-11-12T06:19:26.890Z"
+        }
+      ],
+      "createdAt": "2026-11-12T06:19:26.715Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/014-request.json",
+        "sha256": "6dbfa8e29a5707c972655d382b8cf36e554cf48bd6cb4620b391e8578aebb7f1",
+        "requestIndex": 14,
+        "method": "PATCH",
+        "path": "/api/intakes/recording-3043db6d3e476017afae"
+      }
+    },
+    {
+      "id": "replay-21-summary_submit-12",
+      "kind": "summary_submit",
+      "round": 6,
+      "revision": 13,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-b7a5ebfd52dfa908228e",
+      "summary": {
+        "challenge": {
+          "goal": "我想整理一份说明文档，具体怎么组织还没想好。",
+          "constraints": "文档要说明什么，用于什么场景？ — 整理一份个人读书笔记入门说明，给刚开始做笔记的大学生阅读，帮助他们完成“记录一本书的信息、摘录一段内容、写下自己的理解、每周回看一次”的小流程。使用明确标注的虚构书名和演示摘录作为示例。\n是否有现成材料需要整理？ — 没有现成材料，请围绕已确定的流程编写\n四步流程之外还需要哪些内容？ — 提供一份可填写的读书笔记模板、提供每周回看的具体问题清单\n文档希望如何组织？ — 按四步依次说明，每步附示例；最后提供模板和回看问题清单\n还有哪些额外完成标准？ — 每个步骤都有可直接照做的操作指引、模板包含四步所需的填写位置、回看问题可以直接用于每周复盘",
+          "preferences": "希望采用哪种表达方式？ — 亲切直白：短句配步骤列表，重点说明如何操作",
+          "options": [],
+          "materials": "",
+          "domain": "general",
+          "budget": null,
+          "timeHours": null
+        },
+        "assumptions": []
+      },
+      "createdAt": "2026-11-12T06:35:38.238Z",
+      "source": {
+        "kind": "api_request",
+        "reference": "work/new-clarification-examples/document/raw/021-request.json",
+        "sha256": "ea1f1d3f79b39c704cfe069ef60d8c3b59b56c0e1f1e8216692c91ee5b2dd74e",
+        "requestIndex": 21,
+        "method": "POST",
+        "path": "/api/intakes/recording-3043db6d3e476017afae/submit"
+      }
+    },
+    {
+      "id": "replay-21-summary_confirm-13",
+      "kind": "summary_confirm",
+      "round": 6,
+      "revision": 15,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-bea862b5fc7424c2c97d",
+      "summary": {
+        "challenge": {
+          "goal": "我想整理一份说明文档，具体怎么组织还没想好。",
+          "constraints": "文档要说明什么，用于什么场景？ — 整理一份个人读书笔记入门说明，给刚开始做笔记的大学生阅读，帮助他们完成“记录一本书的信息、摘录一段内容、写下自己的理解、每周回看一次”的小流程。使用明确标注的虚构书名和演示摘录作为示例。\n是否有现成材料需要整理？ — 没有现成材料，请围绕已确定的流程编写\n四步流程之外还需要哪些内容？ — 提供一份可填写的读书笔记模板、提供每周回看的具体问题清单\n文档希望如何组织？ — 按四步依次说明，每步附示例；最后提供模板和回看问题清单\n还有哪些额外完成标准？ — 每个步骤都有可直接照做的操作指引、模板包含四步所需的填写位置、回看问题可以直接用于每周复盘",
+          "preferences": "希望采用哪种表达方式？ — 亲切直白：短句配步骤列表，重点说明如何操作",
+          "options": [],
+          "materials": "本次读取范围：以下仅列本次选用的文字、文件页码或单元格片段；未列出的内容未参与本次整理。完整回答保留在任务记录中。\n用户原始目标：我想整理一份说明文档，具体怎么组织还没想好。\n用户补充回答：\n文档要说明什么，用于什么场景？：整理一份个人读书笔记入门说明，给刚开始做笔记的大学生阅读，帮助他们完成“记录一本书的信息、摘录一段内容、写下自己的理解、每周回看一次”的小流程。使用明确标注的虚构书名和演示摘录作为示例。\n是否有现成材料需要整理？：没有现成材料，请围绕已确定的流程编写\n四步流程之外还需要哪些内容？：提供一份可填写的读书笔记模板、提供每周回看的具体问题清单\n希望采用哪种表达方式？：亲切直白：短句配步骤列表，重点说明如何操作\n文档希望如何组织？：按四步依次说明，每步附示例；最后提供模板和回看问题清单\n还有哪些额外完成标准？：每个步骤都有可直接照做的操作指引、模板包含四步所需的填写位置、回看问题可以直接用于每周复盘\n\n",
+          "domain": "general",
+          "budget": null,
+          "timeHours": null
+        },
+        "assumptions": []
+      },
+      "createdAt": "2026-11-12T06:35:57.982Z",
+      "source": {
+        "kind": "snapshot",
+        "reference": "work/new-clarification-examples/document/raw/021-response.json",
+        "sha256": "0f97e83da11055ea3fa909f1ed27252c92cd3bede58f44c4da6ad0709b443a2f",
+        "requestIndex": 21,
+        "method": "POST",
+        "path": "/api/intakes/recording-3043db6d3e476017afae/submit"
+      }
+    },
+    {
+      "id": "replay-21-handoff-14",
+      "kind": "handoff",
+      "round": 6,
+      "revision": 15,
+      "versionId": "recording-40af04a91c63e481ea4b",
+      "sourceRunId": "recording-bea862b5fc7424c2c97d",
+      "createdAt": "2026-11-12T06:35:57.979Z",
+      "source": {
+        "kind": "snapshot",
+        "reference": "work/new-clarification-examples/document/raw/021-response.json",
+        "sha256": "0f97e83da11055ea3fa909f1ed27252c92cd3bede58f44c4da6ad0709b443a2f",
+        "requestIndex": 21,
+        "method": "POST",
+        "path": "/api/intakes/recording-3043db6d3e476017afae/submit"
+      }
+    }
+  ]
 }

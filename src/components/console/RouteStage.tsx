@@ -2,6 +2,7 @@
 import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
+import type { RecordedAnswer } from "@/lib/intake-contracts";
 import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
@@ -14,6 +15,7 @@ import {
   useReducedMotion,
 } from "./motion-runtime";
 import "./stage-motion.css";
+import { ReplayQuestionScene } from "./ReplayQuestionScene";
 
 const CLAIM = { user: "用户给定", estimate: "估算", unknown: "待核", supported: "有据" };
 const WORD: Record<Attack["status"], string> = {
@@ -61,6 +63,10 @@ export function RouteStage({
   entering,
   readOnly,
   onClaim,
+  replayProgress = 1,
+  replayAnswersBefore = [],
+  replayAnswersVisible,
+  playing = false,
 }: {
   version: ArenaVersion;
   demo: boolean;
@@ -79,6 +85,10 @@ export function RouteStage({
   entering: boolean;
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
+  replayProgress?: number;
+  replayAnswersBefore?: RecordedAnswer[];
+  replayAnswersVisible?: RecordedAnswer[];
+  playing?: boolean;
 }) {
   const reducePreference = useReducedMotion();
   const motionSpeed = seeking ? 1.25 : speed;
@@ -114,6 +124,12 @@ export function RouteStage({
     string,
     ReturnType<typeof bodyOf>
   >);
+  useLayoutEffect(() => {
+    const body = stage.current?.querySelector<HTMLElement>(
+      `[data-board="${current?.agent}"] .c-board-body`,
+    );
+    if (body) body.scrollTop = 0;
+  }, [beatId, current?.agent]);
   useEffect(() => {
     live.current = attacks;
     filming.current = camera;
@@ -736,14 +752,6 @@ export function RouteStage({
       push("B", 0, 50, 1000, 0);
       push("C", 50, 44, 900, -18);
     });
-    stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
-      scope.animate(node, [{ opacity: 0 }, { opacity: 1 }], {
-        duration: 620,
-        delay: 80 + i * 90,
-        easing: "ease-out",
-        fill: "backwards",
-      });
-    });
     return () => scope.dispose();
     // Start only when the opening shutter changes, not when playback resumes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -858,7 +866,8 @@ export function RouteStage({
               <Chars
                 text={run ? CLARIFICATION_ROLES[id] : readableClaimText(version, view!.title)}
                 active={enter}
-                delay={lead + 700}
+                delay={lead * speed + 700}
+                speed={speed}
               />
             </h3>
             <p>{run ? run.summary : readableClaimText(version, view!.thesis)}</p>
@@ -909,7 +918,8 @@ export function RouteStage({
                       <Chars
                         text={readableClaimText(version, after.text)}
                         active={rewriting}
-                        delay={lead + 800}
+                        delay={lead * speed + 800}
+                        speed={speed}
                       />
                     </span>
                   )}
@@ -917,12 +927,11 @@ export function RouteStage({
               );
             })}
             <ol className="steps">
-              {(run
-                ? clarificationLines(run, latest?.clarificationAnswers).slice(0, 6)
-                : view!.steps
-              ).map((step) => (
-                <li key={step}>{step}</li>
-              ))}
+              {(run ? clarificationLines(run, latest?.clarificationAnswers) : view!.steps).map(
+                (step) => (
+                  <li key={step}>{step}</li>
+                ),
+              )}
             </ol>
             <div className="first">
               <b>{run ? "记录" : "第一步"}</b>{" "}
@@ -1001,6 +1010,9 @@ export function RouteStage({
         directed={directed}
         seeking={seeking}
         lead={lead}
+        speed={speed}
+        replayProgress={replayProgress}
+        replayAnswersVisible={replayAnswersVisible}
         reviewing={reviewing}
         onStep={onStep}
       />
@@ -1011,8 +1023,26 @@ export function RouteStage({
         directed={directed}
         seeking={seeking}
         lead={lead}
+        speed={speed}
+        replayProgress={replayProgress}
+        replayAnswersVisible={replayAnswersVisible}
         onEvidence={onEvidence}
       />
+      {current?.replayAction && (current.replayAction.kind !== "handoff" || replayProgress < 1) && (
+        <ReplayQuestionScene
+          key={
+            ["summary_submit", "summary_confirm", "handoff"].includes(current.replayAction.kind)
+              ? `summary-${current.replayAction.round}`
+              : (current.replayAction.sourceRunId ?? `round-${current.replayAction.round}`)
+          }
+          action={current.replayAction}
+          previousAnswers={replayAnswersBefore}
+          progress={replayProgress}
+          playing={playing}
+          speed={speed}
+          seeking={seeking}
+        />
+      )}
     </div>
   );
 }

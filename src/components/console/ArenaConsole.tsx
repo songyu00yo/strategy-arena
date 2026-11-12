@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -18,6 +19,8 @@ import {
 } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
 import type { StepContext } from "@/lib/step-context";
+import type { ReplayAction } from "@/lib/replay-contracts";
+import { projectReplay } from "@/lib/replay";
 import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
 import { RecordWall, VerdictFilm } from "./fx";
@@ -28,6 +31,8 @@ import { ResultRegion } from "./ResultRegion";
 import { acquireMotionHold, createMotionScope, motionNow, useMotionPaused } from "./motion-runtime";
 import "./console-motion.css";
 import { beatName, beatsOf, clock, nameOf, stageName, usageOf } from "./beats";
+import { playbackDuration, usePlaybackProgress } from "./use-playback-progress";
+import "./replay-console.css";
 
 /** Joins sentences without doubling their end marks. */
 const listOf = (items: string[]) => items.map((item) => item.replace(/[。；;.]+$/, "")).join("；");
@@ -54,6 +59,11 @@ const OUTCOME = {
   partial: "阶段性判断",
 };
 
+function recordedEventTime(event: ArenaEvent) {
+  const data = event.data as { createdAt?: unknown } | null;
+  return typeof data?.createdAt === "string" ? data.createdAt : event.createdAt;
+}
+
 export function ArenaConsole({
   version,
   steps,
@@ -67,6 +77,7 @@ export function ArenaConsole({
   selectedAttack,
   historical,
   startFromBeginning = false,
+  replayActions,
   allowRecordedChallenges = false,
   busy,
   onEvidence,
@@ -88,6 +99,7 @@ export function ArenaConsole({
   selectedAttack?: string;
   historical: boolean;
   startFromBeginning?: boolean;
+  replayActions?: readonly ReplayAction[];
   allowRecordedChallenges?: boolean;
   busy: boolean;
   onEvidence: (attack: Attack) => void;
@@ -95,7 +107,7 @@ export function ArenaConsole({
   onFollowUp?: (context: StepContext, trigger: HTMLElement | null) => void;
   onAdjustConditions?: (trigger: HTMLElement | null) => void;
 }) {
-  const beats = beatsOf(version);
+  const beats = useMemo(() => beatsOf(version, replayActions), [version, replayActions]);
   const clarification = version.workflow === "clarification" ? version.clarification : undefined;
   const repairedRunIds = new Set(
     clarification?.runs.flatMap((repair) => {
@@ -128,9 +140,42 @@ export function ArenaConsole({
   const current = index >= 0 ? beats[index] : null;
   const shown = beats.slice(0, index + 1);
   const seen = new Set(shown.map((b) => b.id));
+  const live = version.status === "running" || version.status === "ready";
+  const advanceReplay = useCallback(() => {
+    if (index < last) return setCursor(index + 1);
+    if (live) return;
+    if (current?.replayAction?.kind === "handoff" && !filmDone) return;
+    setPlaying(false);
+    setMotion(false);
+    setCursor(null);
+  }, [index, last, live, current?.replayAction?.kind, filmDone]);
+  const replayProgress = usePlaybackProgress({
+    stepId: clarification ? (current?.id ?? "") : "",
+    duration: playbackDuration(current),
+    speed,
+    running:
+      !!clarification &&
+      playing &&
+      !paused &&
+      openStep === null &&
+      (!intro || revealed) &&
+      !stepwise,
+    settled: seeking || stepwise || (cursor === null && !playing),
+    queueRevision: `${last}:${live}`,
+    onComplete: advanceReplay,
+  });
+  const projection = clarification
+    ? projectReplay(version, beats, index, events, replayProgress)
+    : null;
+  const reviewMessages = projection
+    ? [...new Set([...projection.conflicts, ...projection.unresolved])]
+    : [];
+  const answersBefore = useMemo(
+    () => (clarification ? projectReplay(version, beats, index - 1).answers : []),
+    [version, beats, index, clarification],
+  );
 
   // A game in progress plays out as its results arrive. A finished game opens on its result.
-  const live = version.status === "running" || version.status === "ready";
   const startedLive = useRef(live);
   useEffect(() => {
     if (!startedLive.current || reducedMotion()) return;
@@ -150,7 +195,14 @@ export function ArenaConsole({
     setRevealed(true);
     if (startFromBeginning) setCursor((cursor) => (cursor === -1 ? 0 : cursor));
   }, [startFromBeginning]);
-  const endFilm = useCallback(() => setFilmDone(true), []);
+  const endFilm = useCallback(() => {
+    setFilmDone(true);
+    if (clarification && current?.replayAction?.kind === "handoff") {
+      setPlaying(false);
+      setMotion(false);
+      setCursor(null);
+    }
+  }, [clarification, current?.replayAction?.kind]);
   const endIntro = useCallback(() => {
     setIntro(false);
     try {
@@ -175,13 +227,14 @@ export function ArenaConsole({
   const stage = current?.stage;
   // The first step of a stage waits for its word to land, so the two never collide.
   const firstOfStage = !!stage && stage !== "judge" && beats[index - 1]?.stage !== stage;
-  const lead = playing && !seeking && firstOfStage ? 560 / speed : 0;
+  const lead = (clarification || playing) && !seeking && firstOfStage ? 560 / speed : 0;
   // Count only active playback time. Data refreshes and overlays must not spend the remaining shot.
   const shotClock = useRef({ id: "", elapsed: 0 });
   useLayoutEffect(() => {
     if (playbackPaused) return acquireMotionHold();
   }, [playbackPaused]);
   useEffect(() => {
+    if (clarification) return;
     if (!playing || !stage || paused || openStep !== null || (intro && !revealed)) return;
     if (stepwise && index < last) return;
     const id = current?.id ?? "";
@@ -220,6 +273,7 @@ export function ArenaConsole({
     stepwise,
     openStep,
     paused,
+    clarification,
   ]);
 
   const goTo = useCallback(
@@ -229,7 +283,7 @@ export function ArenaConsole({
       startedLive.current = false;
       setIntro(false);
       // A seek performs the chosen shot directly; interruptions replace its choreography.
-      setPlaying((p) => p && stepwise && target === index + 1);
+      setPlaying((p) => p && stepwise && target === index + 1 && target < last);
       setPlaybackPaused(false);
       setSeeking(true);
       setMotion(true);
@@ -283,8 +337,9 @@ export function ArenaConsole({
   }, [goTo, index, last, replay]);
 
   // A replay reveals the log in step with the boards. Nothing is invented for the gap.
-  const logged =
-    index >= last
+  const logged = projection
+    ? projection.logs
+    : index >= last
       ? events
       : events.slice(0, Math.ceil(((index + 1) / Math.max(beats.length, 1)) * events.length));
   const used = logged.flatMap((e) => usageOf(e) ?? []);
@@ -297,52 +352,42 @@ export function ArenaConsole({
   const hasResult = !!verdict || !!clarification;
   const directed = motion;
   // The result takes the lead once the game has reached it. Looking back at a step hides it.
-  const atResult = hasResult && index === last;
+  const atResult = hasResult && index === last && (!projection || projection.handoffComplete);
   // Looking back over a finished game, each step shows how it turned out.
   const reviewing = hasResult && !live && !playing;
   const canReturn = hasResult && index < last && !playing;
   const speedLabel = SPEEDS.find((s) => s.value === speed)?.label ?? "常速";
   // Counts roll when the energy reaches them, not before.
-  const rollDelay = !directed
-    ? 0
-    : stage === "attack"
-      ? lead + 980 / speed
-      : stage === "verify"
-        ? lead + 1280 / speed
-        : 0;
+  const rollDelay =
+    !directed || clarification
+      ? 0
+      : stage === "attack"
+        ? lead + 980 / speed
+        : stage === "verify"
+          ? lead + 1280 / speed
+          : 0;
   const hasCallIds = clarification?.runs.every((run) => run.callIds !== undefined);
-  const callIds = new Set(clarification?.runs.flatMap((run) => run.callIds ?? []) ?? []);
   const metrics: [string, number, string][] = clarification
     ? [
         [
           "事项",
-          clarification.items.filter((item) => !clarification.retiredIds.includes(item.id)).length,
+          projection!.items.filter((item) => !projection!.retiredIds.includes(item.id)).length,
           "",
         ],
         [
           "已确认",
-          version.intake?.answers.filter((answer) => answer.confirmation === "confirmed").length ??
-            0,
+          projection!.answers.filter(
+            (answer) =>
+              answer.state === "answered" &&
+              answer.confirmation === "confirmed" &&
+              !answer.needsReconfirmation,
+          ).length,
           "ok",
         ],
-        ["已排除", clarification.retiredIds.length, ""],
-        [
-          "需核对",
-          new Set([...clarification.conflicts, ...(version.requirements?.unresolved ?? [])]).size,
-          "warn",
-        ],
-        [
-          hasCallIds ? "模型调用" : "角色记录",
-          hasCallIds ? callIds.size : clarification.runs.length,
-          "",
-        ],
-        [
-          "Token",
-          clarification.runs
-            .flatMap((run) => run.usage)
-            .reduce((total, use) => total + use.inputTokens + use.outputTokens, 0),
-          "",
-        ],
+        ["已排除", projection!.retiredIds.length, ""],
+        ["需核对", reviewMessages.length, "warn"],
+        [hasCallIds ? "模型调用" : "角色记录", projection!.calls, ""],
+        ["Token", projection!.tokens, ""],
       ]
     : [
         ["质疑", attacks.length, ""],
@@ -352,6 +397,60 @@ export function ArenaConsole({
         [demo ? "演示调用" : startFromBeginning ? "原记录调用" : "模型调用", used.length, ""],
         [demo ? "Token（预设）" : startFromBeginning ? "原记录 Token" : "Token", tokens, ""],
       ];
+
+  const timelineGroups = clarification
+    ? [
+        ...new Set(
+          beats.map((beat) => beat.replayAction?.round ?? beat.clarificationRun?.round ?? 0),
+        ),
+      ].map((round) => {
+        const list = beats.flatMap((beat, i) =>
+          (beat.replayAction?.round ?? beat.clarificationRun?.round ?? 0) === round
+            ? [{ b: beat, i }]
+            : [],
+        );
+        return {
+          key: String(round),
+          label: `第 ${round} 轮`,
+          list,
+          done: list.every(({ i }) => i < index || (i === index && replayProgress === 1)),
+          bad: list.some(
+            ({ b, i }) =>
+              i <= index &&
+              (b.clarificationRun?.status === "failed" ||
+                b.clarificationRun?.status === "uncertain") &&
+              !repairedRunIds.has(b.clarificationRun.id),
+          ),
+          active: list.some(({ i }) => i === index),
+        };
+      })
+    : STAGES.map((stage) => {
+        const own = steps.filter((step) => step.stage === stage);
+        const list = beats.flatMap((beat, i) => (beat.stage === stage ? [{ b: beat, i }] : []));
+        return {
+          key: stage,
+          label: stageName(version, stage),
+          list,
+          done:
+            own.length > 0 &&
+            own.every((step) => step.status === "completed" || step.status === "skipped") &&
+            (!startFromBeginning || list.every(({ i }) => i <= index)),
+          bad: own.some((step) => step.status === "failed" || step.status === "uncertain"),
+          active: current?.stage === stage,
+        };
+      });
+
+  const timeline = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!clarification) return;
+    const track = timeline.current;
+    const selected = track?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!track || !selected) return;
+    const target = selected.getBoundingClientRect();
+    const box = track.getBoundingClientRect();
+    if (target.left < box.left || target.right > box.right)
+      track.scrollLeft += target.left - box.left - box.width / 2;
+  }, [clarification, index]);
 
   // Keep controls mounted. Interruptions start from the displayed pose, not the start keyframe.
   useLayoutEffect(() => {
@@ -402,7 +501,10 @@ export function ArenaConsole({
   return (
     <div
       data-motion-origin={seeking ? "interaction" : "story"}
-      className={`c-root ${intro ? "opening" : ""} ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
+      data-replay-kind={current?.replayAction?.kind ?? (clarification ? "model" : undefined)}
+      data-replay-progress={clarification ? replayProgress.toFixed(3) : undefined}
+      style={{ "--playback-speed": speed } as CSSProperties}
+      className={`c-root ${clarification ? "clarification-replay" : ""} ${intro ? "opening" : ""} ${playing ? "theater" : ""} ${paused ? "held" : ""} ${seeking ? "is-seeking" : ""} ${atResult ? "at-result" : ""}`}
     >
       <RecordWall
         version={version}
@@ -410,6 +512,8 @@ export function ArenaConsole({
         currentId={current?.id}
         events={logged}
         directed={directed && !seeking}
+        replayProgress={replayProgress}
+        replayAnswersVisible={projection?.answers}
       />
       <div className="c-hud">
         <div className="c-slate">{slate}</div>
@@ -551,53 +655,45 @@ export function ArenaConsole({
         {agent && <div className="c-agent">{agent}</div>}
         <div className="c-notices">{notices}</div>
         <div className="c-track">
-          <div className="c-time" role="group" aria-label="推演步骤">
-            {STAGES.map((stage) => {
-              const own = steps.filter((s) => s.stage === stage);
-              const list = beats.flatMap((b, i) => (b.stage === stage ? [{ b, i }] : []));
-              const stageAttempts = list.filter(
-                ({ b }) => !repairedRunIds.has(b.clarificationRun?.id ?? ""),
-              );
-              const done = clarification
-                ? stage === "judge"
-                  ? clarification.next === "completed"
-                  : stage === "revise"
-                    ? !clarification.draftOnly
-                    : stageAttempts.length > 0 &&
-                      stageAttempts.every(({ b }) => b.clarificationRun?.status === "completed")
-                : own.length > 0 &&
-                  own.every((s) => s.status === "completed" || s.status === "skipped") &&
-                  (!startFromBeginning || list.every(({ i }) => i <= index));
-              const bad = clarification
-                ? stageAttempts.some(
-                    ({ b }) =>
-                      b.clarificationRun?.status === "failed" ||
-                      b.clarificationRun?.status === "uncertain",
-                  )
-                : own.some((s) => s.status === "failed" || s.status === "uncertain");
-              return (
-                <div
-                  key={stage}
-                  className={`seg ${bad ? "bad" : done ? "done" : version.stage === stage ? "live" : ""} ${current?.stage === stage ? "here" : ""}`}
-                  style={{ flexGrow: Math.max(list.length, 2) }}
-                >
-                  <span>{stageName(version, stage)}</span>
-                  <div className="ticks">
-                    {list.map(({ b, i }) => (
-                      <button
-                        key={b.id}
-                        type="button"
-                        aria-label={`第 ${i + 1} 步`}
-                        data-tip={`第 ${i + 1} 步`}
-                        aria-current={i === index ? "step" : undefined}
-                        className={`${i <= index ? "seen" : ""} ${i === index ? "cur" : ""} ${b.stage === "verify" && b.attack ? `is-${b.attack.status}` : ""}`}
-                        onClick={() => goTo(i)}
-                      />
-                    ))}
-                  </div>
+          <div
+            ref={timeline}
+            className={`c-time ${clarification ? "replay-time" : ""}`}
+            role="group"
+            aria-label={clarification ? "需求梳理回放步骤" : "推演步骤"}
+          >
+            {timelineGroups.map((group) => (
+              <div
+                key={group.key}
+                data-round={clarification ? group.key : undefined}
+                data-state={
+                  group.bad
+                    ? "failed"
+                    : group.done
+                      ? "passed"
+                      : group.active
+                        ? "current"
+                        : "pending"
+                }
+                className={`seg ${group.bad ? "bad" : group.done ? "done" : ""} ${group.active ? "here" : ""}`}
+                style={{ flexGrow: Math.max(group.list.length, 2) }}
+              >
+                <span>{group.label}</span>
+                <div className="ticks">
+                  {group.list.map(({ b, i }) => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      aria-label={`第 ${i + 1} 步`}
+                      title={b.title}
+                      data-tip={`第 ${i + 1} 步 · ${b.title}`}
+                      aria-current={i === index ? "step" : undefined}
+                      className={`${i <= index ? "seen" : ""} ${i === index ? "cur" : ""} ${b.stage === "verify" && b.attack ? `is-${b.attack.status}` : ""}`}
+                      onClick={() => goTo(i)}
+                    />
+                  ))}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
           <dl className="c-metrics">
             {metrics.map(([label, value, tone]) => (
@@ -607,7 +703,7 @@ export function ArenaConsole({
                   <Roll
                     value={value}
                     delay={rollDelay}
-                    animate={directed}
+                    animate={directed && !paused}
                     origin={seeking ? "interaction" : "story"}
                   />
                 </dd>
@@ -623,6 +719,10 @@ export function ArenaConsole({
             beats={beats}
             index={index}
             speed={speed}
+            replayProgress={replayProgress}
+            replayAnswersBefore={answersBefore}
+            replayAnswersVisible={projection?.answers}
+            playing={playing}
             directed={directed}
             seeking={seeking}
             camera={playing || seeking}
@@ -659,6 +759,7 @@ export function ArenaConsole({
                 <Chars
                   text={current ? current.title : "等待第一步"}
                   active={directed && !seeking}
+                  speed={speed}
                   delay={180}
                 />
               </div>
@@ -732,7 +833,7 @@ export function ArenaConsole({
                       key={event.seq}
                       className={`${i === list.length - 1 ? "hot" : ""} ${/fail|uncertain/.test(event.type) ? "bad" : ""}`}
                     >
-                      <b>{clock(event.createdAt)}</b> {event.message}
+                      <b>{clock(recordedEventTime(event))}</b> {event.message}
                       {usage &&
                         Number.isFinite(usage.inputTokens) &&
                         Number.isFinite(usage.outputTokens) &&
@@ -768,10 +869,7 @@ export function ArenaConsole({
               {attacks.length === 0 && (
                 <div className="quiet">
                   {clarification
-                    ? [
-                        ...clarification.conflicts,
-                        ...(version.requirements?.unresolved ?? []),
-                      ].join("；") || "本版本没有新增待核对事项。"
+                    ? reviewMessages.join("；") || "当前步骤没有新增待核对事项。"
                     : "交叉质疑尚未开始。"}
                 </div>
               )}
@@ -801,10 +899,11 @@ export function ArenaConsole({
       {hasResult &&
         directed &&
         !filmDone &&
-        (clarification ? index === last : current?.id === "judge") && (
+        (clarification ? current?.replayAction?.kind === "handoff" : current?.id === "judge") && (
           <VerdictFilm
             verdict={verdict ?? undefined}
             clarification={clarification}
+            speed={speed}
             onDone={endFilm}
           />
         )}
@@ -815,6 +914,7 @@ export function ArenaConsole({
           index={openStep}
           last={index}
           reviewing={reviewing}
+          replayProgress={openStep === index ? replayProgress : 1}
           onOpen={setOpenStep}
           onClose={() => setOpenStep(null)}
           onFollowUp={

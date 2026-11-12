@@ -1,8 +1,18 @@
 "use client";
 import { claimLabel, readableClaimText } from "@/components/claim-label";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
 import type { ArenaEvent, ArenaVersion, Attack, Verdict } from "@/lib/contracts";
 import type { ClarificationState } from "@/lib/clarification-contracts";
+import type { RecordedAnswer } from "@/lib/intake-contracts";
+import { replayActionLines } from "@/lib/step-context";
+import { pendingReplayAnswer } from "@/lib/replay";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
 import {
   beatName,
@@ -27,13 +37,21 @@ export function VerdictFilm({
   verdict,
   clarification,
   onDone,
+  speed = 1,
 }: {
   verdict?: Verdict;
   clarification?: ClarificationState;
   onDone: () => void;
+  speed?: number;
 }) {
   const reducePreference = useReducedMotion();
   const seal = useRef<HTMLDivElement>(null);
+  const sealAnimation = useRef<Animation | null>(null);
+  const playbackRate = useRef(speed);
+  useLayoutEffect(() => {
+    playbackRate.current = speed;
+    sealAnimation.current?.updatePlaybackRate(speed);
+  }, [speed]);
   useEffect(() => {
     const el = seal.current;
     const board = document
@@ -53,12 +71,15 @@ export function VerdictFilm({
       ],
       { duration: 2600, delay: 200, easing: "cubic-bezier(.19,1,.22,1)", fill: "both" },
     );
+    press.playbackRate = playbackRate.current;
+    sealAnimation.current = press;
     press.onfinish = onDone;
     const skip = () => press.finish();
     addEventListener("keydown", skip);
     return () => {
       removeEventListener("keydown", skip);
       scope.dispose();
+      if (sealAnimation.current === press) sealAnimation.current = null;
     };
     // Runs once: a poll that refreshes the record must not restart the seal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,8 +108,24 @@ type WallRecord = {
 const WALL_ROW: Record<Stage, number> = { propose: 0, attack: 1, verify: 2, revise: 3, judge: 3 };
 const WALL_LIMIT = 24;
 
-function linesOf(version: ArenaVersion, beat: Beat): string[] {
+function linesOf(
+  version: ArenaVersion,
+  beat: Beat,
+  progress = 1,
+  visibleAnswers?: readonly RecordedAnswer[],
+): string[] {
   let lines: string[] = [];
+  if (beat.replayAction) {
+    const enteringAnswer = beat.replayAction.kind === "answer" && progress < 0.8;
+    const shownAnswers = enteringAnswer
+      ? []
+      : (visibleAnswers ??
+        (progress < 0.8 ? beat.replayAction.answers?.map(pendingReplayAnswer) : undefined));
+    return [
+      ...replayActionLines(beat.replayAction, shownAnswers, progress >= 0.8),
+      ...(enteringAnswer ? ["正在按保存记录填写"] : []),
+    ];
+  }
   if (beat.clarificationRun)
     return [
       beat.clarificationRun.summary,
@@ -142,12 +179,24 @@ function linesOf(version: ArenaVersion, beat: Beat): string[] {
 }
 
 /** The wall shows only what has happened so far: real proposals, challenges, checks and revisions. */
-function wallRecords(version: ArenaVersion, shown: Beat[], events: ArenaEvent[]): WallRecord[] {
+function wallRecords(
+  version: ArenaVersion,
+  shown: Beat[],
+  events: ArenaEvent[],
+  currentId?: string,
+  replayProgress = 1,
+  replayAnswersVisible?: readonly RecordedAnswer[],
+): WallRecord[] {
   const records: WallRecord[] = [];
   for (const beat of shown) {
     const row = WALL_ROW[beat.stage];
     const label = `${String(shown.indexOf(beat) + 1).padStart(2, "0")} ${stageName(version, beat.stage)}`;
-    const lines = linesOf(version, beat);
+    const lines = linesOf(
+      version,
+      beat,
+      beat.id === currentId ? replayProgress : 1,
+      beat.id === currentId ? replayAnswersVisible : undefined,
+    );
     records.push({
       id: beat.id,
       agent: beat.agent,
@@ -179,9 +228,6 @@ type Panel = {
   z: number;
   aim: number;
   lines: string[];
-  row: number;
-  ch: number;
-  typing: boolean;
   rows: HTMLElement[];
 };
 
@@ -192,18 +238,29 @@ export function RecordWall({
   currentId,
   events,
   directed = false,
+  replayProgress = 1,
+  replayAnswersVisible,
 }: {
   version: ArenaVersion;
   shown: Beat[];
   currentId?: string;
   events: ArenaEvent[];
   directed?: boolean;
+  replayProgress?: number;
+  replayAnswersVisible?: readonly RecordedAnswer[];
 }) {
   const reducePreference = useReducedMotion();
   const stage = useRef<HTMLDivElement>(null);
   const panels = useRef(new Map<string, Panel>());
-  const records = wallRecords(version, shown, events);
-  const signature = records.map((r) => r.id).join();
+  const records = wallRecords(
+    version,
+    shown,
+    events,
+    currentId,
+    replayProgress,
+    replayAnswersVisible,
+  );
+  const signature = records.map((r) => `${r.id}\n${r.lines.join("\n")}`).join("\0");
   const latest = useRef(records);
   const settled = useRef(false);
   useEffect(() => {
@@ -235,7 +292,7 @@ export function RecordWall({
         const displayLines = record.lines.slice(0, 10);
         const rows = displayLines.map((line) => {
           const row = document.createElement("div");
-          row.textContent = animate ? "" : line;
+          row.textContent = line;
           body.appendChild(row);
           return row;
         });
@@ -248,16 +305,19 @@ export function RecordWall({
           z: animate ? -700 : -300,
           aim: -300,
           lines: displayLines,
-          row: 0,
-          ch: 0,
-          typing: animate,
           rows,
         };
         panels.current.set(record.id, panel);
       }
-      if (!directed) {
-        panel.typing = false;
-        panel.rows.forEach((row, i) => (row.textContent = panel!.lines[i]));
+      const visibleLines = record.lines.slice(0, 10);
+      if (JSON.stringify(panel.lines) !== JSON.stringify(visibleLines)) {
+        panel.lines = visibleLines;
+        panel.rows = visibleLines.map((line) => {
+          const row = document.createElement("div");
+          row.textContent = line;
+          return row;
+        });
+        panel.el.querySelector(".body")?.replaceChildren(...panel.rows);
       }
       panel.aim = focus ? -170 : -250 - Math.min(rank, 14) * 44; // Three planes of depth, so the wall reads as stacked windows and not a flat sheet.
       const plane = rank < 4 ? "near" : rank < 10 ? "mid" : "far";
@@ -298,12 +358,7 @@ export function RecordWall({
       }
       return;
     }
-    let budget = 0;
     const loop = createMotionLoop((_time, dt) => {
-      budget += dt * 1000;
-      const typing = budget >= 48;
-      const steps = typing ? 3 : 0;
-      if (typing) budget = 0;
       let moving = false;
       for (const p of all.values()) {
         if (Math.abs(p.aim - p.z) > 0.5) {
@@ -313,20 +368,6 @@ export function RecordWall({
         } else if (p.z !== p.aim) {
           p.z = p.aim;
           place(p);
-        }
-        if (!p.typing) continue;
-        moving = true;
-        for (let n = 0; n < steps && p.typing; n++) {
-          if (p.row >= p.lines.length) {
-            p.typing = false;
-            break;
-          }
-          p.ch += 1;
-          p.rows[p.row].textContent = p.lines[p.row].slice(0, p.ch);
-          if (p.ch >= p.lines[p.row].length) {
-            p.row += 1;
-            p.ch = 0;
-          }
         }
       }
       return moving;
@@ -341,7 +382,14 @@ export function RecordWall({
 }
 
 /** The record behind the step in front, so the card carries substance and not only a caption. */
-function detailsOf(version: ArenaVersion, beat: Beat): string[] {
+function detailsOf(
+  version: ArenaVersion,
+  beat: Beat,
+  replayProgress = 1,
+  replayAnswersVisible?: readonly RecordedAnswer[],
+): string[] {
+  if (beat.replayAction)
+    return linesOf(version, beat, replayProgress, replayAnswersVisible).slice(0, 3);
   if (beat.clarificationRun)
     return clarificationLines(beat.clarificationRun, beat.clarificationAnswers).slice(0, 3);
   if (beat.strategy)
@@ -374,6 +422,9 @@ export function ChainDeck({
   directed,
   seeking = false,
   lead,
+  speed = 1,
+  replayProgress = 1,
+  replayAnswersVisible,
   reviewing,
   onStep,
 }: {
@@ -383,6 +434,9 @@ export function ChainDeck({
   directed: boolean;
   seeking?: boolean;
   lead: number;
+  speed?: number;
+  replayProgress?: number;
+  replayAnswersVisible?: readonly RecordedAnswer[];
   reviewing: boolean;
   onStep: (index: number) => void;
 }) {
@@ -391,31 +445,42 @@ export function ChainDeck({
   const front = useRef<HTMLDivElement>(null);
   const [peek, setPeek] = useState<number | null>(null);
   const current = beats[index];
+  const entrance = useRef<Animation | null>(null);
+  const playbackRate = useRef(speed);
+  useLayoutEffect(() => {
+    playbackRate.current = speed;
+    entrance.current?.updatePlaybackRate(speed);
+  }, [speed]);
   const seenIds = new Set(shown.map((b) => b.id));
   const attack = current?.attack;
   const running = current?.stage === "attack" ? 1 : current?.stage === "verify" ? 2 : 3;
   useEffect(() => {
     if (!front.current || !directed || reduced()) return;
     const scope = createMotionScope(seeking ? "interaction" : "story");
-    scope.animate(
+    const animation = scope.animate(
       front.current,
       [
         {
-          translate: "90px 12px",
-          rotate: "y -12deg",
+          translate: "12px 8px",
+          rotate: "y -2deg",
           scale: "1.02",
-          opacity: 0,
+          opacity: 1,
         },
         { translate: "0 0", rotate: "y 0deg", scale: "1", opacity: 1 },
       ],
       {
         duration: 520,
-        delay: lead + 40,
+        delay: 0,
         easing: "cubic-bezier(0.19, 1, 0.22, 1)",
         fill: "backwards",
       },
     );
-    return () => scope.dispose();
+    animation.playbackRate = playbackRate.current;
+    entrance.current = animation;
+    return () => {
+      scope.dispose();
+      if (entrance.current === animation) entrance.current = null;
+    };
     // Only a new step brings a card in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id, reducePreference]);
@@ -568,7 +633,8 @@ export function ChainDeck({
                         text={text}
                         active={directed && r === running}
                         origin={seeking ? "interaction" : "story"}
-                        delay={lead + (r === 0 ? 700 : 300)}
+                        delay={lead * speed + (r === 0 ? 700 : 300)}
+                        speed={speed}
                       />
                     </span>
                   </div>
@@ -579,11 +645,16 @@ export function ChainDeck({
                 <strong>{beat.title}</strong>
                 <p>{beat.plain}</p>
                 {isFront && (
-                  <ul>
-                    {detailsOf(version, beat).map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
+                  <>
+                    <small className="c-deck-summary-label">摘要 · 展开详情查看完整记录</small>
+                    <ul>
+                      {detailsOf(version, beat, replayProgress, replayAnswersVisible).map(
+                        (line) => (
+                          <li key={line}>{line}</li>
+                        ),
+                      )}
+                    </ul>
+                  </>
                 )}
               </div>
             )}
@@ -602,6 +673,9 @@ export function LiveRecord({
   directed,
   seeking = false,
   lead,
+  speed = 1,
+  replayProgress = 1,
+  replayAnswersVisible,
   onEvidence,
 }: {
   version: ArenaVersion;
@@ -610,10 +684,17 @@ export function LiveRecord({
   directed: boolean;
   seeking?: boolean;
   lead: number;
+  speed?: number;
+  replayProgress?: number;
+  replayAnswersVisible?: readonly RecordedAnswer[];
   onEvidence: (attack: Attack) => void;
 }) {
+  const content = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (content.current) content.current.scrollTop = 0;
+  }, [beat?.id]);
   if (!beat) return null;
-  const lines = linesOf(version, beat);
+  const lines = linesOf(version, beat, replayProgress, replayAnswersVisible);
   return (
     <div
       className={`c-live ${directed ? "arrive" : ""}`}
@@ -639,14 +720,15 @@ export function LiveRecord({
           看这条质疑的证据 →
         </button>
       )}
-      <div className="body">
+      <div className="body" ref={content}>
         {lines.map((line, i) => (
           <div key={`${i}:${line}`}>
             <Decode
               text={line}
               active={directed}
               origin={seeking ? "interaction" : "story"}
-              delay={lead + 160 + i * 110}
+              delay={lead * speed + 160 + i * 110}
+              speed={speed}
             />
           </div>
         ))}

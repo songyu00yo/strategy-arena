@@ -16,7 +16,8 @@ import {
   stageName,
   type Beat,
 } from "./beats";
-import { stepContext, type StepContext } from "@/lib/step-context";
+import { replayActionLines, stepContext, type StepContext } from "@/lib/step-context";
+import { projectReplay } from "@/lib/replay";
 
 type Point = { x: number; y: number };
 type Quad = [Point, Point, Point, Point];
@@ -188,11 +189,38 @@ function markDeck(pulled: number | null, gap = pulled !== null, ms = 240) {
 type Row = { label: string; text: string; tone?: string };
 
 /** Everything recorded about one step, in the order a reader would question it. */
-function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
+function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[], replayProgress = 1): Row[] {
   const clean = (rows: Row[]) =>
     rows
       .filter((row) => row.text)
       .map((row) => ({ ...row, text: readableClaimText(version, row.text) }));
+  if (beat.replayAction) {
+    const action = beat.replayAction;
+    const projection = projectReplay(
+      version,
+      known,
+      known.findIndex((step) => step.id === beat.id),
+      [],
+      replayProgress,
+    );
+    return [
+      {
+        label: "保存的操作",
+        text: replayActionLines(action, projection.answers, replayProgress >= 0.8).join("\n"),
+      },
+      {
+        label: "操作依据",
+        text: `第 ${action.round} 轮，依据修订 ${action.revision}${action.createdAt ? `，记录时间 ${action.createdAt}` : ""}`,
+      },
+      {
+        label: "来源记录",
+        text: action.source
+          ? `${action.source.reference}${action.source.sha256 ? `\nSHA-256 ${action.source.sha256}` : ""}`
+          : "本操作没有独立请求来源，按保存状态展示。",
+      },
+      { label: "关联调用", text: action.sourceRunId ?? "未关联模型调用" },
+    ];
+  }
   if (beat.clarificationRun) {
     const run = beat.clarificationRun;
     return [
@@ -326,6 +354,7 @@ export function StepCard({
   onClose,
   onFollowUp,
   onAdjustConditions,
+  replayProgress = 1,
 }: {
   version: ArenaVersion;
   beats: Beat[];
@@ -339,6 +368,7 @@ export function StepCard({
   onClose: () => void;
   onFollowUp?: (context: StepContext, trigger: HTMLElement | null) => void;
   onAdjustConditions?: (trigger: HTMLElement | null) => void;
+  replayProgress?: number;
 }) {
   const beat = beats[index];
   const known = reviewing ? beats : beats.slice(0, last + 1);
@@ -833,7 +863,9 @@ export function StepCard({
     // On the next commit we sample these animations before cancelling, including rapid reversals.
   }, [index]);
 
-  const context = onFollowUp ? stepContext(version, beat.id) : null;
+  const context = onFollowUp
+    ? stepContext(version, beat.id, beat.replayAction ? [beat.replayAction] : undefined)
+    : null;
   const verified = beat.attack && known.some((b) => b.id === `v:${beat.attack!.id}`);
   return (
     <dialog
@@ -877,7 +909,7 @@ export function StepCard({
         >
           <h3>{beat.title}</h3>
           <dl>
-            {rowsOf(version, beat, known).map((row) => (
+            {rowsOf(version, beat, known, replayProgress).map((row) => (
               <div key={row.label} className={row.tone}>
                 <dt>{row.label}</dt>
                 <dd>{row.text}</dd>

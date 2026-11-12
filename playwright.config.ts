@@ -27,6 +27,15 @@ export default defineConfig({
         channel: process.env.PLAYWRIGHT_CHANNEL === "chrome" ? "chrome" : undefined,
       },
     },
+    ...(process.env.E2E_WEBKIT === "1"
+      ? [
+          {
+            name: "webkit",
+            testMatch: /replay-interaction\.spec\.ts/,
+            use: { ...devices["Desktop Safari"] },
+          },
+        ]
+      : []),
   ],
   webServer: {
     command: "node scripts/start-e2e-server.mjs",

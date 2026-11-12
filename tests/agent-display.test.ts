@@ -11,7 +11,8 @@ import { StepCard } from "../src/components/console/StepCard";
 import { RouteChart } from "../src/components/console/RouteChart";
 import { RouteStage } from "../src/components/console/RouteStage";
 import { ArenaConsole } from "../src/components/console/ArenaConsole";
-import { stepContext } from "../src/lib/step-context";
+import { replayActionLines, stepContext } from "../src/lib/step-context";
+import { projectReplay } from "../src/lib/replay";
 import { advanceFixture, fixtureSnapshot } from "./e2e/ui.fixture";
 
 function syntheticVersion(): ArenaVersion {
@@ -303,7 +304,7 @@ describe("clarification repair display", () => {
     return version;
   }
 
-  function stageClass(version: ArenaVersion) {
+  function roundState(version: ArenaVersion) {
     const html = renderToStaticMarkup(
       React.createElement(ArenaConsole, {
         version,
@@ -319,7 +320,8 @@ describe("clarification repair display", () => {
         onClaim: () => {},
       }),
     );
-    return html.match(/class="(seg [^"]*)"[^>]*><span>选项与执行审查<\/span>/)?.[1];
+    const group = html.match(/<div\b[^>]*data-round="2"[^>]*>/)?.[0];
+    return group?.match(/data-state="([^"]+)"/)?.[1];
   }
 
   it("shows a successful linked repair as recovered while retaining the failed record and both steps", () => {
@@ -333,8 +335,7 @@ describe("clarification repair display", () => {
       callIds: ["fixture-second-call"],
     });
     const version = recordedVersion([failed, repaired]);
-    expect(stageClass(version)).toMatch(/\bdone\b/);
-    expect(stageClass(version)).not.toMatch(/\bbad\b/);
+    expect(roundState(version)).toBe("passed");
     const beats = beatsOf(version);
     expect(beats.map((beat) => beat.id)).toEqual([
       `clarification:${failed.id}`,
@@ -356,8 +357,7 @@ describe("clarification repair display", () => {
       callIds: ["fixture-second-call"],
     });
     const version = recordedVersion([failed, repair]);
-    expect(stageClass(version)).toMatch(/\bbad\b/);
-    expect(stageClass(version)).not.toMatch(/\bdone\b/);
+    expect(roundState(version)).toBe("failed");
     expect(version.clarification?.runs).toHaveLength(2);
     expect(failed.status).toBe("failed");
   });
@@ -371,8 +371,7 @@ describe("clarification repair display", () => {
         output: { summary: "【合成测试数据】另一条合法输出。", questions: [], conflicts: [] },
       }),
     ]);
-    expect(stageClass(version)).toMatch(/\bbad\b/);
-    expect(stageClass(version)).not.toMatch(/\bdone\b/);
+    expect(roundState(version)).toBe("failed");
   });
 
   it.each([{ role: "A" as const }, { round: 3 }, { basedOnRevision: 8 }])(
@@ -387,8 +386,7 @@ describe("clarification repair display", () => {
         ...changed,
       });
       const version = recordedVersion([failed, repaired]);
-      expect(stageClass(version)).toMatch(/\bbad\b/);
-      expect(stageClass(version)).not.toMatch(/\bdone\b/);
+      expect(roundState(version)).toBe("failed");
     },
   );
 
@@ -401,8 +399,7 @@ describe("clarification repair display", () => {
       output: { summary: "【合成测试数据】后续输出。", questions: [], conflicts: [] },
     });
     const version = recordedVersion([uncertain, repaired]);
-    expect(stageClass(version)).toMatch(/\bbad\b/);
-    expect(stageClass(version)).not.toMatch(/\bdone\b/);
+    expect(roundState(version)).toBe("failed");
     expect(uncertain.status).toBe("uncertain");
   });
 });
@@ -524,27 +521,45 @@ describe("saved clarification answers in round playback", () => {
     return version;
   }
 
-  it("binds each B step to the next actual saved answer snapshot including the submission round", () => {
+  it("keeps model questions separate from later saved selections and confirmation", () => {
     const version = playbackVersion();
     const beats = beatsOf(version);
+    const model = beats.filter((beat) => beat.clarificationRun);
+    expect(model.map((beat) => beat.clarificationRun?.id)).toEqual(
+      version.clarification!.runs.map((run) => run.id),
+    );
+    expect(model.every((beat) => !beat.clarificationAnswers?.length)).toBe(true);
+    const first = beats.findIndex(
+      (beat) => beat.replayAction?.kind === "round_confirm" && beat.replayAction.round === 1,
+    );
+    const second = beats.findIndex(
+      (beat) => beat.replayAction?.kind === "round_confirm" && beat.replayAction.round === 2,
+    );
     expect(
-      beats[0].clarificationAnswers?.find((answer) => answer.questionId === "style")?.value,
+      projectReplay(version, beats, first).answers.find((answer) => answer.questionId === "style")
+        ?.value,
     ).toBe("简洁正式");
     expect(
-      beats[1].clarificationAnswers?.find((answer) => answer.questionId === "style")?.value,
+      projectReplay(version, beats, second).answers.find((answer) => answer.questionId === "style")
+        ?.value,
     ).toBe("活泼明亮");
-    const firstText = clarificationLines(
-      beats[0].clarificationRun!,
-      beats[0].clarificationAnswers,
+    const firstText = replayActionLines(
+      beats[first].replayAction!,
+      projectReplay(version, beats, first).answers,
     ).join("\n");
     expect(firstText).toContain("简洁正式 / 活泼明亮 / 杂志排版 / 朴素文档 / 学院风 / 自定义描述");
     expect(firstText).toContain("已记录回答 — 简洁正式（已确认）");
     expect(firstText).toContain("不知道（未决）");
     expect(firstText).toContain("已跳过（未决）");
     expect(firstText).not.toContain("已记录回答 — 活泼明亮");
-    expect(stepContext(version, beats[0].id)?.quote).toContain("已记录回答 — 简洁正式（已确认）");
-    expect(stepContext(version, beats[1].id)?.quote).toContain("已记录回答 — 活泼明亮（已确认）");
-    expect(stepContext(version, beats[0].id)!.quote.length).toBeLessThan(30000);
+    expect(stepContext(version, model[0].id)?.quote).toContain("尚未回答（未确认）");
+    expect(stepContext(version, beats[first].id)?.quote).toContain(
+      "已记录回答 — 简洁正式（已确认）",
+    );
+    expect(stepContext(version, beats[second].id)?.quote).toContain(
+      "已记录回答 — 活泼明亮（已确认）",
+    );
+    expect(stepContext(version, beats[first].id)!.quote.length).toBeLessThan(30000);
     expect(version.clarification?.runs).toHaveLength(3);
   });
 
@@ -552,10 +567,13 @@ describe("saved clarification answers in round playback", () => {
     const version = playbackVersion();
     version.clarification!.rounds.pop();
     const beats = beatsOf(version);
-    expect(beats[1].clarificationAnswers).toEqual([]);
+    const second = beats.find((beat) => beat.clarificationRun?.id === "playback-b-two")!;
     expect(
-      clarificationLines(beats[1].clarificationRun!, beats[1].clarificationAnswers).join("\n"),
-    ).toContain("已记录回答 — 尚未回答（未确认）");
+      beats.some((beat) => beat.replayAction?.round === 2 && beat.replayAction.kind === "answer"),
+    ).toBe(false);
+    expect(clarificationLines(second.clarificationRun!).join("\n")).toContain(
+      "已记录回答 — 尚未回答（未确认）",
+    );
   });
 
   it("keeps answers scoped to the actual question text and options that were presented", () => {
@@ -566,11 +584,19 @@ describe("saved clarification answers in round playback", () => {
       first.clarificationAnswers?.find((answer) => answer.questionId === "style"),
     ).toBeUndefined();
     expect(
+      beatsOf(version).some(
+        (beat) =>
+          beat.replayAction?.round === 1 &&
+          beat.replayAction.kind === "answer" &&
+          beat.replayAction.answers?.some((answer) => answer.questionId === "style"),
+      ),
+    ).toBe(false);
+    expect(
       clarificationLines(first.clarificationRun!, first.clarificationAnswers).join("\n"),
     ).toContain("已记录回答 — 尚未回答（未确认）");
   });
 
-  it("renders saved answers inside the original step-card and three-role text fields", () => {
+  it("keeps the three role boards and renders accepted answers in their own action detail", () => {
     const version = playbackVersion();
     const beats = beatsOf(version);
     const stage = renderToStaticMarkup(
@@ -592,12 +618,15 @@ describe("saved clarification answers in round playback", () => {
       }),
     );
     expect(stage.match(/data-board="[ABC]"/g)).toHaveLength(3);
-    expect(stage).toContain("已记录回答 — 简洁正式（已确认）");
+    expect(stage).not.toContain("已记录回答 — 简洁正式（已确认）");
+    const confirmed = beats.findIndex(
+      (beat) => beat.replayAction?.kind === "round_confirm" && beat.replayAction.round === 1,
+    );
     const card = renderToStaticMarkup(
       React.createElement(StepCard, {
         version,
         beats,
-        index: 0,
+        index: confirmed,
         last: beats.length - 1,
         reviewing: true,
         onOpen: () => {},
@@ -610,5 +639,21 @@ describe("saved clarification answers in round playback", () => {
     expect(card).toContain("不知道（未决）");
     expect(card).toContain("自定义描述");
     expect(card).not.toContain("已记录回答 — 活泼明亮");
+    const pendingCard = renderToStaticMarkup(
+      React.createElement(StepCard, {
+        version,
+        beats,
+        index: confirmed,
+        last: beats.length - 1,
+        reviewing: true,
+        replayProgress: 0.79,
+        onOpen: () => {},
+        onStage: () => {},
+        onEvidence: () => {},
+        onClose: () => {},
+      }),
+    );
+    expect(pendingCard).toContain("已记录回答 — 简洁正式（待确认）");
+    expect(pendingCard).not.toContain("已记录回答 — 简洁正式（已确认）");
   });
 });

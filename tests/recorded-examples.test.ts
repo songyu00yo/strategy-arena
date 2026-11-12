@@ -147,4 +147,66 @@ describe("completed real-model clarification simulations", () => {
       source.versions[0].clarification!.specification,
     );
   });
+
+  it("publishes hashed, aliased action evidence with stable question groups", () => {
+    for (const metadata of RECORDED_EXAMPLES) {
+      const payload = readRecording(metadata.slug);
+      const version = payload.arena.versions[0];
+      const runIds = new Set(version.clarification!.runs.map((run) => run.id));
+      const actions = payload.replayActions!;
+      expect(actions.length).toBeGreaterThan(0);
+      for (const action of actions) {
+        expect(action.versionId).toBe(version.id);
+        expect(runIds.has(action.sourceRunId!)).toBe(true);
+        expect(action.source?.sha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(action.source?.reference).toMatch(/^work\/new-clarification-examples\//);
+        if (action.kind === "answer" || action.kind === "round_confirm") {
+          const batch = actions.find(
+            (item) => item.kind === "questions" && item.sourceRunId === action.sourceRunId,
+          )!;
+          expect(action.questions).toEqual(batch.questions);
+          expect(action.answers).toHaveLength(
+            action.kind === "answer" ? 1 : action.questions!.length,
+          );
+        }
+        inspect(action);
+      }
+      expect(actions.slice(-2).map((action) => action.kind)).toEqual([
+        "summary_confirm",
+        "handoff",
+      ]);
+    }
+  });
+
+  it("retains all three website submit intents and each original submitted summary", () => {
+    const payload = readRecording("personal-website");
+    const actions = payload.replayActions!;
+    const submits = actions.filter((action) => action.kind === "summary_submit");
+    expect(submits.map((action) => action.source?.requestIndex)).toEqual([26, 37, 44]);
+    expect(submits.map((action) => action.createdAt)).toEqual([
+      "2026-11-12T07:08:50.476Z",
+      "2026-11-12T07:14:01.284Z",
+      "2026-11-12T07:16:52.344Z",
+    ]);
+    expect(submits.map((action) => action.round)).toEqual([7, 10, 12]);
+    expect(submits[0].summary!.challenge.constraints).not.toContain("写入个人简介");
+    expect(submits[1].summary!.challenge.constraints).toContain("写入个人简介");
+    expect(submits[1].summary!.challenge.constraints).not.toContain("暂不展示社交主页");
+    expect(submits[2].summary!.challenge.constraints).toContain("暂不展示社交主页");
+    const finalSubmitIndex = actions.indexOf(submits[2]);
+    expect(
+      actions
+        .slice(0, finalSubmitIndex)
+        .some((action) => action.kind === "summary_confirm" || action.kind === "handoff"),
+    ).toBe(false);
+    expect(
+      actions.some((action) => action.questions?.some((q) => q.id === "experience_display")),
+    ).toBe(true);
+    expect(actions.some((action) => action.questions?.some((q) => q.id === "social_links"))).toBe(
+      true,
+    );
+    expect(actions.find((action) => action.kind === "summary_confirm")!.summary!.challenge).toEqual(
+      payload.arena.versions[0].intake!.confirmation!.summary!.challenge,
+    );
+  });
 });

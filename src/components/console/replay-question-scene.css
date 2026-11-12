@@ -1,0 +1,181 @@
+.console-shell .replay-question-scene {
+  --gi-ink: var(--ink, #15130f);
+  --gi-muted: var(--quiet, #656058);
+  --gi-line: var(--line, #d2cbc0);
+  position: absolute;
+  z-index: 12;
+  inset: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: auto;
+  max-height: calc(100% - 16px);
+  margin: 0;
+  padding: 18px 20px 14px;
+  overflow: hidden;
+  border: 1.5px solid var(--ink, #15130f);
+  border-radius: 4px;
+  background: var(--paper, #fbf8f1);
+  box-shadow: 6px 6px 0 var(--ink, #15130f);
+  --replay-shape: calc(1 - var(--replay-open, 1) + var(--replay-fold, 0));
+  transform: translate(
+      calc(var(--replay-source-x, 0px) * var(--replay-shape)),
+      calc(var(--replay-source-y, 0px) * var(--replay-shape))
+    )
+    scale(
+      calc(1 + (var(--replay-source-scale-x, 1) - 1) * var(--replay-shape)),
+      calc(1 + (var(--replay-source-scale-y, 1) - 1) * var(--replay-shape))
+    );
+  transform-origin: center;
+}
+.console-shell .replay-question-scene[data-flip-origin="unavailable"] {
+  transform: none;
+}
+.replay-question-heading {
+  display: flex;
+  flex: none;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 14px;
+}
+.replay-question-heading span,
+.replay-question-heading > p {
+  color: var(--gi-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.replay-question-heading h3 {
+  margin: 5px 0 0;
+  font-family: var(--serif-cn);
+  font-size: 20px;
+  font-weight: 900;
+}
+.replay-question-heading > p {
+  max-width: 20em;
+  margin: 0;
+}
+.replay-question-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 8px 4px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.replay-question-item {
+  padding: 0 4px;
+}
+.replay-question-item.is-current {
+  border-left: 3px solid var(--vermilion, #a43b2c);
+  padding-left: 10px;
+}
+.replay-question-scene .gi-question {
+  margin-bottom: 6px;
+}
+.replay-question-scene fieldset:disabled,
+.replay-question-scene fieldset:disabled :is(button, input, textarea) {
+  opacity: 1;
+  cursor: default;
+}
+.replay-question-scene .gi-answer-options label {
+  max-width: 100%;
+  color: var(--gi-ink);
+  overflow-wrap: anywhere;
+}
+.replay-question-scene .gi-answer-options label.selected {
+  background: #f0eae0;
+}
+.replay-question-scene .gi-answer-states button[aria-pressed="true"] {
+  color: var(--paper, white);
+}
+.replay-answer-status {
+  margin: 0 0 18px;
+  color: var(--gi-muted);
+  font-size: 11px;
+}
+.replay-answer-status[data-confirmation="confirmed"] {
+  color: var(--ink);
+  font-weight: 700;
+}
+.replay-question-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gi-line);
+}
+.replay-question-footer p {
+  color: var(--gi-muted);
+  font-size: 11px;
+}
+.replay-question-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.replay-question-footer button:disabled {
+  opacity: 1;
+}
+.replay-question-footer button.is-confirmed {
+  box-shadow: 3px 3px 0 var(--vermilion, #a43b2c);
+}
+.replay-question-pointer {
+  position: absolute;
+  z-index: 2;
+  visibility: hidden;
+  pointer-events: none;
+  color: var(--ink, #15130f);
+  filter: drop-shadow(1px 2px 0 var(--paper, white));
+  transform: translate(2px, 2px);
+}
+.replay-question-pointer svg {
+  fill: var(--paper, white);
+  stroke-width: 1.5;
+}
+.replay-question-pointer[data-pressed="true"]::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 21px;
+  height: 21px;
+  border: 1.5px solid var(--vermilion, #a43b2c);
+  border-radius: 50%;
+}
+.replay-summary-answers {
+  margin: 0;
+}
+.replay-summary-answers > div {
+  padding: 10px 0;
+  border-top: 1px solid var(--gi-line);
+}
+.replay-summary-answers dt {
+  font-weight: 700;
+}
+.replay-summary-answers dd {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1100px) {
+  .console-shell .replay-question-scene {
+    inset: 6px;
+    max-height: min(78dvh, 720px);
+    padding: 14px;
+  }
+  .replay-question-heading,
+  .replay-question-footer {
+    flex-wrap: wrap;
+  }
+  .replay-question-heading h3 {
+    font-size: 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-shell .replay-question-scene {
+    transform: none;
+  }
+}

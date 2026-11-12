@@ -14,7 +14,9 @@ import { attackMeta } from "@/components/status";
 import { strategyChanges } from "@/components/text-diff";
 import type { ClarificationRun } from "@/lib/clarification-contracts";
 import type { RecordedAnswer } from "@/lib/intake-contracts";
-import { clarificationAnswersForRun, clarificationQuestionText } from "@/lib/step-context";
+import { clarificationQuestionText } from "@/lib/step-context";
+import type { ReplayAction } from "@/lib/replay-contracts";
+import { buildClarificationReplay, REPLAY_ACTION_TITLES } from "@/lib/replay";
 
 export const CLARIFICATION_ROLES = {
   A: "需求拆解",
@@ -65,7 +67,7 @@ export function clarificationLines(
       ...output.conflicts.map((conflict) => `需核对 ${conflict.description}`),
     ];
   return [
-    `C 审查意见 — ${output.ready ? "可以交接" : "仍需补齐"}`,
+    `C 审查意见 — ${output.ready ? "模型认为可以交接" : "仍需补齐"}`,
     ...output.coverage.map(
       (entry) =>
         `${TOPIC_LABELS[entry.topic]} — ${entry.applicable ? "适用" : "本场景不适用"}，${entry.reason}`,
@@ -78,7 +80,13 @@ export function clarificationLines(
 export const stageName = (version: ArenaVersion, stage: Stage) =>
   version.workflow === "clarification" ? CLARIFICATION_STAGES[stage] : STAGE_LABELS[stage];
 export const beatName = (beat: Beat) =>
-  beat.clarificationRun ? CLARIFICATION_ROLES[beat.clarificationRun.role] : nameOf(beat.agent);
+  beat.replayAction
+    ? beat.replayAction.kind === "questions"
+      ? "本轮补问"
+      : "保存的操作记录"
+    : beat.clarificationRun
+      ? CLARIFICATION_ROLES[beat.clarificationRun.role]
+      : nameOf(beat.agent);
 
 export const AGENTS = [
   { id: "A", name: "方案 A" },
@@ -108,6 +116,7 @@ export type Beat = {
   verdict?: Verdict;
   clarificationRun?: ClarificationRun;
   clarificationAnswers?: RecordedAnswer[];
+  replayAction?: ReplayAction;
 };
 
 /** Read only the playback section already revealed to the user. */
@@ -115,20 +124,34 @@ export function latestShownRevision(shown: readonly Beat[], strategyId: string) 
   return shown.findLast((beat) => beat.revision?.strategyId === strategyId);
 }
 
-export function beatsOf(version: ArenaVersion): Beat[] {
+export function beatsOf(version: ArenaVersion, replayActions?: readonly ReplayAction[]): Beat[] {
   if (version.workflow === "clarification" && version.clarification) {
     const stages = { A: "propose", B: "attack", C: "verify" } as const;
-    return version.clarification.runs.map((run) => ({
-      id: `clarification:${run.id}`,
-      stage: stages[run.role],
-      agent: run.role,
-      title: `${CLARIFICATION_ROLES[run.role]} · 第 ${run.round} 轮`,
-      plain: run.summary,
-      clarificationRun: run,
-      ...(run.role === "B"
-        ? { clarificationAnswers: clarificationAnswersForRun(version, run) }
-        : {}),
-    }));
+    return buildClarificationReplay(version, replayActions).map((step): Beat => {
+      const run = step.clarificationRun;
+      if (run)
+        return {
+          id: step.id,
+          stage: stages[run.role],
+          agent: run.role,
+          title: `${CLARIFICATION_ROLES[run.role]} · 第 ${run.round} 轮`,
+          plain: run.summary,
+          clarificationRun: run,
+        };
+      const action = step.replayAction!;
+      return {
+        id: step.id,
+        stage:
+          action.kind === "handoff" ? "judge" : action.kind === "questions" ? "attack" : "revise",
+        agent: action.kind === "handoff" ? "judge" : "B",
+        title: `${REPLAY_ACTION_TITLES[action.kind]} · 第 ${action.round} 轮`,
+        plain:
+          action.source?.kind === "snapshot"
+            ? "按保存记录重建。本次展示不代表原始点击顺序或输入速度。"
+            : "依据保存的请求与回答展示本次操作。",
+        replayAction: action,
+      };
+    });
   }
   const beats: Beat[] = [];
   for (const s of version.strategies)

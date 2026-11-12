@@ -174,7 +174,7 @@ function RecordedExampleEntry({
 }
 
 export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePayload }) {
-  const { metadata, arena } = payload;
+  const { metadata, arena, replayActions } = payload;
   const [versionId, setVersionId] = useState(arena.versions.at(-1)?.id);
   const [evidence, setEvidence] = useState<{
     versionId: string;
@@ -325,6 +325,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           demo={false}
           historical
           startFromBeginning
+          replayActions={replayActions}
           allowRecordedChallenges
           busy={false}
           selectedAttack={located}
@@ -411,7 +412,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           notices={
             <p className="recorded-replay-notice">
               {simulated
-                ? `回看新增调用为0。${metadata.simulationActor ?? "模拟答题方"}模拟用户回答，未执行任务，也没有真实执行反馈。原补充或调整入口只有明确提交后才创建你自己的需求草稿，模型调用由后续“开始梳理”触发。`
+                ? `按保存记录重建操作，动画节奏为演示编排。回看新增调用为0。${metadata.simulationActor ?? "模拟答题方"}模拟回答，尚无执行反馈。原补充或调整入口在明确提交后创建自己的需求草稿，模型调用由后续“开始梳理”触发。`
                 : "回放新增用量为0。打开步骤后可以补充或质疑，也可以调整条件；确认重新推演才会产生模型费用。"}
             </p>
           }

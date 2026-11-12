@@ -30,6 +30,7 @@ import { clearExamplePickerRequest, examplePickerRequested } from "@/lib/example
 import { routeModel } from "@/lib/model-routing";
 import { DisclosureMotion } from "./disclosure-motion";
 import { ModelSelector } from "./model-selector";
+import { QuestionInput } from "./question-input";
 import { useIntakeSummary } from "./use-intake-summary";
 import { ANSWER_JOURNAL_KEY, answerJournalScope, readAnswerJournal } from "./intake-answer-journal";
 import {
@@ -113,106 +114,6 @@ function answerOf(question: IntakeQuestion): IntakeAnswer {
     state: "answered",
     value: question.type === "multiple" ? [] : "",
   };
-}
-
-function QuestionInput({
-  question,
-  answer,
-  onChange,
-  disabled,
-}: {
-  question: IntakeQuestion;
-  answer: IntakeAnswer;
-  onChange: (answer: IntakeAnswer) => void;
-  disabled: boolean;
-}) {
-  const id = useId();
-  const active = answer.state === "answered";
-  const setValue = (value: IntakeAnswer["value"]) =>
-    onChange({ ...answer, state: "answered", value });
-  return (
-    <fieldset className="gi-question" disabled={disabled}>
-      <legend>{question.title}</legend>
-      <p id={`${id}-reason`}>
-        {question.authorization
-          ? `${question.reason} 本项授权范围为${question.authorization}`
-          : question.reason}
-      </p>
-      <div className="gi-answer-states" role="group" aria-label="回答方式">
-        {(
-          [
-            ["answered", "我来补充"],
-            ["unknown", "暂时不知道"],
-            ["skipped", "跳过"],
-          ] as const
-        ).map(([state, label]) => (
-          <button
-            key={state}
-            type="button"
-            aria-pressed={answer.state === state}
-            onClick={() => onChange({ ...answer, state })}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <DisclosureMotion open={active} id={`${id}-answer`}>
-        {question.type === "single" || question.type === "multiple" ? (
-          <div className="gi-answer-options" aria-describedby={`${id}-reason`}>
-            {question.options.map((option) => {
-              const chosen = Array.isArray(answer.value)
-                ? answer.value.includes(option)
-                : answer.value === option;
-              return (
-                <label key={option} className={chosen ? "selected" : ""}>
-                  <input
-                    type={question.type === "single" ? "radio" : "checkbox"}
-                    name={id}
-                    checked={chosen}
-                    onChange={() =>
-                      setValue(
-                        question.type === "single"
-                          ? option
-                          : chosen
-                            ? (Array.isArray(answer.value) ? answer.value : []).filter(
-                                (v) => v !== option,
-                              )
-                            : [...(Array.isArray(answer.value) ? answer.value : []), option],
-                      )
-                    }
-                  />
-                  <span>{option}</span>
-                </label>
-              );
-            })}
-          </div>
-        ) : (
-          <label className="gi-answer-field">
-            <span className="sr-only">{question.title}</span>
-            {question.type === "number" ? (
-              <input
-                type="number"
-                value={String(answer.value)}
-                placeholder={question.placeholder}
-                aria-describedby={`${id}-reason`}
-                onChange={(e) => setValue(e.target.value)}
-              />
-            ) : (
-              <textarea
-                rows={2}
-                maxLength={3000}
-                value={String(answer.value)}
-                placeholder={question.placeholder}
-                aria-describedby={`${id}-reason`}
-                onChange={(e) => setValue(e.target.value)}
-              />
-            )}
-            {question.unit && <small>{question.unit}</small>}
-          </label>
-        )}
-      </DisclosureMotion>
-    </fieldset>
-  );
 }
 
 export function GuidedIntake({

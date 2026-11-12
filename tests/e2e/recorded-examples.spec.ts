@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { RECORDED_EXAMPLES, type RecordedExamplePayload } from "../../src/lib/recorded-examples";
+import { buildClarificationReplay } from "../../src/lib/replay";
 
 // Saved real-provider outputs with explicitly simulated inputs and Codex answers.
 function recording(slug: string): RecordedExamplePayload {
@@ -43,6 +44,7 @@ for (const example of RECORDED_EXAMPLES) {
       const payload = recording(example.slug);
       const version = payload.arena.versions.at(-1)!;
       const state = version.clarification!;
+      const replay = buildClarificationReplay(version, payload.replayActions);
       const calls = await watchReadOnlyRequests(page, new URL(baseURL!).origin);
       await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -66,10 +68,11 @@ for (const example of RECORDED_EXAMPLES) {
         "step",
       );
 
-      const bIndex = state.runs.findIndex(
-        (run) => run.role === "B" && "questions" in run.output && run.output.questions.length > 0,
+      const bIndex = replay.findIndex(
+        ({ clarificationRun: run }) =>
+          run?.role === "B" && "questions" in run.output && run.output.questions.length > 0,
       );
-      const b = state.runs[bIndex];
+      const b = replay[bIndex].clarificationRun!;
       const questions = "questions" in b.output ? b.output.questions : [];
       await page.getByRole("button", { name: `第 ${bIndex + 1} 步`, exact: true }).click();
       await page.getByRole("button", { name: `查看第 ${bIndex + 1} 步`, exact: true }).click();
@@ -79,15 +82,30 @@ for (const example of RECORDED_EXAMPLES) {
         await expect(card).toContainText(question.title);
         for (const option of question.options) await expect(card).toContainText(option);
       }
-      await expect(card).toContainText("已记录回答");
+      await expect(card).toContainText("尚未回答（未确认）");
       const sourceRound = state.rounds.findIndex((round) => round.runIds.includes(b.id));
       const nextAnswers = state.rounds.slice(sourceRound + 1).flatMap((round) => round.answers);
       const firstAnswer = nextAnswers.find((answer) => answer.questionId === questions[0].id)!;
-      await expect(card).toContainText(
-        Array.isArray(firstAnswer.value) ? firstAnswer.value.join("、") : firstAnswer.value,
-      );
       await page.keyboard.press("Escape");
       await expect(card).toBeHidden();
+
+      const questionIndex = replay.findIndex((step) => step.replayAction?.kind === "questions");
+      await page.getByRole("button", { name: `第 ${questionIndex + 1} 步`, exact: true }).click();
+      const scene = page.getByRole("region", { name: "补问过程回放", exact: true });
+      for (const question of questions) {
+        await expect(scene).toContainText(question.title);
+        for (const option of question.options) await expect(scene).toContainText(option);
+      }
+      await expect(scene.locator("input:checked")).toHaveCount(0);
+      const answerIndex = replay.findIndex((step) => step.replayAction?.kind === "answer");
+      await page.getByRole("button", { name: `第 ${answerIndex + 1} 步`, exact: true }).click();
+      const field = scene.locator(`[data-question-id="${firstAnswer.questionId}"]`);
+      const values = Array.isArray(firstAnswer.value) ? firstAnswer.value : [firstAnswer.value];
+      if (firstAnswer.question.type === "single" || firstAnswer.question.type === "multiple")
+        for (const value of values)
+          await expect(field.getByLabel(value, { exact: true })).toBeChecked();
+      else await expect(field.locator("input, textarea")).toHaveValue(String(firstAnswer.value));
+      await expect(scene).toContainText("待确认");
 
       const sourceButton = page.getByRole("button", { name: "原题与记录", exact: true });
       await sourceButton.click();

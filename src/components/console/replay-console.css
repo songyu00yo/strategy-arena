@@ -1,0 +1,34 @@
+.clarification-replay .c-time.replay-time {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+}
+
+.clarification-replay .replay-time .seg {
+  flex-shrink: 0;
+  min-width: 54px;
+}
+
+.clarification-replay .replay-time .ticks button {
+  flex: 1 0 6px;
+}
+
+.clarification-replay .c-result.whole {
+  max-height: 42vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.clarification-replay .c-now .big,
+.clarification-replay .c-now > p {
+  opacity: 1;
+}
+
+@media (max-width: 650px) {
+  .clarification-replay .c-result.whole {
+    max-height: 50vh;
+  }
+}

@@ -1,4 +1,5 @@
 import type { ArenaSnapshot } from "./contracts";
+import type { ReplayAction } from "./replay-contracts";
 
 export interface RecordedExample {
   workflow?: "clarification";
@@ -32,6 +33,7 @@ export interface RecordedExample {
 export interface RecordedExamplePayload {
   metadata: RecordedExample;
   arena: ArenaSnapshot;
+  replayActions?: ReplayAction[];
 }
 
 // Metadata only: completed real-model clarification simulations.
@@ -52,7 +54,7 @@ export const RECORDED_EXAMPLES: RecordedExample[] = [
     sourceCommit: "bd8c2da0e1db7e97669590249199577cbe378867",
     sourceCommits: ["bd8c2da0e1db7e97669590249199577cbe378867"],
     qualityNote:
-      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。本记录保留第8轮的一次冗余确认，完整过程未删减。",
+      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。本记录保留第8轮的一次冗余确认，完整过程未删减。操作回放依据保存的API请求与快照重建，播放节奏为示意。",
     versionCount: 1,
     sourceFile: "work/new-clarification-examples/personal-site/completed-record.json",
     sourceFileSha256: "74f2df612321d2ff150c7ef5edf74d72dc8ffa76a70853c6e33bd4772cdb7041",
@@ -90,7 +92,7 @@ export const RECORDED_EXAMPLES: RecordedExample[] = [
       "d3d328d6fd35381ad407e07e513e31a79528aa87",
     ],
     qualityNote:
-      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。",
+      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。操作回放依据保存的API请求与快照重建，播放节奏为示意。",
     versionCount: 1,
     sourceFile: "work/new-clarification-examples/ppt/completed-record.json",
     sourceFileSha256: "ed8cc8ee9c6e594fd1fadf89c8b03aacb15646b9732ca99edd1128e95e643bd1",
@@ -129,7 +131,7 @@ export const RECORDED_EXAMPLES: RecordedExample[] = [
       "d3d328d6fd35381ad407e07e513e31a79528aa87",
     ],
     qualityNote:
-      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。",
+      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。操作回放依据保存的API请求与快照重建，播放节奏为示意。",
     versionCount: 1,
     sourceFile: "work/new-clarification-examples/document/completed-record.json",
     sourceFileSha256: "6a9474c318ef106de0687a23fe3c09d2264cb26b97807cdca37eb4e5f849e842",
@@ -164,7 +166,7 @@ export const RECORDED_EXAMPLES: RecordedExample[] = [
     sourceCommit: "52e57f9b0a2887ded0e85cf6c106947a31f6c72d",
     sourceCommits: ["52e57f9b0a2887ded0e85cf6c106947a31f6c72d"],
     qualityNote:
-      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。",
+      "需求与回答由 Codex 技术模拟，问题和审查来自真实模型。已保存最终需求与执行提示词，尚无执行反馈。操作回放依据保存的API请求与快照重建，播放节奏为示意。",
     versionCount: 1,
     sourceFile: "work/new-clarification-examples/event-registration/completed-record.json",
     sourceFileSha256: "70fc99eb4e89f6160964dc658c9dce0666a7a304fcba2936778a892fd8db75b4",

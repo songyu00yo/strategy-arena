@@ -336,8 +336,7 @@ export function ReplayQuestionScene({
       state.x = origin.x + (destination.x - origin.x) * movement;
       state.y = origin.y + (destination.y - origin.y) * movement;
       state.placed = true;
-      cursor.style.left = `${state.x}px`;
-      cursor.style.top = `${state.y}px`;
+      cursor.style.transform = `translate3d(${state.x + 2}px, ${state.y + 2}px, 0)`;
       cursor.style.visibility = "visible";
     };
     measurePointer.current = measure;

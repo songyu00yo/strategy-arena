@@ -351,11 +351,20 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
           .querySelector<HTMLElement>(".replay-question-footer")!
           .getBoundingClientRect();
         const cursor = pointer.getBoundingClientRect();
+        const cursorStyle = getComputedStyle(pointer);
         const box = target.getBoundingClientRect();
         return {
           header: { top: header.top, bottom: header.bottom },
           footer: { top: footer.top, bottom: footer.bottom },
           tip: { x: cursor.left, y: cursor.top },
+          pointerStyle: {
+            left: cursorStyle.left,
+            top: cursorStyle.top,
+            filter: cursorStyle.filter,
+            transform: pointer.style.transform,
+            willChange: cursorStyle.willChange,
+          },
+          pointerCount: paper.querySelectorAll(".replay-question-pointer").length,
           target: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
           width: innerWidth,
           height: innerHeight,
@@ -375,6 +384,14 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
     );
     const frame = await pressed.jsonValue();
     if (!frame) throw new Error("No pressed replay control frame was captured.");
+    expect(frame.pointerCount).toBe(1);
+    expect(frame.pointerStyle).toMatchObject({
+      left: "0px",
+      top: "0px",
+      filter: "none",
+      willChange: "transform",
+    });
+    expect(frame.pointerStyle.transform).toMatch(/^translate3d\(/);
     expect(frame.header.top).toBeGreaterThanOrEqual(0);
     expect(frame.header.bottom).toBeLessThanOrEqual(frame.height);
     expect(frame.footer.top).toBeGreaterThanOrEqual(0);

@@ -130,12 +130,14 @@
 }
 .replay-question-pointer {
   position: absolute;
+  left: 0;
+  top: 0;
   z-index: 2;
   visibility: hidden;
   pointer-events: none;
   color: var(--ink, #15130f);
-  filter: drop-shadow(1px 2px 0 var(--paper, white));
-  transform: translate(2px, 2px);
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
 }
 .replay-question-pointer svg {
   fill: var(--paper, white);

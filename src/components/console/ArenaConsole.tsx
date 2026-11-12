@@ -561,6 +561,15 @@ export function ArenaConsole({
           >
             <section
               ref={resultPanel}
+              data-confirmation={
+                clarification
+                  ? projection?.handoffComplete
+                    ? clarification.draftOnly
+                      ? "draft"
+                      : "confirmed"
+                    : "pending"
+                  : undefined
+              }
               className={`c-result ${wholeResult ? "whole" : ""}`}
               aria-label="结论"
               id="verdict"

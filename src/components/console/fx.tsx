@@ -30,7 +30,7 @@ import { verdictLabel } from "@/lib/verdict-label";
 
 import { createMotionLoop, createMotionScope, useReducedMotion } from "./motion-runtime";
 import type { PlaybackTimeline } from "./use-playback-progress";
-import { paperBackgroundIndex, PAPER_MOTION } from "./paper-stage";
+import { CLARIFICATION_SEAL_FRAMES, paperBackgroundIndex, PAPER_MOTION } from "./paper-stage";
 import "./paper-stage.css";
 
 const reduced = reducedMotion;
@@ -75,16 +75,18 @@ export function VerdictFilm({
     const scope = createMotionScope();
     const press = scope.animate(
       el,
-      [
-        { transform: "translate(-50%,-50%) rotate(-14deg) scale(2.2)", opacity: 0 },
-        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.55 },
-        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.85 },
-        { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 0 },
-      ],
+      clarification
+        ? CLARIFICATION_SEAL_FRAMES
+        : [
+            { transform: "translate(-50%,-50%) rotate(-14deg) scale(2.2)", opacity: 0 },
+            { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.55 },
+            { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.85 },
+            { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 0 },
+          ],
       {
         duration: clarification ? PAPER_MOTION.seal : 2600,
         delay: clarification ? 0 : 200,
-        easing: "cubic-bezier(.19,1,.22,1)",
+        easing: clarification ? "linear" : "cubic-bezier(.19,1,.22,1)",
         fill: "both",
       },
     );

@@ -13,6 +13,7 @@ import {
   replayHandoffOutside,
   replayPaperTiming,
   replayPointerAt,
+  replayPressAt,
   replayPressedAt,
   replayReadingState,
   replayReadingScroll,
@@ -149,6 +150,17 @@ describe("controlled recorded question scenes", () => {
     expect(replayPointerAt(origin, target, 0.1).x - origin.x).toBeGreaterThan(
       target.x - replayPointerAt(origin, target, 0.9).x,
     );
+  });
+
+  it("presses each real control by a 1.5px sine pulse and returns to rest after 160ms", () => {
+    const clicks = [0.45, 0.6];
+    expect(replayPressAt(1124, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
+    expect(replayPressAt(1125, 2500, clicks)).toEqual({ index: 0, progress: 0, offset: 0 });
+    expect(replayPressAt(1205, 2500, clicks)).toEqual({ index: 0, progress: 0.5, offset: 1.5 });
+    expect(replayPressAt(1245, 2500, clicks).offset).toBeCloseTo(Math.sin(Math.PI * 0.75) * 1.5);
+    expect(replayPressAt(1285, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
+    expect(replayPressAt(1580, 2500, clicks)).toEqual({ index: 1, progress: 0.5, offset: 1.5 });
+    expect(replayPressAt(1660, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
   });
 
   it("requests a temporary handoff ornament only for a measured recipient outside the stage", () => {

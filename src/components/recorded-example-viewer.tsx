@@ -15,8 +15,8 @@ import { readMotionOrigin } from "./motion-origin";
 import { RecordedConditionEditor } from "./recorded-condition-editor";
 import { RecordedChallenge } from "./recorded-challenge";
 import { supplementDraftKey, type SupplementDraft } from "./supplement-draft";
-import { createMotionScope } from "./console/motion-runtime";
-import { initialPaperFrames, PAPER_MOTION } from "./console/paper-stage";
+import { createMotionLoop, createMotionScope, motionNow } from "./console/motion-runtime";
+import { initialPaperFrames, initialPaperReceiverReady, PAPER_MOTION } from "./console/paper-stage";
 import "./console/console.css";
 import "./recorded-example-viewer.css";
 import "./console/paper-console.css";
@@ -40,26 +40,56 @@ function handoffInitialPaper(form: HTMLFormElement, onStart: () => void) {
   document.body.appendChild(paper);
   const scope = createMotionScope();
   scope.own(paper);
-  onStart();
-  requestAnimationFrame(() => {
+  const route = location.pathname;
+  const preference = matchMedia("(prefers-reduced-motion: reduce)");
+  let animation: Animation | undefined;
+  let disposed = false;
+  const cleanup = () => {
+    if (disposed) return;
+    disposed = true;
+    loop?.dispose();
+    preference.removeEventListener("change", settle);
+    removeEventListener("pagehide", cleanup);
+    removeEventListener("popstate", cleanup);
+    scope.dispose();
+  };
+  const settle = () => {
+    if (preference.matches) {
+      if (animation) animation.finish();
+      else cleanup();
+    }
+  };
+  preference.addEventListener("change", settle);
+  addEventListener("pagehide", cleanup, { once: true });
+  addEventListener("popstate", cleanup, { once: true });
+  const began = motionNow();
+  const loop = createMotionLoop((now) => {
+    if (location.pathname !== route || (!animation && now - began >= 2000)) {
+      cleanup();
+      return false;
+    }
+    if (animation) return true;
     const target = document.querySelector<HTMLElement>('[data-board="A"]');
+    const activeStep = document.querySelector('.c-time [aria-current="step"]');
+    if (activeStep && activeStep.getAttribute("aria-label") !== "第 1 步") {
+      cleanup();
+      return false;
+    }
+    if (!initialPaperReceiverReady(target, activeStep)) return true;
     const frames = target && initialPaperFrames(source, target.getBoundingClientRect());
-    if (!frames || reducedMotion()) return scope.dispose();
-    const animation = scope.animate(paper, frames, {
+    if (!frames || reducedMotion()) {
+      cleanup();
+      return false;
+    }
+    animation = scope.animate(paper, frames, {
       duration: PAPER_MOTION.transfer,
       easing: "cubic-bezier(.2,.75,.25,1)",
       fill: "both",
     });
-    const preference = matchMedia("(prefers-reduced-motion: reduce)");
-    const settle = () => {
-      if (preference.matches) animation.finish();
-    };
-    preference.addEventListener("change", settle);
-    animation.onfinish = () => {
-      preference.removeEventListener("change", settle);
-      scope.dispose();
-    };
+    animation.onfinish = cleanup;
+    return true;
   });
+  onStart();
 }
 
 function RecordedExampleEntry({

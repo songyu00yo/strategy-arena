@@ -112,6 +112,13 @@
   max-width: 100%;
   color: var(--gi-ink);
   overflow-wrap: anywhere;
+  transition:
+    border-color calc(160ms / var(--playback-speed, 1)) ease-out,
+    background-color calc(160ms / var(--playback-speed, 1)) ease-out;
+}
+.replay-question-scene
+  :is([data-answer-option], [data-answer-state], [data-answer-field], [data-replay-confirm]) {
+  transform: translate3d(0, var(--replay-control-press, 0px), 0);
 }
 .console-shell
   .replay-question-scene
@@ -196,6 +203,8 @@
   height: 21px;
   border: 1.5px solid var(--vermilion, #a43b2c);
   border-radius: 50%;
+  transform: scale(calc(0.8 + var(--replay-press-amount, 0) * 0.2));
+  opacity: calc(0.55 + var(--replay-press-amount, 0) * 0.45);
 }
 .replay-summary-answers {
   margin: 0;
@@ -230,5 +239,8 @@
   .console-shell .replay-question-scene {
     transform: none !important;
     will-change: auto;
+  }
+  .replay-question-scene .gi-answer-options label {
+    transition: none;
   }
 }

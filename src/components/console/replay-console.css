@@ -27,6 +27,13 @@
   opacity: 1;
 }
 
+.clarification-replay.at-result .c-result[data-confirmation="confirmed"] .tag b {
+  border: 3px double var(--vermilion, #c8331f);
+  background: var(--paper, #fbf8f1);
+  color: var(--vermilion, #c8331f);
+  transform: rotate(-1deg);
+}
+
 @media (max-width: 650px) {
   .clarification-replay .c-result.whole {
     max-height: 50vh;

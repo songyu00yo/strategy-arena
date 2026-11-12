@@ -60,3 +60,30 @@ export function initialPaperFrames(
     { transform: `translate(${x}px,${y}px) scale(${scale},.12) rotate(0deg)`, opacity: 0 },
   ];
 }
+
+/** An empty board shell cannot receive the input. Wait for the first recorded A output to be visible. */
+export function initialPaperReceiverReady(target: HTMLElement | null, activeStep: Element | null) {
+  if (!target || activeStep?.getAttribute("aria-label") !== "第 1 步") return false;
+  const body = target.querySelector<HTMLElement>(".c-board-body");
+  if (!body?.querySelector("h3") || !body.querySelector(".est")?.textContent?.trim()) return false;
+  const rect = target.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  for (let node: HTMLElement | null = body; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse" ||
+      Number(style.opacity) < 0.98
+    )
+      return false;
+  }
+  return true;
+}
+
+/** The short clarification impression holds its ink. The permanent conclusion tag remains afterward. */
+export const CLARIFICATION_SEAL_FRAMES: Keyframe[] = [
+  { transform: "translate(-50%,-50%) rotate(-10deg) scale(1.6)", opacity: 0 },
+  { transform: "translate(-50%,-50%) rotate(-7deg) scale(.98)", opacity: 1, offset: 0.45 },
+  { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1 },
+];

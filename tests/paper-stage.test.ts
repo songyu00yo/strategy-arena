@@ -8,6 +8,8 @@ import { RouteStage } from "../src/components/console/RouteStage";
 import {
   adjacentPaperTransfer,
   initialPaperFrames,
+  initialPaperReceiverReady,
+  CLARIFICATION_SEAL_FRAMES,
   nextRecordedRole,
   paperBackgroundIndex,
   paperTransferPath,
@@ -39,6 +41,42 @@ describe("paper theatre handoffs", () => {
       transfer: 600,
       seal: 280,
     });
+  });
+
+  it("waits for a real first A output and fully visible ancestors before folding the input", () => {
+    const ancestor = { parentElement: null };
+    let complete = false;
+    const body = {
+      parentElement: ancestor,
+      querySelector: (selector: string) =>
+        complete ? (selector === ".est" ? { textContent: "第 1 轮 · 依据修订 1" } : {}) : null,
+    };
+    const target = {
+      querySelector: () => body,
+      getBoundingClientRect: () => ({ width: 300, height: 240 }),
+    } as unknown as HTMLElement;
+    let opacity = "0";
+    vi.stubGlobal("getComputedStyle", () => ({ display: "block", visibility: "visible", opacity }));
+    const first = { getAttribute: () => "第 1 步" } as unknown as Element;
+    expect(initialPaperReceiverReady(target, first)).toBe(false);
+    complete = true;
+    expect(initialPaperReceiverReady(target, first)).toBe(false);
+    opacity = "0.5";
+    expect(initialPaperReceiverReady(target, first)).toBe(false);
+    opacity = "1";
+    expect(initialPaperReceiverReady(target, first)).toBe(true);
+    expect(
+      initialPaperReceiverReady(target, { getAttribute: () => "第 2 步" } as unknown as Element),
+    ).toBe(false);
+    expect(initialPaperReceiverReady(null, first)).toBe(false);
+  });
+
+  it("keeps the short clarification seal opaque after landing", () => {
+    expect(CLARIFICATION_SEAL_FRAMES[0].transform).toContain("scale(1.6)");
+    expect(CLARIFICATION_SEAL_FRAMES[1]).toMatchObject({ opacity: 1, offset: 0.45 });
+    expect(CLARIFICATION_SEAL_FRAMES[1].transform).toContain("scale(.98)");
+    expect(CLARIFICATION_SEAL_FRAMES.at(-1)).toMatchObject({ opacity: 1 });
+    expect(CLARIFICATION_SEAL_FRAMES.at(-1)?.transform).toContain("scale(1)");
   });
 
   it("follows actual role calls and waits for user actions between B and a later model", () => {

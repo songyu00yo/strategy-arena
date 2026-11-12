@@ -25,6 +25,7 @@ async function playQuestion(page: Page) {
   await page.getByRole("button", { name: "暂停自动开始", exact: true }).click();
   await page.getByRole("button", { name: "开始回看", exact: true }).click();
   await page.getByRole("button", { name: `第 ${questionIndex} 步`, exact: true }).click();
+  await expect(page.locator(".initial-paper-transfer")).toHaveCount(0);
   const speed = page.getByRole("button", { name: "放映速度", exact: true });
   await speed.click();
   await speed.click();

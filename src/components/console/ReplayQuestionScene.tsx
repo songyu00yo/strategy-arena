@@ -62,10 +62,16 @@ export function replayPointerAt(origin: Point, target: Point, progress: number):
   };
 }
 
-export function replayPressedAt(elapsed: number, duration: number, clickTimes: number[]) {
-  return clickTimes.some(
+export function replayPressAt(elapsed: number, duration: number, clickTimes: number[]) {
+  const index = clickTimes.findLastIndex(
     (at) => elapsed >= at * duration && elapsed < at * duration + PAPER_MOTION.feedback,
   );
+  const progress = index < 0 ? 0 : (elapsed - clickTimes[index] * duration) / PAPER_MOTION.feedback;
+  return { index, progress, offset: index < 0 ? 0 : Math.sin(progress * Math.PI) * 1.5 };
+}
+
+export function replayPressedAt(elapsed: number, duration: number, clickTimes: number[]) {
+  return replayPressAt(elapsed, duration, clickTimes).index >= 0;
 }
 
 /** A body-owned ornament is needed only when the measured recipient leaves the stage clip. */
@@ -269,6 +275,7 @@ export function ReplayQuestionScene({
       scroll: number;
       stops: number[];
       targets: Array<Point | null>;
+      controls: Array<HTMLElement | null>;
       heading: Point;
       startScroll: number;
       sheet: { left: number; top: number; width: number; height: number };
@@ -280,6 +287,12 @@ export function ReplayQuestionScene({
     let disposed = false;
     let signature = "";
     let origin: Point | null = pointerPosition.current;
+    let pressedControl: HTMLElement | null = null;
+    const resetControl = () => {
+      pressedControl?.style.removeProperty("--replay-control-press");
+      if (pressedControl) delete pressedControl.dataset.replayPressed;
+      pressedControl = null;
+    };
     let transfer: {
       scope: ReturnType<typeof createMotionScope>;
       node: HTMLDivElement;
@@ -375,9 +388,9 @@ export function ReplayQuestionScene({
             reducedMotion ? 1 : movement,
           )
         : null;
-      const pressed =
-        !!(currentAnswer || userConfirmation) &&
-        replayPressedAt(frame.elapsed, frame.duration, clickTimes);
+      const press = replayPressAt(frame.elapsed, frame.duration, clickTimes);
+      const pressed = !!(currentAnswer || userConfirmation) && press.index >= 0;
+      const control = pressed ? (cache.controls[press.index] ?? null) : null;
       const stripLeft = cache.sheet.left + x + (cache.sheet.width * (1 - scaleX)) / 2;
       const stripTop = cache.sheet.top + y + (cache.sheet.height * (1 - scaleY)) / 2;
       const crossesClip =
@@ -400,6 +413,15 @@ export function ReplayQuestionScene({
       element.dataset.replayFold = fold.toFixed(3);
       viewport.dataset.scrollPhase = scrollPhase;
       viewport.dataset.scrollTarget = scroll.toFixed(3);
+      if (pressedControl !== control) resetControl();
+      if (control) {
+        pressedControl = control;
+        control.style.setProperty(
+          "--replay-control-press",
+          (reducedMotion ? 0 : press.offset) + "px",
+        );
+        control.dataset.replayPressed = "true";
+      }
       if (carry) {
         if (!transfer) {
           const scope = createMotionScope();
@@ -436,6 +458,7 @@ export function ReplayQuestionScene({
         cache.scroll = scroll;
       }
       cursor.dataset.pressed = String(pressed);
+      cursor.style.setProperty("--replay-press-amount", String(pressed ? press.offset / 1.5 : 0));
       cursor.style.opacity =
         frame.progress >= 0.15 && frame.progress < 0.96 && fold < 0.25 ? "1" : "0";
       cursor.style.visibility = position ? "visible" : "hidden";
@@ -531,6 +554,7 @@ export function ReplayQuestionScene({
         scroll: viewport.scrollTop,
         stops,
         targets,
+        controls: nodes.map((node) => node ?? null),
         heading: headingPoint,
         startScroll: cache?.startScroll ?? viewport.scrollTop,
         sheet: { left: page.x, top: page.y, width, height },
@@ -628,6 +652,7 @@ export function ReplayQuestionScene({
       unsubscribe?.();
       unsubscribePause();
       clearTransfer();
+      resetControl();
       viewport.removeEventListener("scroll", scrollBody);
       removeEventListener("scroll", scrollPage);
       removeEventListener("resize", scheduleMeasure);

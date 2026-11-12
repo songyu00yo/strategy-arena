@@ -2,14 +2,14 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import type { RecordedExamplePayload } from "../../src/lib/recorded-examples";
-import { buildClarificationReplay } from "../../src/lib/replay";
+import { beatsOf } from "../../src/components/console/beats";
 import { playbackDuration } from "../../src/components/console/use-playback-progress";
 
 const payload = JSON.parse(
   readFileSync("public/recorded-examples/personal-website.json", "utf8"),
 ) as RecordedExamplePayload;
 const version = payload.arena.versions.find((entry) => entry.id === payload.arena.activeVersionId)!;
-const steps = buildClarificationReplay(version, payload.replayActions);
+const steps = beatsOf(version, payload.replayActions);
 const questionIndex = steps.findIndex(
   (step) => step.replayAction?.kind === "questions" && step.replayAction.round === 2,
 );

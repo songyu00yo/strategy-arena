@@ -61,15 +61,13 @@ for (const example of RECORDED_EXAMPLES) {
       expect(compact!.height).toBeLessThanOrEqual(
         width === 390 ? Math.min(480, 844 * 0.58) + 1 : 480,
       );
-      const prefixes = await scene
-        .locator(".gi-answer-options input")
-        .evaluateAll((inputs) =>
-          inputs.map((input) => ({
-            width: input.getBoundingClientRect().width,
-            clip: getComputedStyle(input).clipPath,
-            opacity: getComputedStyle(input).opacity,
-          })),
-        );
+      const prefixes = await scene.locator(".gi-answer-options input").evaluateAll((inputs) =>
+        inputs.map((input) => ({
+          width: input.getBoundingClientRect().width,
+          clip: getComputedStyle(input).clipPath,
+          opacity: getComputedStyle(input).opacity,
+        })),
+      );
       expect(
         prefixes.every(
           (input) => input.width <= 1 && input.clip === "inset(50%)" && input.opacity === "0",

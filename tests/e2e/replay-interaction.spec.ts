@@ -87,7 +87,14 @@ for (const example of RECORDED_EXAMPLES) {
       await expect(metric(page, "已确认")).toHaveText(String(confirmed));
       await expect(scene).toContainText("本次确认已记录");
       await expect(page.locator(".c-result-region")).toHaveAttribute("aria-hidden", "true");
-      await expect(page.locator(".c-time [aria-current=step]")).toBeInViewport();
+      const tickWithinTrack = await page.locator(".c-time [aria-current=step]").evaluate((tick) => {
+        const current = tick.getBoundingClientRect();
+        const track = tick.closest(".c-time")!.getBoundingClientRect();
+        return current.left >= track.left - 1 && current.right <= track.right + 1;
+      });
+      expect(tickWithinTrack).toBe(true);
+      await expect(scene.locator(".replay-question-heading")).toBeInViewport({ ratio: 1 });
+      await expect(scene.locator(".replay-question-footer")).toBeInViewport({ ratio: 1 });
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
       ).toBe(true);

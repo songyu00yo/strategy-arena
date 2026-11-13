@@ -391,11 +391,11 @@ export function useOverlayMotion<T extends HTMLElement>(
           { opacity: 0 },
         ]);
       }
-      const time = document.timeline.currentTime;
+      // Let this task's pending plays share the next ready refresh, without
+      // advancing new surfaces to an earlier document tick before first paint.
       animations.current.forEach((animation) => {
         animation.currentTime = 0;
         animation.play();
-        if (typeof time === "number") animation.startTime = time;
       });
       flight.current = { driver, path, duration };
       driver.onfinish = () => {

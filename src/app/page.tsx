@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  ViewTransition,
+  startTransition,
+} from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -36,6 +44,7 @@ import type { StepContext } from "@/lib/step-context";
 import { GuidedIntake } from "@/components/guided-intake";
 import { RecordedExamples } from "@/components/recorded-examples";
 import { GoalFocusStage } from "@/components/goal-focus-stage";
+import { moveScroll, revealInWindow } from "@/components/motion-scroll";
 import { AccessGate } from "@/components/access-gate";
 import { IntakeContext } from "@/components/intake-context";
 import { DecisionReviewPanel } from "@/components/decision-review-panel";
@@ -128,7 +137,7 @@ function RunNotice({
     </div>
   );
 }
-export default function Page() {
+function Page() {
   const arena = useArena();
   const [identityEpoch, setIdentityEpoch] = useState(0);
   const [versionId, setVersionId] = useState<string | null>(null);
@@ -181,7 +190,7 @@ export default function Page() {
   const chooseVersion = (id: string | null) => {
     navigationEpoch.current += 1;
     versionPin.current = null;
-    setVersionId(id);
+    startTransition(() => setVersionId(id));
   };
   const releaseVersionPin = (pin = versionPin.current) => {
     if (!pin || versionPin.current !== pin) return;
@@ -236,7 +245,7 @@ export default function Page() {
     cancelAnimationFrame(locateFrame.current);
     locateFrame.current = requestAnimationFrame(() => {
       const target = document.getElementById(`dispute-${a.id}`);
-      target?.scrollIntoView({ block: "center" });
+      if (target) revealInWindow(target, { block: "center" });
       target?.focus({ preventScroll: true });
     });
   };
@@ -293,7 +302,7 @@ export default function Page() {
       // Restoring data must not override a user's current control. Explicit local navigation
       // defaults to the new heading, unless focus moved to another control before this frame.
       if (interactive && (!localNavigation || focused !== focusAtSchedule)) return;
-      window.scrollTo({ top: 0, behavior: "instant" });
+      moveScroll(window, { top: 0 }, { duration: 320 });
       headingRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
@@ -310,7 +319,7 @@ export default function Page() {
     parentVersion && selected ? challengeChanges(parentVersion.challenge, selected.challenge) : [];
   return (
     <div className={`site-shell console-shell ${arena.snapshot ? "" : "home focus-home"}`}>
-      {arena.snapshot && <ClickFx />}
+      <ClickFx />
       <a href="#main" className="skip-link">
         跳转到主要内容
       </a>
@@ -347,9 +356,11 @@ export default function Page() {
                 chooseVersion(null);
               }}
               onOpenIntake={(id) => {
-                arena.openIntake(id);
-                chooseVersion(null);
-                setIdentityEpoch((epoch) => epoch + 1);
+                startTransition(() => {
+                  arena.openIntake(id);
+                  chooseVersion(null);
+                  setIdentityEpoch((epoch) => epoch + 1);
+                });
               }}
             />
           )}
@@ -438,8 +449,10 @@ export default function Page() {
                         pending={arena.busy}
                         disabled={arena.restoring || !arena.health || accessRequired}
                         onCreated={(snapshot) => {
-                          arena.adopt(snapshot);
-                          chooseVersion(null);
+                          startTransition(() => {
+                            arena.adopt(snapshot);
+                            chooseVersion(null);
+                          });
                         }}
                       />
                     )}
@@ -1178,6 +1191,22 @@ export default function Page() {
     </div>
   );
 }
+
+export default function PageWithMotion() {
+  return (
+    <ViewTransition
+      name="paper-page"
+      default="none"
+      share="paper-page"
+      update="paper-page"
+      enter="paper-page-enter"
+      exit="paper-page-exit"
+    >
+      <Page />
+    </ViewTransition>
+  );
+}
+
 function CornerIcon() {
   return <span aria-hidden="true">↳</span>;
 }

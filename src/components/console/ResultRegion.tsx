@@ -64,7 +64,7 @@ export function ResultRegion({
       };
       if (reducedMotion() || (next === 0 && parseFloat(height) === 0)) return finish();
       const timing = {
-        duration: theater ? (open ? PAPER_MOTION.open : PAPER_MOTION.fold) : open ? 620 : 460,
+        duration: theater ? (open ? PAPER_MOTION.open : PAPER_MOTION.fold) : open ? 260 : 220,
         easing: "cubic-bezier(.2,.75,.25,1)",
         fill: "both",
       } as const;

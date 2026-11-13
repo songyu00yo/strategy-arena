@@ -87,6 +87,7 @@ function ExampleGallery() {
             <Link
               key={example.slug}
               href={`/examples/${example.slug}`}
+              transitionTypes={["paper-forward"]}
               className="recorded-example-card"
               aria-label={`回看${example.direction}需求梳理示例：${example.title}`}
             >

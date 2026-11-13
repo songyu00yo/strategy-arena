@@ -14,7 +14,7 @@
 }
 .console-shell .c-deck-card {
   transition-property: transform, opacity, translate, background-color, box-shadow;
-  transition-duration: 620ms, 500ms, var(--deck-gap-ms, 500ms), 150ms, 150ms;
+  transition-duration: 360ms, 240ms, var(--deck-gap-ms, 240ms), 140ms, 140ms;
 }
 .console-shell .c-deck-card.past-gap {
   translate: 34px 0;

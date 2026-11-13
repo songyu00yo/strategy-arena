@@ -9,6 +9,7 @@ import type {
   IntakeHistoryItem,
   RecoveryCodeResult,
 } from "@/lib/identity-contracts";
+import type { OverlayMotionHandle } from "./overlay-motion";
 import { Modal } from "./modal";
 import { bootstrapIdentity } from "./identity-bootstrap";
 import "./identity-history.css";
@@ -83,6 +84,7 @@ export function IdentityHistory({
   const epoch = useRef(0);
   const identityTag = useRef<string | null>(null);
   const changeChannel = useRef<BroadcastChannel | null>(null);
+  const motion = useRef<OverlayMotionHandle>(null);
   const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
   const codeId = useId();
   const hasHistory = arenas.items.length > 0 || intakes.items.length > 0;
@@ -309,10 +311,13 @@ export function IdentityHistory({
     setError("");
     try {
       await (kind === "arena" ? onOpenArena(id) : onOpenIntake(id));
-      setOpen(false);
-      setRecoveryCode("");
-      setEnteredCode("");
-      setCodePending(false);
+      const finish = () => {
+        setOpen(false);
+        setRecoveryCode("");
+        setEnteredCode("");
+        setCodePending(false);
+      };
+      if (!motion.current?.close(finish)) finish();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "打开未完成，请重试。");
     } finally {
@@ -338,6 +343,7 @@ export function IdentityHistory({
       {open && (
         <Modal
           title="我的历史与恢复码"
+          motionRef={motion}
           trigger={trigger}
           onClose={() => {
             setOpen(false);

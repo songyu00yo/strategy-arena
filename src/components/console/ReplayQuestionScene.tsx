@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { MousePointer2 } from "lucide-react";
 import type { IntakeAnswer, IntakeQuestion, RecordedAnswer } from "@/lib/intake-contracts";
 import type { ReplayAction } from "@/lib/replay-contracts";
+import { moveScroll } from "../motion-scroll";
 import { QuestionInput } from "../question-input";
 import { createMotionScope, motionPaused, subscribeMotionPause } from "./motion-runtime";
 import { PAPER_MOTION } from "./paper-stage";
@@ -908,8 +909,11 @@ export function ReplayQuestionScene({
     const top = (viewport?.offsetTop ?? 0) + 12;
     const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight) - 12;
     if (page.y - scrollY < top || page.y - scrollY + element.offsetHeight > bottom) {
-      window.scrollTo({ left: scrollX, top: Math.max(0, page.y - top), behavior: "instant" });
-      refresh.current();
+      return moveScroll(
+        window,
+        { left: scrollX, top: Math.max(0, page.y - top) },
+        { duration: 240, onFinish: () => refresh.current() },
+      );
     }
   }, [action.id, action.kind, playing, seeking, speed]);
 

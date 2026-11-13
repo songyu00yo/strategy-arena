@@ -331,7 +331,7 @@ export function RecordedChallenge({
                   close();
                   onAdjustConditions();
                 };
-                if (!motion.current?.close(handoff)) handoff();
+                if (!motion.current?.replace(handoff)) handoff();
               }}
             >
               调整条件

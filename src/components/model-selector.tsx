@@ -15,6 +15,7 @@ import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
 import { DisclosureMotion } from "./disclosure-motion";
 import { reducedMotion } from "./console/effects";
+import { moveScroll } from "./motion-scroll";
 import styles from "./model-selector.module.css";
 
 /** Keep keyboard navigation inside the floating menu's own scroll container. */
@@ -25,9 +26,9 @@ function revealOption(host: HTMLElement, option: HTMLElement) {
     top += node.offsetTop;
     node = node.offsetParent as HTMLElement | null;
   }
-  if (top < host.scrollTop + 8) host.scrollTop = Math.max(0, top - 8);
+  if (top < host.scrollTop + 8) moveScroll(host, { top: Math.max(0, top - 8) }, { duration: 180 });
   else if (top + option.offsetHeight > host.scrollTop + host.clientHeight - 8)
-    host.scrollTop = top + option.offsetHeight - host.clientHeight + 8;
+    moveScroll(host, { top: top + option.offsetHeight - host.clientHeight + 8 }, { duration: 180 });
 }
 
 export function ModelSelector({
@@ -154,7 +155,7 @@ export function ModelSelector({
               { transform: rest, opacity: 0 },
             ],
         {
-          duration: open ? 480 : 220,
+          duration: open ? 260 : 180,
           easing: open ? "cubic-bezier(.16,1,.3,1)" : "cubic-bezier(.4,0,1,1)",
           fill: "both",
         },
@@ -181,7 +182,12 @@ export function ModelSelector({
     const content = reason.current;
     if (!expanded || !showReason || !followReason.current || !host || !content) return;
     const reveal = () => {
-      if (followReason.current) host.scrollTop = Math.max(0, host.scrollHeight - host.clientHeight);
+      if (followReason.current)
+        moveScroll(
+          host,
+          { top: Math.max(0, host.scrollHeight - host.clientHeight) },
+          { duration: 180 },
+        );
     };
     const observer = new ResizeObserver(reveal);
     observer.observe(content);

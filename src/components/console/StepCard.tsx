@@ -7,6 +7,8 @@ import { type ArenaVersion, type Attack } from "@/lib/contracts";
 import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
 import { readMotionOrigin } from "../motion-origin";
+import { handoffOverlay, deferOverlayHandoffCleanup } from "../overlay-handoff";
+import { corners, project, inverse, multiply, cssMatrix, type Quad } from "../overlay-geometry";
 import "./step-card-motion.css";
 import {
   beatName,
@@ -19,102 +21,20 @@ import {
 import { replayActionLines, stepContext, type StepContext } from "@/lib/step-context";
 import { projectReplay } from "@/lib/replay";
 
-type Point = { x: number; y: number };
-type Quad = [Point, Point, Point, Point];
-type Matrix = [number, number, number, number, number, number, number, number, number];
 type Flight = { parts: Animation[]; path: (t: number) => Quad; at: number; ms: number };
-const DRAW_MS = 620;
-const LAND_MS = 460;
+const DRAW_MS = 360;
+const LAND_MS = 240;
 const HANDOFF = 0.7;
 const SAMPLES = 40;
 
-/** Read the projected border corners, including every ancestor's perspective. */
-function corners(el: HTMLElement): Quad {
-  const points = [
-    [0, 0],
-    [el.offsetWidth, 0],
-    [el.offsetWidth, el.offsetHeight],
-    [0, el.offsetHeight],
-  ].map(([x, y]) => {
-    const marker = document.createElement("i");
-    marker.style.cssText = `position:absolute;left:${x - el.clientLeft}px;top:${y - el.clientTop}px;width:0;height:0;margin:0;padding:0;border:0;pointer-events:none;visibility:hidden`;
-    marker.setAttribute("aria-hidden", "true");
-    el.append(marker);
-    return marker;
-  });
-  const quad = points.map((marker) => {
-    const box = marker.getBoundingClientRect();
-    return { x: box.left, y: box.top };
-  }) as Quad;
-  points.forEach((marker) => marker.remove());
-  return quad;
+function progress(t: number) {
+  const value = Math.max(0, Math.min(1, t));
+  return value ** 3 * (value * (value * 6 - 15) + 10);
 }
 
-/** A planar homography maps the whole card, not an estimated tilted bounding box. */
-function project(width: number, height: number, q: Quad): Matrix {
-  const [a, b, c, d] = q;
-  const dx1 = b.x - c.x;
-  const dx2 = d.x - c.x;
-  const dx3 = a.x - b.x + c.x - d.x;
-  const dy1 = b.y - c.y;
-  const dy2 = d.y - c.y;
-  const dy3 = a.y - b.y + c.y - d.y;
-  const det = dx1 * dy2 - dx2 * dy1;
-  const g = Math.abs(det) > 0.0001 ? (dx3 * dy2 - dx2 * dy3) / det : 0;
-  const h = Math.abs(det) > 0.0001 ? (dx1 * dy3 - dx3 * dy1) / det : 0;
-  return [
-    (b.x - a.x + g * b.x) / width,
-    (d.x - a.x + h * d.x) / height,
-    a.x,
-    (b.y - a.y + g * b.y) / width,
-    (d.y - a.y + h * d.y) / height,
-    a.y,
-    g / width,
-    h / height,
-    1,
-  ];
-}
-function inverse(m: Matrix): Matrix {
-  const [a, b, c, d, e, f, g, h, i] = m;
-  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-  return [
-    e * i - f * h,
-    c * h - b * i,
-    b * f - c * e,
-    f * g - d * i,
-    a * i - c * g,
-    c * d - a * f,
-    d * h - e * g,
-    b * g - a * h,
-    a * e - b * d,
-  ].map((n) => n / det) as Matrix;
-}
-function multiply(a: Matrix, b: Matrix): Matrix {
-  return Array.from({ length: 9 }, (_, i) => {
-    const row = Math.floor(i / 3) * 3;
-    const col = i % 3;
-    return a[row] * b[col] + a[row + 1] * b[col + 3] + a[row + 2] * b[col + 6];
-  }) as Matrix;
-}
-function cssMatrix(m: Matrix) {
-  return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
-}
-function progress(t: number, opening = false) {
-  if (t >= 1) return 1;
-  const ms = opening ? DRAW_MS : LAND_MS;
-  const w = opening ? 14.1 : 19.6;
-  const z = opening ? 0.8 : 1;
-  const seconds = (t * ms) / 1000;
-  if (z >= 1) return 1 - (1 + w * seconds) * Math.exp(-w * seconds);
-  const wd = w * Math.sqrt(1 - z * z);
-  return (
-    1 -
-    Math.exp(-z * w * seconds) * (Math.cos(wd * seconds) + ((z * w) / wd) * Math.sin(wd * seconds))
-  );
-}
-function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad, opening = false) {
+function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad) {
   return (t: number): Quad => {
-    const settled = progress(t, opening);
+    const settled = progress(t);
     const momentum = t * (1 - t) ** 3 * ms;
     const lift = -70 * Math.sin(Math.PI * Math.min(1, settled)) ** 2;
     return from.map((point, i) => ({
@@ -415,7 +335,7 @@ export function StepCard({
     window.style.height = `${height}px`;
     if (!animate || reducedMotion() || Math.abs(from - height) < 0.5) return;
     const animation = window.animate([{ height: `${from}px` }, { height: `${height}px` }], {
-      duration: 480,
+      duration: 240,
       easing: "cubic-bezier(.22,1,.3,1)",
       fill: "both",
     });
@@ -487,7 +407,7 @@ export function StepCard({
     const slot = source ? corners(source) : open;
     const from = opening && !continuing ? slot : current;
     const to = opening ? open : slot;
-    const path = pathBetween(from, to, ms, opening && !continuing ? undefined : velocity, opening);
+    const path = pathBetween(from, to, ms, opening && !continuing ? undefined : velocity);
     const timing = { duration: ms, easing: "linear", fill: "both" } as const;
     const parts: Animation[] = [];
     const add = (node: Element, frames: Keyframe[], options: KeyframeAnimationOptions = {}) => {
@@ -701,15 +621,22 @@ export function StepCard({
       stopPaging(false);
       pendingHeight.current = null;
       clearFlight();
-      markDeck(null, false, 0);
-      document
-        .querySelectorAll<HTMLElement>("[data-step-source]")
-        .forEach((card) => card.style.removeProperty("--deck-gap-ms"));
+      const stage = el.closest(".c-root");
+      const settleDeck = () => {
+        if (stage?.isConnected) {
+          markDeck(null, false, 140);
+          stage
+            .querySelectorAll<HTMLElement>("[data-step-source]")
+            .forEach((card) => card.style.removeProperty("--deck-gap-ms"));
+        }
+        deckTransitions.forEach((animation) => {
+          if (!stage?.isConnected) animation.cancel();
+          else if (animation.playState === "paused") animation.play();
+        });
+      };
+      if (!deferOverlayHandoffCleanup(el, settleDeck)) settleDeck();
       el.close();
       release();
-      deckTransitions.forEach((animation) => {
-        if (animation.playState === "paused") animation.play();
-      });
       queueMicrotask(() => {
         // Evidence may take over in the same commit. Its focus must win that handoff.
         if (previous?.isConnected && !document.querySelector("dialog[open], .evidence-drawer")) {
@@ -725,6 +652,14 @@ export function StepCard({
     showing.current = index;
     if (!leaving.current) markDeck(index);
   });
+
+  const replace = (then: () => void) => {
+    if (leaving.current) return;
+    leaving.current = true;
+    pendingHeight.current = null;
+    stopPaging(true);
+    handoffOverlay(ref.current, then);
+  };
 
   const leave = (then: () => void) => {
     if (leaving.current) return;
@@ -817,7 +752,7 @@ export function StepCard({
             opacity: 0,
           },
         ],
-        { duration: 300, easing: "cubic-bezier(.4,0,.2,1)" },
+        { duration: 180, easing: "cubic-bezier(.4,0,.2,1)" },
       );
       exit.onfinish = () => {
         layer.remove();
@@ -843,7 +778,7 @@ export function StepCard({
         },
         { transform: "none", opacity: 1 },
       ],
-      { duration: 560, easing: "cubic-bezier(.16,1,.3,1)" },
+      { duration: 260, easing: "cubic-bezier(.16,1,.3,1)" },
     );
     page.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node, row) => {
       const reveal = add(
@@ -852,7 +787,7 @@ export function StepCard({
           { transform: `translate(${direction * 10}px,8px)`, opacity: 0 },
           { transform: "none", opacity: 1 },
         ],
-        { duration: 390, delay: 65 + Math.min(row, 6) * 26, easing: "cubic-bezier(.16,1,.3,1)" },
+        { duration: 180, delay: 20 + Math.min(row, 4) * 15, easing: "cubic-bezier(.16,1,.3,1)" },
       );
       reveal.onfinish = () => reveal.cancel();
     });
@@ -944,7 +879,7 @@ export function StepCard({
           <button
             type="button"
             className="secondary-button"
-            onClick={() => leave(() => onFollowUp(context, sourceOf(index)))}
+            onClick={() => replace(() => onFollowUp(context, sourceOf(index)))}
           >
             补充或质疑
           </button>
@@ -953,7 +888,7 @@ export function StepCard({
           <button
             type="button"
             className="text-button"
-            onClick={() => leave(() => onAdjustConditions(sourceOf(index)))}
+            onClick={() => replace(() => onAdjustConditions(sourceOf(index)))}
           >
             调整条件
           </button>
@@ -965,7 +900,7 @@ export function StepCard({
           <button
             type="button"
             className="primary-button"
-            onClick={() => leave(() => onEvidence(beat.attack!))}
+            onClick={() => replace(() => onEvidence(beat.attack!))}
           >
             看证据
           </button>

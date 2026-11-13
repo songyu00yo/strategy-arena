@@ -9,6 +9,7 @@ import type { RecordedExamplePayload } from "@/lib/recorded-examples";
 import { MODEL_CATALOG } from "@/lib/model-catalog";
 import { ArenaConsole } from "./console/ArenaConsole";
 import { EvidenceDrawer } from "./evidence-drawer";
+import { revealInWindow } from "./motion-scroll";
 import { Modal } from "./modal";
 import { ClickFx, reducedMotion } from "./console/effects";
 import { readMotionOrigin } from "./motion-origin";
@@ -173,7 +174,7 @@ function RecordedExampleEntry({
     <div className="console-shell home recorded-entry-shell">
       <ClickFx />
       <header className="site-header">
-        <Link href="/?examples=open" className="text-button">
+        <Link transitionTypes={["paper-back"]} href="/?examples=open" className="text-button">
           <ArrowLeft size={16} /> 返回案例
         </Link>
         <span>
@@ -302,7 +303,9 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
     return (
       <main className="recorded-missing">
         <h1>这份示例没有可回看的版本</h1>
-        <Link href="/">返回首页</Link>
+        <Link transitionTypes={["paper-back"]} href="/">
+          返回首页
+        </Link>
       </main>
     );
   if (!started)
@@ -375,11 +378,7 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
     const claim = document.querySelector<HTMLElement>(
       `[data-claim="${CSS.escape(`${attack.targetStrategyId}:${attack.targetClaimId}`)}"]`,
     );
-    claim?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-      behavior: reducedMotion() ? "auto" : "smooth",
-    });
+    if (claim) revealInWindow(claim, { block: "nearest" });
   };
   return (
     <div className="console-shell recorded-replay-shell">
@@ -423,7 +422,12 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           }
           slate={
             <>
-              <Link className="recorded-back" href="/?examples=open" aria-label="返回示例">
+              <Link
+                transitionTypes={["paper-back"]}
+                className="recorded-back"
+                href="/?examples=open"
+                aria-label="返回示例"
+              >
                 <ArrowLeft size={17} />
               </Link>
               <h1>{metadata.title}</h1>

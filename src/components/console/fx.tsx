@@ -37,6 +37,7 @@ import {
   PAPER_MOTION,
 } from "./paper-stage";
 import "./paper-stage.css";
+import { moveScroll, revealInWindow } from "../motion-scroll";
 
 const reduced = reducedMotion;
 
@@ -66,53 +67,71 @@ export function VerdictFilm({
     const target = document.querySelector<HTMLElement>(
       clarification ? ".c-result .tag" : `[data-board="${verdict?.preferred ?? "B"}"]`,
     );
-    if (clarification && target) {
-      const rect = target.getBoundingClientRect();
-      if (rect.top < 12 || rect.bottom > innerHeight - 12)
-        target
-          .closest<HTMLElement>(".c-result")
-          ?.scrollIntoView({ block: "start", behavior: "instant" });
-    }
-    const board = target?.getBoundingClientRect();
-    if (!el || !board || reducedMotion()) return onDone();
-    const anchor = {
-      x: board.left + board.width * 0.62,
-      y: board.top + Math.min(board.height * 0.42, 150),
-    };
-    const position = clarification
-      ? paperSealPosition(
-          anchor,
-          { width: el.offsetWidth, height: el.offsetHeight },
-          { width: innerWidth, height: innerHeight },
-        )
-      : anchor;
-    el.style.left = `${position.x}px`;
-    el.style.top = `${position.y}px`;
+    if (!el || !target) return onDone();
     const scope = createMotionScope();
-    const press = scope.animate(
-      el,
-      clarification
-        ? CLARIFICATION_SEAL_FRAMES
-        : [
-            { transform: "translate(-50%,-50%) rotate(-14deg) scale(2.2)", opacity: 0 },
-            { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.55 },
-            { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.85 },
-            { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 0 },
-          ],
-      {
-        duration: clarification ? PAPER_MOTION.seal : 2600,
-        delay: clarification ? 0 : 200,
-        easing: clarification ? "linear" : "cubic-bezier(.19,1,.22,1)",
-        fill: "both",
-      },
-    );
-    press.playbackRate = playbackRate.current;
-    sealAnimation.current = press;
-    press.onfinish = onDone;
-    const skip = () => press.finish();
+    let disposed = false;
+    let press: Animation | null = null;
+    let cancelScroll = () => {};
+    el.style.opacity = "0";
+    const land = () => {
+      if (disposed) return;
+      if (reducedMotion()) return onDone();
+      const board = target.getBoundingClientRect();
+      const anchor = {
+        x: board.left + board.width * 0.62,
+        y: board.top + Math.min(board.height * 0.42, 150),
+      };
+      const position = clarification
+        ? paperSealPosition(
+            anchor,
+            { width: el.offsetWidth, height: el.offsetHeight },
+            { width: innerWidth, height: innerHeight },
+          )
+        : anchor;
+      el.style.left = `${position.x}px`;
+      el.style.top = `${position.y}px`;
+      el.style.opacity = "1";
+      press = scope.animate(
+        el,
+        clarification
+          ? CLARIFICATION_SEAL_FRAMES
+          : [
+              { transform: "translate(-50%,-50%) rotate(-14deg) scale(1.5)", opacity: 0 },
+              { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 1, offset: 0.6 },
+              { transform: "translate(-50%,-50%) rotate(-7deg) scale(1)", opacity: 0 },
+            ],
+        {
+          duration: clarification ? PAPER_MOTION.seal : 420,
+          easing: "cubic-bezier(.22,1,.3,1)",
+          fill: "both",
+        },
+      );
+      press.playbackRate = playbackRate.current;
+      sealAnimation.current = press;
+      press.onfinish = onDone;
+    };
+    const result = clarification ? target.closest<HTMLElement>(".c-result") : null;
+    if (result)
+      cancelScroll = revealInWindow(result, {
+        block: "nearest",
+        duration: 280,
+        origin: "story",
+        onFinish: land,
+        onInterrupt: onDone,
+      });
+    else land();
+    const skip = () => {
+      if (press) press.finish();
+      else {
+        cancelScroll();
+        land();
+      }
+    };
     addEventListener("keydown", skip);
     return () => {
+      disposed = true;
       removeEventListener("keydown", skip);
+      cancelScroll();
       scope.dispose();
       if (sealAnimation.current === press) sealAnimation.current = null;
     };
@@ -567,7 +586,8 @@ function ChainDeckView({
   useEffect(() => {
     const body = front.current?.querySelector<HTMLElement>(".body");
     const row = body?.querySelector<HTMLElement>(".ln.run");
-    if (body && row) body.scrollTop = Math.max(0, row.offsetTop - 2);
+    if (body && row)
+      return moveScroll(body, { top: Math.max(0, row.offsetTop - 2) }, { duration: 220 });
   }, [current?.id]);
   if (!shown.length) return null; // Looking back, a step shows how it turned out, so the reasons can be weighed in one place.
   const known = reviewing ? beats : shown;
@@ -791,7 +811,7 @@ function LiveRecordView({
 }) {
   const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (content.current) content.current.scrollTop = 0;
+    if (content.current) return moveScroll(content.current, { top: 0 }, { duration: 180 });
   }, [beat?.id]);
   if (!beat) return null;
   const lines = linesOf(version, beat, replayProgress, replayAnswersVisible);

@@ -1,4 +1,5 @@
 "use client";
+import { moveScroll, revealInWindow } from "@/components/motion-scroll";
 import { readableClaimText } from "@/components/claim-label";
 import {
   useCallback,
@@ -383,7 +384,7 @@ export function ArenaConsole({
       if (!panel) return;
       const rect = panel.getBoundingClientRect();
       if (rect.top < 16 || rect.top + Math.min(rect.height, 120) > innerHeight - 16)
-        panel.scrollIntoView({ block: "start", behavior: "instant" });
+        revealInWindow(panel, { block: "start", duration: 300 });
     });
     return () => cancelAnimationFrame(frame);
   }, [clarification, atResult, playing]);
@@ -483,7 +484,11 @@ export function ArenaConsole({
     const target = selected.getBoundingClientRect();
     const box = track.getBoundingClientRect();
     if (target.left < box.left || target.right > box.right)
-      track.scrollLeft += target.left - box.left - box.width / 2;
+      moveScroll(
+        track,
+        { left: track.scrollLeft + target.left - box.left - box.width / 2 },
+        { duration: 220 },
+      );
   }, [clarification, index]);
 
   // Keep controls mounted. Interruptions start from the displayed pose, not the start keyframe.

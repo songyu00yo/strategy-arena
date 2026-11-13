@@ -83,3 +83,23 @@
     bottom: -14px;
   }
 }
+
+/* Retired content keeps its own line breaks while the receiving paper changes shape. */
+.overlay-handoff-snapshot,
+.overlay-handoff-snapshot * {
+  animation: none !important;
+  transition: none !important;
+  pointer-events: none !important;
+}
+.overlay-handoff-snapshot {
+  contain: layout paint style;
+}
+.console-shell .overlay-motion[data-overlay-motion-active="true"] {
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-shell .overlay-motion[data-overlay-motion-active="true"] {
+    will-change: auto;
+  }
+}

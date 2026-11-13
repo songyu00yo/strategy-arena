@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../components/navigation-motion.css";
 
 .intake-context-body {
   padding: 14px 0;

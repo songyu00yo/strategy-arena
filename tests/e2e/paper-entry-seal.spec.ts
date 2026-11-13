@@ -81,13 +81,19 @@ for (const width of [1440, 390]) {
             ready: visible && active === "第 1 步",
           });
         }
-        if (performance.now() - began < 3000) requestAnimationFrame(tick);
+        if ((paper || !state.frames.length) && performance.now() - began < 5000)
+          requestAnimationFrame(tick);
         else state.done = true;
       };
       requestAnimationFrame(tick);
     });
     await page.getByRole("button", { name: "开始回看", exact: true }).click();
-    await page.waitForTimeout(300);
+    await page.waitForFunction(() => {
+      const probe = (
+        window as unknown as { __entryProbe: { frames: { ready: boolean; animation: boolean }[] } }
+      ).__entryProbe;
+      return probe.frames.filter((frame) => !frame.ready && !frame.animation).length >= 3;
+    });
     await visibilityDelay.evaluate((node) => node.parentNode?.removeChild(node));
     await page.waitForFunction(
       () => (window as unknown as { __entryProbe: { done: boolean } }).__entryProbe.done,
@@ -126,7 +132,7 @@ for (const width of [1440, 390]) {
       ),
     ).toBe(true);
     expect(firstFlight?.ready).toBe(true);
-    expect(firstFlight?.duration).toBe(600);
+    expect(firstFlight?.duration).toBe(420);
     await expect(page.locator(".initial-paper-transfer")).toHaveCount(0);
 
     await page.getByRole("button", { name: `第 ${steps.length - 1} 步`, exact: true }).click();
@@ -187,12 +193,19 @@ for (const width of [1440, 390]) {
     expect(seal.length).toBeGreaterThanOrEqual(8);
     expect(seal.filter((frame) => frame.opacity >= 0.98).length).toBeGreaterThanOrEqual(5);
     expect(seal.slice(-3).every((frame) => frame.opacity >= 0.98)).toBe(true);
-    expect(seal.some((frame) => frame.duration === 280)).toBe(true);
+    expect(seal.some((frame) => frame.duration === 220)).toBe(true);
     const tag = page.locator('.c-result[data-confirmation="confirmed"] .tag b');
     await expect(tag).toHaveText("已确认");
     await expect(tag).toHaveCSS("border-top-style", "double");
     await expect(tag).toHaveCSS("color", "rgb(200, 51, 31)");
-    await page.waitForTimeout(350);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          let frames = 0;
+          const tick = () => (++frames >= 12 ? resolve() : requestAnimationFrame(tick));
+          requestAnimationFrame(tick);
+        }),
+    );
     await expect(tag).toHaveCSS("opacity", "1");
 
     expect(forbidden).toEqual([]);

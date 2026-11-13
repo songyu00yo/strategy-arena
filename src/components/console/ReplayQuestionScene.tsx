@@ -33,13 +33,23 @@ const EMPTY_CHOICES: string[] = [];
 const bounded = (progress: number) =>
   Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 1;
 const easeOut = (amount: number) => 1 - (1 - bounded(amount)) ** 3;
+const smooth = (amount: number) => {
+  const value = bounded(amount);
+  return value * value * (3 - 2 * value);
+};
 type Point = { x: number; y: number };
 
 /** These durations use the shared clock's active elapsed time, including playback speed. */
-export function replayPaperTiming(frame: PlaybackFrame, opening: boolean, closing: boolean) {
-  const foldStart = Math.max(frame.duration - PAPER_MOTION.fold, frame.duration * 0.8);
+export function replayPaperTiming(
+  frame: PlaybackFrame,
+  opening: boolean,
+  closing: boolean,
+  speed = 1,
+) {
+  const rate = Math.max(1, speed);
+  const foldStart = Math.max(frame.duration - PAPER_MOTION.fold * rate, frame.duration * 0.4);
   return {
-    open: frame.settled || !opening ? 1 : easeOut(frame.elapsed / PAPER_MOTION.open),
+    open: frame.settled || !opening ? 1 : easeOut(frame.elapsed / (PAPER_MOTION.open * rate)),
     fold:
       frame.settled || !closing
         ? 0
@@ -47,9 +57,25 @@ export function replayPaperTiming(frame: PlaybackFrame, opening: boolean, closin
   };
 }
 
-/** A curved approach decelerates at the actual control rather than overshooting it. */
+/** One continuous transform carries the whole paper to the measured receiving card. */
+export function replayReturnPose(
+  progress: number,
+  destination: NonNullable<ReturnType<typeof replayFlipGeometry>>,
+) {
+  const amount = smooth(progress);
+  const scale = Math.min(0.38, Math.max(0.12, destination.scaleX * 0.72));
+  return {
+    x: destination.x * amount,
+    y: destination.y * amount,
+    scale: 1 + (scale - 1) * amount,
+    opacity: 1 - smooth((progress - 0.62) / 0.38),
+    contentOpacity: 1 - smooth((progress - 0.15) / 0.55),
+  };
+}
+
+/** A curved approach starts and finishes at rest on the actual control. */
 export function replayPointerAt(origin: Point, target: Point, progress: number): Point {
-  const amount = easeOut(progress);
+  const amount = smooth(progress);
   const dx = target.x - origin.x;
   const dy = target.y - origin.y;
   const bend = {
@@ -60,6 +86,12 @@ export function replayPointerAt(origin: Point, target: Point, progress: number):
     x: (1 - amount) ** 2 * origin.x + 2 * (1 - amount) * amount * bend.x + amount ** 2 * target.x,
     y: (1 - amount) ** 2 * origin.y + 2 * (1 - amount) * amount * bend.y + amount ** 2 * target.y,
   };
+}
+
+/** Spread clicks through the visible action so the cursor can travel between controls. */
+export function replayChoiceTimes(count: number) {
+  if (count <= 1) return [0.45];
+  return Array.from({ length: count }, (_, index) => 0.22 + (index * 0.52) / (count - 1));
 }
 
 export function replayPressAt(elapsed: number, duration: number, clickTimes: number[]) {
@@ -90,7 +122,7 @@ export function replayHandoffOutside(
 
 /** A paused frame owns the same ornament until seeking or completion replaces it. */
 export function replayHandoffActive(frame: PlaybackFrame, fold: number, crossesClip: boolean) {
-  return crossesClip && fold >= 0.42 && fold < 1 && frame.progress >= 0.8 && !frame.settled;
+  return crossesClip && fold > 0 && fold < 1 && frame.progress >= 0.8 && !frame.settled;
 }
 
 type ReplayScrollPhase = "reading" | "accelerating" | "travel" | "settling" | "paused";
@@ -162,20 +194,19 @@ export function replayAnswerAt(
     state: "answered",
     value: question.type === "multiple" ? [] : "",
   };
-  if (!saved || progress < 0.32) return empty;
+  if (!saved) return empty;
   if (saved.state !== "answered")
     return progress >= 0.45 ? { ...empty, state: saved.state } : empty;
+  if (Array.isArray(saved.value)) {
+    const clicks = replayChoiceTimes(saved.value.length);
+    return { ...empty, value: saved.value.filter((_, index) => progress >= clicks[index]) };
+  }
+  if (progress < 0.32) return empty;
   const entered = bounded((progress - 0.45) / 0.3);
-  if (Array.isArray(saved.value))
-    return {
-      ...empty,
-      value: saved.value.filter(
-        (_, index) => progress >= 0.45 + index * (0.3 / Math.max(saved.value.length, 1)),
-      ),
-    };
   if (question.type === "single") return { ...empty, value: progress >= 0.45 ? saved.value : "" };
   const glyphs = Array.from(saved.value);
-  return { ...empty, value: glyphs.slice(0, Math.ceil(entered * glyphs.length)).join("") };
+  const typed = Math.min(1, Math.ceil(entered * 6) / 6);
+  return { ...empty, value: glyphs.slice(0, Math.ceil(typed * glyphs.length)).join("") };
 }
 
 function previousAnswer(question: IntakeQuestion, answers: RecordedAnswer[]) {
@@ -209,6 +240,7 @@ export function ReplayQuestionScene({
   stepId,
   duration = 2500,
   nextRole,
+  returnsToStage,
 }: {
   action: ReplayAction;
   previousAnswers?: RecordedAnswer[];
@@ -220,6 +252,7 @@ export function ReplayQuestionScene({
   stepId?: string;
   duration?: number;
   nextRole?: "A" | "B" | "C";
+  returnsToStage?: boolean;
 }) {
   const root = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -252,6 +285,10 @@ export function ReplayQuestionScene({
   const refresh = useRef<() => void>(() => {});
   const pointerPosition = useRef<Point | null>(null);
   const followed = useRef({ id: "", playing: false, seeking: false, speed });
+  const playbackRate = useRef(speed);
+  useLayoutEffect(() => {
+    playbackRate.current = speed;
+  }, [speed]);
 
   useLayoutEffect(() => {
     const element = root.current;
@@ -260,8 +297,10 @@ export function ReplayQuestionScene({
     const stage = element?.closest<HTMLElement>(".c-stage3");
     if (!element || !viewport || !cursor || !stage) return;
     const opening = action.kind === "questions" || action.kind === "summary_submit";
-    const closing = ["round_confirm", "summary_submit", "handoff"].includes(action.kind);
+    const closing = returnsToStage ?? ["round_confirm", "handoff"].includes(action.kind);
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // Latch the selected rate per action, preserving the return pose if speed changes mid-flight.
+    const returnRate = playbackRate.current;
     const board = stage.querySelector<HTMLElement>('[data-board="B"]');
     const receiver = nextRole
       ? stage.querySelector<HTMLElement>('[data-board="' + nextRole + '"]')
@@ -281,9 +320,10 @@ export function ReplayQuestionScene({
       heading: Point;
       startScroll: number;
       sheet: { left: number; top: number; width: number; height: number };
-      clip: { left: number; top: number; right: number; bottom: number };
       transferOutside: boolean;
       sheetStyles: Array<[string, string]>;
+      content: HTMLElement[];
+      shadow: HTMLElement | null;
     } | null = null;
     let scheduled = 0;
     let disposed = false;
@@ -297,19 +337,16 @@ export function ReplayQuestionScene({
     };
     let transfer: {
       scope: ReturnType<typeof createMotionScope>;
-      node: HTMLDivElement;
+      node: HTMLElement;
+      content: HTMLElement[];
     } | null = null;
     const clearTransfer = () => {
       transfer?.scope.dispose();
       transfer = null;
-      element.style.setProperty("--replay-paper-opacity", "1");
+      element.style.opacity = "1";
       element.dataset.stripOwner = "local";
     };
-    const clickTimes = userConfirmation
-      ? [0.8]
-      : choices.length
-        ? choices.map((_, index) => 0.45 + index * (0.3 / choices.length))
-        : [0.45];
+    const clickTimes = userConfirmation ? [0.4] : replayChoiceTimes(choices.length);
 
     const localSignature = (frame: PlaybackFrame) => {
       const shown = targetQuestion
@@ -328,20 +365,19 @@ export function ReplayQuestionScene({
 
     const paint = (frame: PlaybackFrame) => {
       if (!cache || frame.stepId !== activeStepId) return;
-      const paper = replayPaperTiming(frame, opening, closing);
+      const paper = replayPaperTiming(frame, opening, closing, returnRate);
       const open = reducedMotion ? 1 : paper.open;
       const fold = reducedMotion || !cache.destination ? 0 : paper.fold;
-      const unfolded = easeOut(fold);
-      const flight = easeOut(bounded((fold - 0.42) / 0.58));
       const destination = cache.destination;
       const source = cache.source;
-      const x = (source?.x ?? 0) * (1 - open) + (destination?.x ?? 0) * flight;
-      const y = (source?.y ?? 0) * (1 - open) + (destination?.y ?? 0) * flight;
-      const scaleX = (1 + ((source?.scaleX ?? 1) - 1) * (1 - open)) * (1 - unfolded * 0.16);
-      const scaleY = (1 + ((source?.scaleY ?? 1) - 1) * (1 - open)) * (1 - unfolded * 0.86);
+      const returning = destination ? replayReturnPose(fold, destination) : null;
+      const x = (source?.x ?? 0) * (1 - open) + (returning?.x ?? 0);
+      const y = (source?.y ?? 0) * (1 - open) + (returning?.y ?? 0);
+      const scaleX = (1 + ((source?.scaleX ?? 1) - 1) * (1 - open)) * (returning?.scale ?? 1);
+      const scaleY = (1 + ((source?.scaleY ?? 1) - 1) * (1 - open)) * (returning?.scale ?? 1);
       let scroll = cache.scroll;
       let scrollPhase: ReplayScrollPhase = frame.running ? "reading" : "paused";
-      if (frame.running && action.kind === "questions") {
+      if (frame.running && action.kind === "questions" && returnRate < 1) {
         const reading = replayReadingState(frame.progress, cache.stops, cache.range);
         scroll = reading.top;
         scrollPhase = reading.phase;
@@ -349,20 +385,22 @@ export function ReplayQuestionScene({
       const clickIndex = choices.length
         ? Math.min(
             choices.length - 1,
-            clickTimes.filter((at) => frame.elapsed >= at * frame.duration + PAPER_MOTION.feedback)
-              .length,
+            clickTimes.filter(
+              (at) =>
+                frame.elapsed >= at * frame.duration + Math.min(30, PAPER_MOTION.feedback / 4),
+            ).length,
           )
         : 0;
       const target = cache.targets[clickIndex];
       const previousTarget = clickIndex > 0 ? cache.targets[clickIndex - 1] : null;
       const moveStart =
         userConfirmation || clickIndex === 0
-          ? 0.15 * frame.duration
+          ? (userConfirmation ? 0.08 : choices.length > 1 ? 0.03 : 0.15) * frame.duration
           : Math.min(
-              clickTimes[clickIndex - 1] * frame.duration + PAPER_MOTION.feedback,
+              clickTimes[clickIndex - 1] * frame.duration + Math.min(30, PAPER_MOTION.feedback / 4),
               clickTimes[clickIndex] * frame.duration,
             );
-      const moveEnd = (userConfirmation ? 0.75 : clickTimes[clickIndex]) * frame.duration;
+      const moveEnd = (userConfirmation ? 0.34 : clickTimes[clickIndex]) * frame.duration;
       const movement = bounded((frame.elapsed - moveStart) / Math.max(1, moveEnd - moveStart));
       if (target && frame.running && !userConfirmation && action.kind === "answer") {
         const desired = Math.max(
@@ -375,7 +413,7 @@ export function ReplayQuestionScene({
               Math.min(cache.range, previousTarget.y - cache.bodyTop - cache.bodyHeight * 0.35),
             )
           : cache.startScroll;
-        const eased = easeOut(movement);
+        const eased = smooth(movement);
         scroll = start + (desired - start) * eased;
         scrollPhase = desired === start ? "reading" : scrollMotionPhase(eased);
       }
@@ -393,24 +431,14 @@ export function ReplayQuestionScene({
       const press = replayPressAt(frame.elapsed, frame.duration, clickTimes);
       const pressed = !!(currentAnswer || userConfirmation) && press.index >= 0;
       const control = pressed ? (cache.controls[press.index] ?? null) : null;
-      const stripLeft = cache.sheet.left + x + (cache.sheet.width * (1 - scaleX)) / 2;
-      const stripTop = cache.sheet.top + y + (cache.sheet.height * (1 - scaleY)) / 2;
-      const crossesClip =
-        stripLeft < cache.clip.left ||
-        stripTop < cache.clip.top ||
-        stripLeft + cache.sheet.width * scaleX > cache.clip.right ||
-        stripTop + cache.sheet.height * scaleY > cache.clip.bottom;
-      const carry = cache.transferOutside && replayHandoffActive(frame, fold, crossesClip);
+      const carry = cache.transferOutside && replayHandoffActive(frame, fold, true);
 
       // Geometry was read during refresh. All frame writes follow the completed calculation.
       element.style.transform =
         "translate3d(" + x + "px," + y + "px,0) scale(" + scaleX + "," + scaleY + ")";
-      element.style.setProperty("--replay-shadow", String(1 - open + unfolded * 0.75));
-      element.style.setProperty("--replay-fold", String(unfolded));
-      element.style.setProperty("--replay-content-visibility", fold >= 0.42 ? "hidden" : "visible");
-      element.style.setProperty("--replay-strip-visibility", fold >= 0.42 ? "visible" : "hidden");
-      element.style.setProperty("--replay-strip-scale-x", String(1 / scaleX));
-      element.style.setProperty("--replay-strip-scale-y", String(1 / scaleY));
+      if (cache.shadow) cache.shadow.style.opacity = String(1 - open);
+      for (const content of cache.content)
+        content.style.opacity = String(returning?.contentOpacity ?? 1);
       element.dataset.replayOpened = String(open >= 1);
       element.dataset.replayFold = fold.toFixed(3);
       viewport.dataset.scrollPhase = scrollPhase;
@@ -424,37 +452,20 @@ export function ReplayQuestionScene({
         );
         control.dataset.replayPressed = "true";
       }
-      if (carry) {
-        if (!transfer) {
-          const scope = createMotionScope();
-          const node = scope.own(document.createElement("div"));
-          node.className = "replay-handoff-strip";
-          node.setAttribute("aria-hidden", "true");
-          node.inert = true;
-          node.dataset.replayHandoffFor = activeStepId;
-          const shadow = document.createElement("div");
-          shadow.className = "replay-paper-shadow";
-          const label = document.createElement("span");
-          label.textContent = "第 " + action.round + " 轮 · " + LABELS[action.kind];
-          node.append(shadow, label);
-          document.body.appendChild(node);
-          transfer = { scope, node };
-        }
+      if (transfer) {
         const node = transfer.node;
-        node.style.visibility = document.hidden ? "hidden" : "visible";
-        cache.sheetStyles.forEach(([property, value]) => node.style.setProperty(property, value));
-        node.style.left = cache.sheet.left - scrollX + "px";
-        node.style.top = cache.sheet.top - scrollY + "px";
-        node.style.width = cache.sheet.width + "px";
-        node.style.height = cache.sheet.height + "px";
+        node.style.opacity = document.hidden
+          ? "0"
+          : carry
+            ? String(returning?.opacity ?? 1)
+            : "0.001";
         node.style.transform =
           "translate3d(" + x + "px," + y + "px,0) scale(" + scaleX + "," + scaleY + ")";
-        node.style.setProperty("--replay-shadow", String(unfolded * 0.75));
-        node.style.setProperty("--replay-strip-scale-x", String(1 / scaleX));
-        node.style.setProperty("--replay-strip-scale-y", String(1 / scaleY));
-        element.style.setProperty("--replay-paper-opacity", "0");
-        element.dataset.stripOwner = "body";
-      } else clearTransfer();
+        for (const content of transfer.content)
+          content.style.opacity = String(returning?.contentOpacity ?? 1);
+      }
+      element.style.opacity = carry ? "0" : String(returning?.opacity ?? 1);
+      element.dataset.stripOwner = carry ? "body" : "local";
       if (frame.running && Math.abs(scroll - cache.scroll) > 0.1) {
         viewport.scrollTop = scroll;
         cache.scroll = scroll;
@@ -495,6 +506,7 @@ export function ReplayQuestionScene({
         "border",
         "border-radius",
         "box-shadow",
+        "padding",
       ].map((property): [string, string] => [property, sheetStyle.getPropertyValue(property)]);
       const visibleSource =
         !!sourceBox &&
@@ -560,16 +572,59 @@ export function ReplayQuestionScene({
         heading: headingPoint,
         startScroll: cache?.startScroll ?? viewport.scrollTop,
         sheet: { left: page.x, top: page.y, width, height },
-        clip: {
-          left: stageBox.left + scrollX,
-          top: stageBox.top + scrollY,
-          right: stageBox.right + scrollX,
-          bottom: stageBox.bottom + scrollY,
-        },
         transferOutside:
           action.kind === "handoff" && !!receiverBox && replayHandoffOutside(receiverBox, stageBox),
         sheetStyles,
+        content: [
+          ...element.querySelectorAll<HTMLElement>(
+            ":scope > header, :scope > .replay-question-body, :scope > footer",
+          ),
+        ],
+        shadow: element.querySelector<HTMLElement>(":scope > .replay-paper-shadow"),
       };
+      // Prepare the final handoff before movement starts. Its geometry stays out of frame writes.
+      if (closing && cache.transferOutside) {
+        if (!transfer) {
+          const scope = createMotionScope();
+          const context = scope.own(document.createElement("div"));
+          context.className = "console-shell";
+          context.style.display = "contents";
+          context.setAttribute("aria-hidden", "true");
+          context.inert = true;
+          const node = element.cloneNode(true) as HTMLElement;
+          node.className = "replay-handoff-strip guided-intake";
+          node.dataset.replayHandoffFor = activeStepId;
+          node.querySelector(".replay-question-pointer")?.remove();
+          node.querySelectorAll("[id]").forEach((child) => child.removeAttribute("id"));
+          context.appendChild(node);
+          document.body.appendChild(context);
+          transfer = {
+            scope,
+            node,
+            content: [
+              ...node.querySelectorAll<HTMLElement>(
+                ":scope > header, :scope > .replay-question-body, :scope > footer",
+              ),
+            ],
+          };
+        }
+        const node = transfer.node;
+        cache.sheetStyles.forEach(([property, value]) => node.style.setProperty(property, value));
+        Object.assign(node.style, {
+          left: cache.sheet.left - scrollX + "px",
+          top: cache.sheet.top - scrollY + "px",
+          width: width + "px",
+          height: height + "px",
+        });
+        const footer = node.querySelector("footer");
+        const sourceFooter = element.querySelector("footer");
+        if (footer && sourceFooter)
+          footer.replaceChildren(
+            ...[...sourceFooter.childNodes].map((child) => child.cloneNode(true)),
+          );
+        const carriedBody = node.querySelector<HTMLElement>(".replay-question-body");
+        if (carriedBody) carriedBody.scrollTop = viewport.scrollTop;
+      }
       origin ??= headingPoint;
       // Attribution is observable in browser evidence, including every fallback.
       element.dataset.flipOrigin = source
@@ -615,6 +670,10 @@ export function ReplayQuestionScene({
     };
     const scrollPage = () => {
       if (!cache) return;
+      if (transfer) {
+        transfer.node.style.left = cache.sheet.left - scrollX + "px";
+        transfer.node.style.top = cache.sheet.top - scrollY + "px";
+      }
       // Scroll changes viewport offsets, never the measured content geometry.
       paint(frameRef.current);
     };
@@ -667,10 +726,13 @@ export function ReplayQuestionScene({
     currentAnswer,
     duration,
     nextRole,
+    returnsToStage,
     targetQuestion,
     timeline,
     userConfirmation,
   ]);
+
+  useLayoutEffect(() => refresh.current(), [activeStepId, confirmed]);
 
   useLayoutEffect(() => {
     if (timeline) {
@@ -740,11 +802,6 @@ export function ReplayQuestionScene({
       data-replay-phase={phase}
     >
       <div className="replay-paper-shadow" aria-hidden="true" />
-      <div className="replay-paper-strip" aria-hidden="true">
-        <span>
-          第 {action.round} 轮 · {LABELS[action.kind]}
-        </span>
-      </div>
       <header className="replay-question-heading">
         <div>
           <span>

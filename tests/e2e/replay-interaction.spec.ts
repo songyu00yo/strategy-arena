@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { RECORDED_EXAMPLES, type RecordedExamplePayload } from "../../src/lib/recorded-examples";
 import { buildClarificationReplay } from "../../src/lib/replay";
+import { replayChoiceTimes } from "../../src/components/console/ReplayQuestionScene";
 
 // Saved real-model results with explicitly simulated answers. These tests make no model calls.
 function recorded(slug: string) {
@@ -205,10 +206,15 @@ test("normal animation: selection, pause, modal, speed and resume share the same
   await page.getByRole("button", { name: "继续放映", exact: true }).click();
   const root = page.locator(".c-root");
   await expect(root).toHaveAttribute("data-replay-kind", "answer", { timeout: 12000 });
-  await page.waitForFunction(
-    () => Number(document.querySelector(".c-root")?.getAttribute("data-replay-progress")) >= 0.5,
-  );
-  await page.getByRole("button", { name: "暂停放映", exact: true }).click();
+  await page.waitForFunction(() => {
+    const root = document.querySelector<HTMLElement>(".c-root");
+    if (root?.dataset.replayKind !== "answer" || Number(root.dataset.replayProgress) < 0.5)
+      return false;
+    [...root.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "暂停放映")
+      ?.click();
+    return true;
+  });
   const progress = await root.getAttribute("data-replay-progress");
   const selected = steps[answerIndex].replayAction!.answers![0];
   const scene = page.getByRole("region", { name: "补问过程回放" });
@@ -227,9 +233,12 @@ test("normal animation: selection, pause, modal, speed and resume share the same
   await expect(scene.getByLabel(String(selected.value), { exact: true })).toBeChecked();
   await page.getByRole("button", { name: "继续放映", exact: true }).click();
   await expect(root).toHaveAttribute("data-replay-kind", "round_confirm", { timeout: 6000 });
-  await page.waitForFunction(
-    () => Number(document.querySelector(".c-root")?.getAttribute("data-replay-progress")) >= 0.84,
-  );
+  await page.waitForFunction(() => {
+    const root = document.querySelector<HTMLElement>(".c-root");
+    return (
+      root?.dataset.replayKind === "round_confirm" && Number(root.dataset.replayProgress) >= 0.84
+    );
+  });
   await expect(metric(page, "已确认")).toHaveText("1");
   expect(forbidden).toEqual([]);
 });
@@ -272,11 +281,14 @@ test("normal animation: all three speeds show the same mobile selection and conf
     await expect(control).toHaveText(speed);
     await page.getByRole("button", { name: "继续放映", exact: true }).click();
     await expect(root).toHaveAttribute("data-replay-kind", "answer");
-    await page.waitForFunction(
-      () => Number(document.querySelector(".c-root")?.getAttribute("data-replay-progress")) >= 0.5,
-    );
-    await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((button) => {
-      if (button instanceof HTMLButtonElement) button.click();
+    await page.waitForFunction(() => {
+      const root = document.querySelector<HTMLElement>(".c-root");
+      if (root?.dataset.replayKind !== "answer" || Number(root.dataset.replayProgress) < 0.5)
+        return false;
+      [...root.querySelectorAll("button")]
+        .find((button) => button.textContent?.trim() === "暂停放映")
+        ?.click();
+      return true;
     });
     await expect(scene.getByLabel(String(saved.value), { exact: true })).toBeChecked();
     await expect(scene.locator(".replay-question-heading")).toBeInViewport({ ratio: 1 });
@@ -284,9 +296,12 @@ test("normal animation: all three speeds show the same mobile selection and conf
     await expect(metric(page, "已确认")).toHaveText("0");
     await page.getByRole("button", { name: "继续放映", exact: true }).click();
     await expect(root).toHaveAttribute("data-replay-kind", "round_confirm", { timeout: 8000 });
-    await page.waitForFunction(
-      () => Number(document.querySelector(".c-root")?.getAttribute("data-replay-progress")) >= 0.84,
-    );
+    await page.waitForFunction(() => {
+      const root = document.querySelector<HTMLElement>(".c-root");
+      return (
+        root?.dataset.replayKind === "round_confirm" && Number(root.dataset.replayProgress) >= 0.84
+      );
+    });
     await expect(metric(page, "已确认")).toHaveText("1");
     await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((button) => {
       if (button instanceof HTMLButtonElement) button.click();
@@ -320,6 +335,12 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
     expect(index).toBeGreaterThan(0);
     const action = steps[index].replayAction!;
     const saved = action.answers?.[0];
+    const values =
+      saved && (saved.question.type === "single" || saved.question.type === "multiple")
+        ? Array.isArray(saved.value)
+          ? saved.value
+          : [saved.value]
+        : [];
     await go(page, index);
     const scene = page.getByRole("region", { name: "补问过程回放", exact: true });
     await expect(scene.locator(".replay-question-heading")).toBeInViewport({ ratio: 1 });
@@ -333,7 +354,7 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
     // Use the real click so Playwright's focus/scroll behavior reproduces the reported rail path.
     await page.getByRole("button", { name: "继续放映", exact: true }).click();
     const pressed = await page.waitForFunction(
-      ({ step, questionId, values, summary }) => {
+      ({ step, questionId, values, clickTimes, summary }) => {
         const root = document.querySelector(".c-root");
         if (
           root?.querySelector(".c-time [aria-current=step]")?.getAttribute("aria-label") !==
@@ -352,10 +373,7 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
         let target: HTMLElement | null = null;
         if (summary) target = paper.querySelector<HTMLElement>("[data-replay-confirm]");
         else if (values.length) {
-          const selectedIndex = Math.max(
-            0,
-            values.filter((_, i) => progress >= 0.45 + i * (0.3 / values.length)).length - 1,
-          );
+          const selectedIndex = Math.max(0, clickTimes.filter((at) => progress >= at).length - 1);
           const label = [
             ...(fieldset?.querySelectorAll<HTMLElement>("[data-answer-option]") ?? []),
           ].find((option) => option.dataset.answerOption === values[selectedIndex]);
@@ -391,12 +409,8 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
       {
         step: index + 1,
         questionId: saved?.questionId,
-        values:
-          saved && (saved.question.type === "single" || saved.question.type === "multiple")
-            ? Array.isArray(saved.value)
-              ? saved.value
-              : [saved.value]
-            : [],
+        values,
+        clickTimes: replayChoiceTimes(values.length),
         summary: scenario.type === "summary_submit",
       },
     );

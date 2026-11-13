@@ -266,6 +266,9 @@
 .recorded-entry-start.is-paused::before {
   animation-play-state: paused;
 }
+.recorded-entry-start[data-compact]::before {
+  animation-duration: 1600ms;
+}
 .recorded-entry-footnote {
   text-align: center;
 }

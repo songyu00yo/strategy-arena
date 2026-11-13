@@ -35,12 +35,12 @@ function recording(slug: string) {
 describe("paper theatre handoffs", () => {
   it("uses the approved feedback, transfer and final seal durations", () => {
     expect(PAPER_MOTION).toEqual({
-      feedback: 160,
-      settle: 200,
-      open: 420,
-      fold: 360,
-      transfer: 600,
-      seal: 280,
+      feedback: 120,
+      settle: 140,
+      open: 280,
+      fold: 300,
+      transfer: 420,
+      seal: 220,
     });
   });
 
@@ -157,7 +157,10 @@ describe("paper theatre handoffs", () => {
       "M460,108 C370,108 350,78 260,78",
     );
     const frames = initialPaperFrames(source, target)!;
-    expect(frames.at(-1)?.transform).toContain("translate(420px,-62px)");
+    expect(frames).toEqual([
+      { transform: "none", opacity: 1 },
+      { transform: "translate3d(420px,-62px,0) scale(0.55)", opacity: 0 },
+    ]);
     expect(initialPaperFrames(source, { ...target, left: 650 })?.at(-1)?.transform).not.toEqual(
       frames.at(-1)?.transform,
     );

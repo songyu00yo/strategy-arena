@@ -1,7 +1,13 @@
 /** Synthetic clock samples. No browser, model call or persisted task. */
 import { describe, expect, it } from "vitest";
+import type { Beat } from "../src/components/console/beats";
+import type { IntakeQuestion, RecordedAnswer } from "../src/lib/intake-contracts";
+import type { ReplayAction } from "../src/lib/replay-contracts";
 import {
   createPlaybackTimeline,
+  playbackCommitAt,
+  playbackDuration,
+  playbackProgressAt,
   playbackStateKey,
   type PlaybackFrame,
 } from "../src/components/console/use-playback-progress";
@@ -13,6 +19,145 @@ const frame = (progress: number): PlaybackFrame => ({
   duration: 14000,
   running: true,
   settled: false,
+});
+
+const question: IntakeQuestion = {
+  id: "synthetic_choice",
+  title: "Synthetic question",
+  reason: "Unit test input",
+  placeholder: "",
+  type: "single",
+  options: ["one", "two"],
+  unit: "",
+};
+
+const beat = (action?: Partial<ReplayAction>): Beat => ({
+  id: "synthetic-step",
+  stage: "revise",
+  agent: "B",
+  title: "Synthetic playback step",
+  plain: "Unit test input",
+  replayAction: action
+    ? { id: "synthetic-action", kind: "answer", round: 1, revision: 1, ...action }
+    : undefined,
+});
+
+const answerBeat = (answer: Partial<RecordedAnswer>) =>
+  beat({
+    kind: "answer",
+    answers: [{ questionId: question.id, question, state: "answered", value: "one", ...answer }],
+  });
+
+describe("compact recorded playback timing", () => {
+  it("keeps model and question steps brief without charging reading time by character", () => {
+    expect(playbackDuration(null)).toBe(650);
+    expect(playbackDuration(beat())).toBe(650);
+    expect(playbackDuration(beat({ kind: "questions", questions: [question] }))).toBe(1100);
+    expect(
+      playbackDuration(beat({ kind: "questions", questions: [question, question, question] })),
+    ).toBe(1300);
+    expect(playbackDuration(beat({ kind: "questions", questions: Array(12).fill(question) }))).toBe(
+      1600,
+    );
+    expect(
+      playbackDuration(
+        beat({ kind: "questions", questions: [{ ...question, title: "long".repeat(1000) }] }),
+      ),
+    ).toBe(1100);
+  });
+
+  it("shows saved choices and text within the compact action limits", () => {
+    expect(playbackDuration(answerBeat({}))).toBe(650);
+    expect(playbackDuration(answerBeat({ state: "unknown", value: "" }))).toBe(450);
+    expect(playbackDuration(answerBeat({ state: "skipped", value: "" }))).toBe(450);
+    expect(
+      playbackDuration(
+        answerBeat({ question: { ...question, type: "multiple" }, value: ["one", "two"] }),
+      ),
+    ).toBe(970);
+    expect(
+      playbackDuration(
+        answerBeat({ question: { ...question, type: "multiple" }, value: Array(6).fill("choice") }),
+      ),
+    ).toBe(1300);
+    expect(
+      playbackDuration(answerBeat({ question: { ...question, type: "text" }, value: "hello" })),
+    ).toBe(670);
+    expect(
+      playbackDuration(
+        answerBeat({ question: { ...question, type: "text" }, value: "word".repeat(200) }),
+      ),
+    ).toBe(1100);
+    expect(
+      playbackDuration(answerBeat({ question: { ...question, type: "number" }, value: "123" })),
+    ).toBe(662);
+  });
+
+  it.each([
+    ["round_confirm", 950],
+    ["summary_submit", 800],
+    ["summary_confirm", 750],
+    ["handoff", 700],
+  ] as const)("leaves return time after %s is confirmed", (kind, duration) => {
+    const step = beat({ kind });
+    expect(playbackDuration(step)).toBe(duration);
+    expect(playbackCommitAt(step)).toBe(0.4);
+    expect(duration * (1 - playbackCommitAt(step))).toBeGreaterThanOrEqual(300);
+  });
+});
+
+describe("physical time and semantic playback progress", () => {
+  it("keeps default and non-confirmation playback linear", () => {
+    expect(playbackCommitAt(null)).toBe(0.8);
+    expect(playbackCommitAt(beat())).toBe(0.8);
+    expect(playbackCommitAt(beat({ kind: "questions" }))).toBe(0.8);
+    expect(playbackCommitAt(answerBeat({}))).toBe(0.8);
+    for (let elapsed = 0; elapsed <= 1000; elapsed += 10) {
+      expect(playbackProgressAt(elapsed, 1000)).toBe(elapsed / 1000);
+    }
+  });
+
+  it("maps physical confirmation to the existing logical boundary without moving completion", () => {
+    expect(playbackProgressAt(0, 1000, 0.4)).toBe(0);
+    expect(playbackProgressAt(200, 1000, 0.4)).toBeCloseTo(0.4);
+    expect(playbackProgressAt(399.9, 1000, 0.4)).toBeLessThan(0.8);
+    expect(playbackProgressAt(400, 1000, 0.4)).toBe(0.8);
+    expect(playbackProgressAt(400.1, 1000, 0.4)).toBeGreaterThan(0.8);
+    expect(playbackProgressAt(700, 1000, 0.4)).toBeCloseTo(0.9);
+    expect(playbackProgressAt(1000, 1000, 0.4)).toBe(1);
+    expect(playbackProgressAt(-1, 1000, 0.4)).toBe(0);
+    expect(playbackProgressAt(1001, 1000, 0.4)).toBe(1);
+  });
+
+  it("moves monotonically through every semantic boundary", () => {
+    const samples = Array.from({ length: 1001 }, (_, elapsed) =>
+      playbackProgressAt(elapsed, 1000, 0.4),
+    );
+    expect(new Set(samples.map(playbackStateKey)).size).toBe(9);
+    for (let index = 1; index < samples.length; index++) {
+      expect(samples[index]).toBeGreaterThan(samples[index - 1]);
+    }
+  });
+
+  it("preserves physical elapsed time and the mapped pose across pause and resume", () => {
+    const elapsed = 447;
+    const duration = 950;
+    const progress = playbackProgressAt(elapsed, duration, 0.4);
+    const timeline = createPlaybackTimeline({ ...frame(progress), elapsed, duration });
+    timeline.publish({ ...timeline.read(), running: false });
+    expect(timeline.read()).toMatchObject({ elapsed, progress, running: false });
+    timeline.publish({ ...timeline.read(), running: true });
+    expect(timeline.read()).toMatchObject({ elapsed, progress, running: true });
+    const resumedElapsed = elapsed + 16;
+    timeline.publish({
+      ...timeline.read(),
+      elapsed: resumedElapsed,
+      progress: playbackProgressAt(resumedElapsed, duration, 0.4),
+    });
+    expect(timeline.read().elapsed).toBe(resumedElapsed);
+    expect(timeline.read().progress).toBeGreaterThan(progress);
+    expect(timeline.read().progress).toBeLessThan(1);
+  });
 });
 
 describe("continuous playback timeline", () => {

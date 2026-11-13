@@ -31,7 +31,7 @@ import { ResultRegion } from "./ResultRegion";
 import { acquireMotionHold, createMotionScope, motionNow, useMotionPaused } from "./motion-runtime";
 import "./console-motion.css";
 import { beatName, beatsOf, clock, nameOf, stageName, usageOf } from "./beats";
-import { playbackDuration, usePlaybackProgress } from "./use-playback-progress";
+import { playbackCommitAt, playbackDuration, usePlaybackProgress } from "./use-playback-progress";
 import "./replay-console.css";
 
 /** Joins sentences without doubling their end marks. */
@@ -160,6 +160,7 @@ export function ArenaConsole({
   const { progress: replayProgress, timeline: replayTimeline } = usePlaybackProgress({
     stepId: clarification ? (current?.id ?? "") : "",
     duration: playbackDuration(current),
+    commitAt: playbackCommitAt(current),
     speed,
     running:
       !!clarification &&

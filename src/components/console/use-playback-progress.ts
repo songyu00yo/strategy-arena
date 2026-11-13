@@ -43,33 +43,50 @@ export function playbackStateKey(progress: number) {
   return STATE_BOUNDARIES.filter((at) => progress >= at).length;
 }
 
+/** Confirmation steps leave physical time for the paper to return after the saved action. */
+export function playbackCommitAt(beat: Beat | null): number {
+  const kind = beat?.replayAction?.kind;
+  return kind && ["round_confirm", "summary_submit", "summary_confirm", "handoff"].includes(kind)
+    ? 0.4
+    : 0.8;
+}
+
+/** Keep the existing semantic confirmation boundary while changing its physical timing. */
+export function playbackProgressAt(elapsed: number, duration: number, commitAt = 0.8): number {
+  const progress = Math.max(0, Math.min(1, elapsed / duration));
+  if (commitAt === 0.8) return progress;
+  if (progress <= commitAt) return (progress / commitAt) * 0.8;
+  return 0.8 + ((progress - commitAt) / (1 - commitAt)) * 0.2;
+}
+
 /** Durations describe the reconstructed demonstration, never original user input timing. */
 export function playbackDuration(beat: Beat | null): number {
   const action = beat?.replayAction;
-  if (!action) return beat?.stage === "attack" ? 3760 : 3560;
+  if (!action) return 650;
   if (action.kind === "questions") {
-    const characters = (action.questions ?? []).reduce(
-      (total, question) =>
-        total + question.title.length + question.reason.length + question.options.join("").length,
-      0,
-    );
-    return Math.min(14000, Math.max(5000, 2000 + characters * 28));
+    return Math.min(1600, 1100 + Math.max(0, (action.questions?.length ?? 0) - 1) * 100);
   }
   if (action.kind === "answer") {
     const answer = action.answers?.[0];
-    if (!answer || answer.state !== "answered") return 1900;
-    if (Array.isArray(answer.value)) return 1500 + answer.value.length * 600;
+    if (!answer || answer.state !== "answered") return 450;
+    if (Array.isArray(answer.value)) return Math.min(1300, 650 + answer.value.length * 160);
     if (answer.question.type === "text" || answer.question.type === "number")
-      return Math.min(10000, Math.max(2200, String(answer.value).length * 22 + 1100));
-    return 2300;
+      return Math.min(1100, 650 + Array.from(String(answer.value)).length * 4);
+    return 650;
   }
-  return action.kind === "handoff" ? 1900 : 2500;
+  return {
+    round_confirm: 950,
+    summary_submit: 800,
+    summary_confirm: 750,
+    handoff: 700,
+  }[action.kind];
 }
 
 /** One pause-aware clock drives both the visible action and advancement to the next step. */
 export function usePlaybackProgress({
   stepId,
   duration,
+  commitAt = 0.8,
   speed,
   running,
   settled,
@@ -78,6 +95,7 @@ export function usePlaybackProgress({
 }: {
   stepId: string;
   duration: number;
+  commitAt?: number;
   speed: number;
   running: boolean;
   settled: boolean;
@@ -114,7 +132,7 @@ export function usePlaybackProgress({
     const publish = () =>
       timeline.publish({
         stepId,
-        progress: current.elapsed / duration,
+        progress: playbackProgressAt(current.elapsed, duration, commitAt),
         elapsed: current.elapsed,
         duration,
         running,
@@ -141,7 +159,7 @@ export function usePlaybackProgress({
         current.elapsed + Math.max(0, motionNow() - previous) * speed,
       );
     };
-  }, [stepId, duration, speed, running, settled, queueRevision, timeline]);
+  }, [stepId, duration, commitAt, speed, running, settled, queueRevision, timeline]);
   return {
     progress: settled ? 1 : (STATE_BOUNDARIES[stateKey - 1] ?? 0),
     timeline,

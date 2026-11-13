@@ -8,6 +8,7 @@ import { QuestionInput } from "../src/components/question-input";
 import {
   ReplayQuestionScene,
   replayAnswerAt,
+  replayChoiceTimes,
   replayFlipGeometry,
   replayHandoffActive,
   replayHandoffOutside,
@@ -17,6 +18,7 @@ import {
   replayPressedAt,
   replayReadingState,
   replayReadingScroll,
+  replayReturnPose,
 } from "../src/components/console/ReplayQuestionScene";
 import type { PlaybackFrame } from "../src/components/console/use-playback-progress";
 import { Chars, Decode } from "../src/components/console/effects";
@@ -108,7 +110,7 @@ describe("shared original question controls", () => {
 });
 
 describe("controlled recorded question scenes", () => {
-  it("opens over 420 active milliseconds and folds only during the final 360 after acceptance", () => {
+  it("opens over 280 active milliseconds and returns during the final 300 after acceptance", () => {
     const frame = (elapsed: number, overrides: Partial<PlaybackFrame> = {}): PlaybackFrame => ({
       stepId: "synthetic-question",
       progress: elapsed / 2500,
@@ -119,48 +121,130 @@ describe("controlled recorded question scenes", () => {
       ...overrides,
     });
     expect(replayPaperTiming(frame(0), true, true)).toEqual({ open: 0, fold: 0 });
-    expect(replayPaperTiming(frame(210), true, true).open).toBe(0.875);
-    expect(replayPaperTiming(frame(420), true, true).open).toBe(1);
-    expect(replayPaperTiming(frame(2140), true, true).fold).toBe(0);
-    expect(replayPaperTiming(frame(2320), true, true).fold).toBe(0.5);
+    expect(replayPaperTiming(frame(140), true, true).open).toBe(0.875);
+    expect(replayPaperTiming(frame(280), true, true).open).toBe(1);
+    expect(replayPaperTiming(frame(2200), true, true).fold).toBe(0);
+    expect(replayPaperTiming(frame(2350), true, true).fold).toBe(0.5);
     expect(replayPaperTiming(frame(2500), true, true).fold).toBe(1);
-    expect(replayPaperTiming(frame(2320, { running: false }), true, true)).toEqual(
-      replayPaperTiming(frame(2320), true, true),
+    expect(replayPaperTiming(frame(2350, { running: false }), true, true)).toEqual(
+      replayPaperTiming(frame(2350), true, true),
     );
     expect(replayPaperTiming(frame(2500, { settled: true }), true, true)).toEqual({
       open: 1,
       fold: 0,
     });
-    expect(replayPaperTiming(frame(420), false, false)).toEqual({ open: 1, fold: 0 });
-    expect(replayPaperTiming(frame(399, { duration: 500 }), true, true).fold).toBe(0);
+    expect(replayPaperTiming(frame(280), false, false)).toEqual({ open: 1, fold: 0 });
+    expect(replayPaperTiming(frame(199, { duration: 500 }), true, true).fold).toBe(0);
   });
 
-  it("uses one 160ms press per actual selection and a curved decelerating pointer path", () => {
+  it("preserves physical return time at fast speed and holds the same pose while paused", () => {
+    const frame = (elapsed: number, duration = 950): PlaybackFrame => ({
+      stepId: "synthetic-fast-confirmation",
+      progress: elapsed / duration,
+      elapsed,
+      duration,
+      running: true,
+      settled: false,
+    });
+    for (const speed of [1, 1.8]) {
+      const returnStart = 950 - 300 * speed;
+      expect(replayPaperTiming(frame(returnStart), false, true, speed).fold).toBe(0);
+      expect(
+        replayPaperTiming(frame(returnStart + 150 * speed), false, true, speed).fold,
+      ).toBeCloseTo(0.5);
+      expect(replayPaperTiming(frame(950), false, true, speed).fold).toBe(1);
+      expect((950 - returnStart) / speed).toBe(300);
+      expect(replayPaperTiming(frame(140 * speed), true, false, speed).open).toBe(0.875);
+      expect(replayPaperTiming(frame(280 * speed), true, false, speed).open).toBe(1);
+      const moving = frame(returnStart + 150 * speed);
+      expect(replayPaperTiming({ ...moving, running: false }, false, true, speed)).toEqual(
+        replayPaperTiming(moving, false, true, speed),
+      );
+    }
+    expect(replayPaperTiming(frame(650), false, true, 0.6).fold).toBe(0);
+    expect(replayPaperTiming(frame(279, 700), false, true, 1.8).fold).toBe(0);
+    expect(replayPaperTiming(frame(490, 700), false, true, 1.8).fold).toBeCloseTo(0.5);
+  });
+
+  it("moves immediately toward the measured destination with one proportional scale and a late fade", () => {
+    const destination = { x: 400, y: -180, scaleX: 0.5, scaleY: 0.2 };
+    const start = replayReturnPose(0, destination);
+    const end = replayReturnPose(1, destination);
+    expect(start).toEqual({ x: 0, y: -0, scale: 1, opacity: 1, contentOpacity: 1 });
+    expect(end).toMatchObject({
+      x: destination.x,
+      y: destination.y,
+      opacity: 0,
+      contentOpacity: 0,
+    });
+    expect(end.scale).toBeCloseTo(0.36);
+    expect(replayReturnPose(0.1, destination).x).toBeGreaterThan(0);
+    expect(replayReturnPose(0.6, destination).opacity).toBe(1);
+    expect(replayReturnPose(0.8, destination).opacity).toBeGreaterThan(0);
+    expect(replayReturnPose(0.8, destination).opacity).toBeLessThan(1);
+    const samples = Array.from({ length: 101 }, (_, index) =>
+      replayReturnPose(index / 100, destination),
+    );
+    for (let index = 1; index < samples.length; index++) {
+      const previous = samples[index - 1];
+      const current = samples[index];
+      expect(current.x).toBeGreaterThan(previous.x);
+      expect(current.y).toBeLessThan(previous.y);
+      expect(current.scale).toBeLessThan(previous.scale);
+      expect(current.opacity).toBeLessThanOrEqual(previous.opacity);
+      expect((1 - current.scale) / (1 - end.scale)).toBeCloseTo(current.x / destination.x);
+      expect(current.y / destination.y).toBeCloseTo(current.x / destination.x);
+    }
+    expect(replayReturnPose(1, { ...destination, x: 500, y: 80 })).toMatchObject({ x: 500, y: 80 });
+  });
+
+  it("starts and ends at rest and passes the former 42 percent threshold without a velocity jump", () => {
+    const destination = { x: 400, y: 180, scaleX: 0.5, scaleY: 0.2 };
+    const delta = 0.00001;
+    const at = (progress: number) => replayReturnPose(progress, destination).x;
+    const startVelocity = (at(delta) - at(0)) / delta;
+    const endVelocity = (at(1) - at(1 - delta)) / delta;
+    const beforeThreshold = (at(0.42) - at(0.42 - delta)) / delta;
+    const afterThreshold = (at(0.42 + delta) - at(0.42)) / delta;
+    expect(startVelocity).toBeLessThan(0.02);
+    expect(endVelocity).toBeLessThan(0.02);
+    expect(beforeThreshold).toBeGreaterThan(0);
+    expect(afterThreshold).toBeGreaterThan(0);
+    expect(Math.abs(afterThreshold - beforeThreshold)).toBeLessThan(0.01);
+  });
+
+  it("uses one 120ms press per actual selection and a curved decelerating pointer path", () => {
     for (const at of [0.45, 0.6]) {
       expect(replayPressedAt(at * 2500 - 1, 2500, [at])).toBe(false);
       expect(replayPressedAt(at * 2500, 2500, [at])).toBe(true);
-      expect(replayPressedAt(at * 2500 + 159, 2500, [at])).toBe(true);
-      expect(replayPressedAt(at * 2500 + 160, 2500, [at])).toBe(false);
+      expect(replayPressedAt(at * 2500 + 119, 2500, [at])).toBe(true);
+      expect(replayPressedAt(at * 2500 + 120, 2500, [at])).toBe(false);
     }
     const origin = { x: 10, y: 20 };
     const target = { x: 210, y: 20 };
     expect(replayPointerAt(origin, target, 0)).toEqual(origin);
     expect(replayPointerAt(origin, target, 1)).toEqual(target);
     expect(replayPointerAt(origin, target, 0.5).y).toBeGreaterThan(20);
-    expect(replayPointerAt(origin, target, 0.1).x - origin.x).toBeGreaterThan(
+    const delta = 0.00001;
+    const first = replayPointerAt(origin, target, delta);
+    const last = replayPointerAt(origin, target, 1 - delta);
+    expect(Math.hypot(first.x - origin.x, first.y - origin.y) / delta).toBeLessThan(0.01);
+    expect(Math.hypot(target.x - last.x, target.y - last.y) / delta).toBeLessThan(0.01);
+    expect(replayPointerAt(origin, target, 0.5).x).toBeCloseTo(110);
+    expect(replayPointerAt(origin, target, 0.1).x - origin.x).toBeCloseTo(
       target.x - replayPointerAt(origin, target, 0.9).x,
     );
   });
 
-  it("presses each real control by a 1.5px sine pulse and returns to rest after 160ms", () => {
+  it("presses each real control by a 1.5px sine pulse and returns to rest after 120ms", () => {
     const clicks = [0.45, 0.6];
     expect(replayPressAt(1124, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
     expect(replayPressAt(1125, 2500, clicks)).toEqual({ index: 0, progress: 0, offset: 0 });
-    expect(replayPressAt(1205, 2500, clicks)).toEqual({ index: 0, progress: 0.5, offset: 1.5 });
-    expect(replayPressAt(1245, 2500, clicks).offset).toBeCloseTo(Math.sin(Math.PI * 0.75) * 1.5);
-    expect(replayPressAt(1285, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
-    expect(replayPressAt(1580, 2500, clicks)).toEqual({ index: 1, progress: 0.5, offset: 1.5 });
-    expect(replayPressAt(1660, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
+    expect(replayPressAt(1185, 2500, clicks)).toEqual({ index: 0, progress: 0.5, offset: 1.5 });
+    expect(replayPressAt(1215, 2500, clicks).offset).toBeCloseTo(Math.sin(Math.PI * 0.75) * 1.5);
+    expect(replayPressAt(1245, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
+    expect(replayPressAt(1560, 2500, clicks)).toEqual({ index: 1, progress: 0.5, offset: 1.5 });
+    expect(replayPressAt(1620, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
   });
 
   it("requests a temporary handoff ornament only for a measured recipient outside the stage", () => {
@@ -175,7 +259,8 @@ describe("controlled recorded question scenes", () => {
     expect(replayHandoffOutside({ left: 120, top: 0, width: 0, height: 0 }, stage)).toBe(false);
     const html = scene(action({ kind: "handoff", questions: undefined }), 1);
     expect(html).not.toContain('class="replay-handoff-strip"');
-    expect(html).toContain('class="replay-paper-strip" aria-hidden="true"');
+    expect(html).not.toContain('class="replay-paper-strip"');
+    expect(html).toContain('class="replay-question-body"');
     expect(html).not.toContain('data-pressed="true"');
   });
 
@@ -192,6 +277,8 @@ describe("controlled recorded question scenes", () => {
     const fold = replayPaperTiming(frame, false, true).fold;
     expect(replayHandoffActive(frame, fold, true)).toBe(true);
     expect(replayHandoffActive(paused, fold, true)).toBe(true);
+    expect(replayHandoffActive(frame, 0.001, true)).toBe(true);
+    expect(replayHandoffActive(frame, 0, true)).toBe(false);
     expect(replayPaperTiming(paused, false, true)).toEqual(replayPaperTiming(frame, false, true));
     expect(replayHandoffActive({ ...paused, settled: true }, fold, true)).toBe(false);
     expect(replayHandoffActive({ ...frame, progress: 1 }, 1, true)).toBe(false);
@@ -276,8 +363,11 @@ describe("controlled recorded question scenes", () => {
   it("replays checkbox selections and complete Unicode text without mutating saved records", () => {
     const multiple = question({ type: "multiple" });
     const selected = answer(multiple);
-    expect(replayAnswerAt(multiple, selected, 0.4).value).toEqual([]);
-    expect(replayAnswerAt(multiple, selected, 0.51).value).toEqual(["白底单栏"]);
+    const clicks = replayChoiceTimes(2);
+    expect(replayAnswerAt(multiple, selected, clicks[0] - 0.0001).value).toEqual([]);
+    expect(replayAnswerAt(multiple, selected, clicks[0]).value).toEqual(["白底单栏"]);
+    expect(replayAnswerAt(multiple, selected, clicks[1] - 0.0001).value).toEqual(["白底单栏"]);
+    expect(replayAnswerAt(multiple, selected, clicks[1]).value).toEqual(["白底单栏", "深色多栏"]);
     expect(replayAnswerAt(multiple, selected, 1).value).toEqual(["白底单栏", "深色多栏"]);
     for (const type of ["text", "number"] as const) {
       const q = question({ id: type, type, options: [] });
@@ -288,6 +378,64 @@ describe("controlled recorded question scenes", () => {
       expect(replayAnswerAt(q, saved, 1).value).toBe(value);
       expect(saved.value).toBe(value);
     }
+  });
+
+  it("spreads six saved choices across the visible action without changing their order or source", () => {
+    expect(replayChoiceTimes(0)).toEqual([0.45]);
+    expect(replayChoiceTimes(1)).toEqual([0.45]);
+    const q = question({
+      type: "multiple",
+      options: ["one", "two", "three", "four", "five", "six"],
+    });
+    const saved = answer(q, { value: [...q.options] });
+    const original = structuredClone(saved);
+    const clicks = replayChoiceTimes(q.options.length);
+    expect(clicks).toHaveLength(6);
+    expect(clicks[0]).toBe(0.22);
+    expect(clicks.at(-1)).toBe(0.74);
+    for (const [index, at] of clicks.entries()) {
+      if (index > 0) {
+        expect(at).toBeGreaterThan(clicks[index - 1]);
+        expect((at - clicks[index - 1]) * 1300).toBeGreaterThan(120);
+      }
+      expect(replayAnswerAt(q, saved, at - 0.0001).value).toEqual(q.options.slice(0, index));
+      expect(replayAnswerAt(q, saved, at).value).toEqual(q.options.slice(0, index + 1));
+    }
+    expect(replayAnswerAt(q, saved, 1).value).toEqual(q.options);
+    expect(saved).toEqual(original);
+  });
+
+  it("keeps array-valued unknown and skipped answers unresolved instead of selecting saved options", () => {
+    const q = question({ type: "multiple" });
+    for (const state of ["unknown", "skipped"] as const) {
+      const saved = answer(q, { state, value: [...q.options] });
+      const original = structuredClone(saved);
+      expect(replayAnswerAt(q, saved, 0.44)).toMatchObject({ state: "answered", value: [] });
+      expect(replayAnswerAt(q, saved, 0.45)).toMatchObject({ state, value: [] });
+      expect(replayAnswerAt(q, saved, 1)).toMatchObject({ state, value: [] });
+      expect(saved).toEqual(original);
+    }
+  });
+
+  it("reveals Unicode text in six complete-glyph batches and retains the exact final value", () => {
+    const q = question({ type: "text", options: [] });
+    const value = "word📚".repeat(24);
+    const saved = answer(q, { value });
+    const values = new Set(
+      Array.from(
+        { length: 301 },
+        (_, index) => replayAnswerAt(q, saved, 0.45 + index / 1000).value,
+      ),
+    );
+    expect(values.size).toBe(7);
+    expect(values.has("")).toBe(true);
+    expect(values.has(value)).toBe(true);
+    for (const shown of values) {
+      const text = shown as string;
+      expect(Array.from(value).slice(0, Array.from(text).length).join("")).toBe(text);
+    }
+    expect(replayAnswerAt(q, saved, 1).value).toBe(value);
+    expect(saved.value).toBe(value);
   });
 
   it("keeps the full question group and confirms only at the shared 0.8 threshold", () => {

@@ -1,12 +1,12 @@
 import type { Beat } from "./beats";
 
 export const PAPER_MOTION = {
-  feedback: 160,
-  settle: 200,
-  open: 420,
-  fold: 360,
-  transfer: 600,
-  seal: 280,
+  feedback: 120,
+  settle: 140,
+  open: 280,
+  fold: 300,
+  transfer: 420,
+  seal: 220,
 } as const;
 export type PaperRole = "A" | "B" | "C";
 
@@ -52,12 +52,7 @@ export function initialPaperFrames(
   const scale = Math.min(0.55, target.width / source.width);
   return [
     { transform: "none", opacity: 1 },
-    {
-      transform: `translate(${x * 0.18}px,${y * 0.18}px) scale(.92,.28) rotate(-1deg)`,
-      opacity: 1,
-      offset: PAPER_MOTION.fold / PAPER_MOTION.transfer,
-    },
-    { transform: `translate(${x}px,${y}px) scale(${scale},.12) rotate(0deg)`, opacity: 0 },
+    { transform: `translate3d(${x}px,${y}px,0) scale(${scale})`, opacity: 0 },
   ];
 }
 

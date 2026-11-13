@@ -1183,6 +1183,9 @@ export function RouteStage({
           stepId={current.id}
           duration={playbackDuration(current)}
           nextRole={nextRole}
+          returnsToStage={
+            current.replayAction.kind === "handoff" || !!beats[index + 1]?.clarificationRun
+          }
         />
       )}
     </div>

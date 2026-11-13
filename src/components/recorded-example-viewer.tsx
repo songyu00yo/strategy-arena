@@ -86,7 +86,7 @@ function handoffInitialPaper(form: HTMLFormElement, onStart: () => void) {
     }
     animation = scope.animate(paper, frames, {
       duration: PAPER_MOTION.transfer,
-      easing: "cubic-bezier(.2,.75,.25,1)",
+      easing: "cubic-bezier(.4,0,.2,1)",
       fill: "both",
     });
     animation.onfinish = cleanup;
@@ -113,7 +113,7 @@ function RecordedExampleEntry({
   const form = useRef<HTMLFormElement>(null);
   const startButton = useRef<HTMLButtonElement>(null);
   const started = useRef(false);
-  const remaining = useRef(5200);
+  const remaining = useRef(clarification ? 1600 : 5200);
   const exit = useRef<Animation | null>(null);
   useEffect(() => {
     const visibility = () => setHidden(document.hidden);
@@ -233,6 +233,7 @@ function RecordedExampleEntry({
               ref={startButton}
               type="submit"
               className={`primary-button recorded-entry-start ${paused || hidden ? "is-paused" : ""}`}
+              data-compact={clarification || undefined}
               disabled={leaving}
             >
               <ArrowRight size={17} /> {clarification ? "开始回看" : "开始分析"}

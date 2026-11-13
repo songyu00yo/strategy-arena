@@ -1,4 +1,4 @@
-.console-shell .replay-question-scene {
+.console-shell :is(.replay-question-scene, .replay-handoff-strip) {
   --gi-ink: var(--ink, #15130f);
   --gi-muted: var(--quiet, #656058);
   --gi-line: var(--line, #d2cbc0);
@@ -22,7 +22,7 @@
   transform: translate3d(0, 0, 0);
   transform-origin: center;
   will-change: transform;
-  opacity: var(--replay-paper-opacity, 1);
+  opacity: 1;
 }
 .replay-paper-shadow {
   position: absolute;
@@ -30,36 +30,16 @@
   inset: 0;
   pointer-events: none;
   background: linear-gradient(160deg, transparent 25%, rgb(21 19 15 / 0.18));
-  opacity: var(--replay-shadow, 0);
+  opacity: 0;
 }
-.replay-paper-strip {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  visibility: var(--replay-strip-visibility, hidden);
-  pointer-events: none;
-}
-.replay-paper-strip span,
-.replay-handoff-strip > span {
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 700;
-  transform: scale(var(--replay-strip-scale-x, 1), var(--replay-strip-scale-y, 1));
-}
-.replay-handoff-strip {
+.console-shell .replay-handoff-strip {
   position: fixed;
-  z-index: 24;
-  display: grid;
-  place-items: center;
-  box-sizing: border-box;
-  overflow: hidden;
+  inset: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
   pointer-events: none;
-  transform-origin: center;
-  will-change: transform;
-}
-.replay-question-scene > :is(header, .replay-question-body, footer) {
-  visibility: var(--replay-content-visibility, visible);
+  opacity: 0.001;
 }
 .replay-question-heading {
   display: flex;
@@ -100,28 +80,36 @@
   border-left: 3px solid var(--vermilion, #a43b2c);
   padding-left: 10px;
 }
-.replay-question-scene .gi-question {
+:is(.replay-question-scene, .replay-handoff-strip) .gi-question {
   margin-bottom: 6px;
 }
-.console-shell .replay-question-scene fieldset:disabled,
-.console-shell .replay-question-scene fieldset:disabled :is(button, input, textarea, label) {
+.console-shell :is(.replay-question-scene, .replay-handoff-strip) fieldset:disabled,
+.console-shell
+  :is(.replay-question-scene, .replay-handoff-strip)
+  fieldset:disabled
+  :is(button, input, textarea, label) {
   opacity: 1;
   cursor: default;
 }
-.replay-question-scene .gi-answer-options label {
+:is(.replay-question-scene, .replay-handoff-strip) .gi-answer-options label {
   max-width: 100%;
   color: var(--gi-ink);
   overflow-wrap: anywhere;
   transition:
-    border-color calc(160ms / var(--playback-speed, 1)) ease-out,
-    background-color calc(160ms / var(--playback-speed, 1)) ease-out;
+    border-color calc(120ms / var(--playback-speed, 1)) ease-out,
+    background-color calc(120ms / var(--playback-speed, 1)) ease-out;
 }
-.replay-question-scene
-  :is([data-answer-option], [data-answer-state], [data-answer-field], [data-replay-confirm]) {
-  transform: translate3d(0, var(--replay-control-press, 0px), 0);
+:is(.replay-question-scene, .replay-handoff-strip)
+  :is(
+    [data-answer-option],
+    [data-answer-state],
+    [data-answer-field],
+    [data-replay-confirm]
+  )[data-replay-pressed="true"] {
+  transform: translateY(var(--replay-control-press, 0px));
 }
 .console-shell
-  .replay-question-scene
+  :is(.replay-question-scene, .replay-handoff-strip)
   .gi-answer-options
   input:is([type="radio"], [type="checkbox"]) {
   position: absolute;
@@ -134,10 +122,10 @@
   white-space: nowrap;
   opacity: 0;
 }
-.replay-question-scene .gi-answer-options label.selected {
+:is(.replay-question-scene, .replay-handoff-strip) .gi-answer-options label.selected {
   background: #f0eae0;
 }
-.replay-question-scene .gi-answer-states button[aria-pressed="true"] {
+:is(.replay-question-scene, .replay-handoff-strip) .gi-answer-states button[aria-pressed="true"] {
   color: var(--paper, white);
 }
 .replay-answer-status {
@@ -222,7 +210,7 @@
   overflow-wrap: anywhere;
 }
 @media (max-width: 1100px) {
-  .console-shell .replay-question-scene {
+  .console-shell :is(.replay-question-scene, .replay-handoff-strip) {
     inset: 18px 18px auto;
     max-height: min(58dvh, 480px);
     padding: 14px;
@@ -236,11 +224,11 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .console-shell .replay-question-scene {
+  .console-shell :is(.replay-question-scene, .replay-handoff-strip) {
     transform: none !important;
     will-change: auto;
   }
-  .replay-question-scene .gi-answer-options label {
+  :is(.replay-question-scene, .replay-handoff-strip) .gi-answer-options label {
     transition: none;
   }
 }

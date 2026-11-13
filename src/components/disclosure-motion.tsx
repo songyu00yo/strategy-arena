@@ -19,6 +19,37 @@ export function disclosureTargetHeight(inner: HTMLElement) {
   return Math.max(0, height);
 }
 
+/** Animate the height the paper can display before its existing scroll limits take over. */
+export function disclosureHeightRange(host: HTMLElement, target: number) {
+  const from = host.getBoundingClientRect().height;
+  const paper = host.closest<HTMLElement>("dialog[open]");
+  if (!paper || paper.dataset.overlayMotionActive === "true") return { from, to: target };
+  const originalHeight = host.style.height;
+  const currentPaperHeight = paper.getBoundingClientRect().height;
+  const scrollPositions: { node: HTMLElement; top: number; left: number }[] = [];
+  for (let node = host.parentElement; node; node = node.parentElement) {
+    scrollPositions.push({ node, top: node.scrollTop, left: node.scrollLeft });
+    if (node === paper) break;
+  }
+  try {
+    host.style.height = "0px";
+    const collapsedPaperHeight = paper.getBoundingClientRect().height;
+    host.style.height = `${target}px`;
+    const targetPaperHeight = paper.getBoundingClientRect().height;
+    const visibleFrom = Math.max(0, currentPaperHeight - collapsedPaperHeight);
+    const visibleTarget = Math.max(0, targetPaperHeight - collapsedPaperHeight);
+    // A disclosure entirely inside an already full scroll region does not resize its paper.
+    if (Math.max(visibleFrom, visibleTarget) < 0.5) return { from, to: target };
+    return { from: Math.min(from, visibleFrom), to: Math.min(target, visibleTarget) };
+  } finally {
+    host.style.height = originalHeight;
+    scrollPositions.forEach(({ node, top, left }) => {
+      node.scrollTop = top;
+      node.scrollLeft = left;
+    });
+  }
+}
+
 /** Capture current text and field values without adding another live control surface. */
 export function capturePaperContents(source: HTMLElement) {
   const copy = source.cloneNode(true) as HTMLElement;
@@ -152,8 +183,9 @@ export function DisclosureMotion({
       freeze();
       outer.style.visibility = "visible";
       const overlayOwnsHeight = !!outer.closest('[data-overlay-motion-active="true"]');
+      const heightRange = disclosureHeightRange(outer, next);
       outer.dataset.disclosureMotionActive = overlayOwnsHeight ? "content" : "height";
-      outer.dataset.disclosureTargetHeight = String(next);
+      outer.dataset.disclosureTargetHeight = String(heightRange.to);
       const settle = () => {
         outer.style.height = open ? "auto" : "0px";
         outer.style.visibility = open ? "visible" : "hidden";
@@ -173,11 +205,16 @@ export function DisclosureMotion({
         easing: open ? "cubic-bezier(.16,1,.3,1)" : "cubic-bezier(.4,0,.2,1)",
         fill: "both",
       } as const;
-      const height = outer.style.height;
+      outer.style.height = `${heightRange.from}px`;
       if (overlayOwnsHeight) outer.style.height = open ? "auto" : "0px";
       animations = [
         ...(!overlayOwnsHeight
-          ? [outer.animate([{ height }, { height: `${next}px` }], timing)]
+          ? [
+              outer.animate(
+                [{ height: `${heightRange.from}px` }, { height: `${heightRange.to}px` }],
+                timing,
+              ),
+            ]
           : []),
         inner.animate(
           [
@@ -297,13 +334,14 @@ function TransitionContents({
       clearCopies();
       return;
     }
-    const from = host.getBoundingClientRect().height;
     const target = disclosureTargetHeight(el);
     const overlayOwnsHeight = !!host.closest('[data-overlay-motion-active="true"]');
-    const changesHeight = !overlayOwnsHeight && Math.abs(from - target) >= 0.5;
+    const heightRange = disclosureHeightRange(host, target);
+    const changesHeight = !overlayOwnsHeight && Math.abs(heightRange.from - heightRange.to) >= 0.5;
     if (overlayOwnsHeight) host.style.height = "auto";
+    else if (changesHeight) host.style.height = `${heightRange.from}px`;
     host.dataset.disclosureMotionActive = changesHeight ? "height" : "content";
-    if (changesHeight) host.dataset.disclosureTargetHeight = String(target);
+    if (changesHeight) host.dataset.disclosureTargetHeight = String(heightRange.to);
     const timing: KeyframeAnimationOptions = {
       duration: 220,
       easing: "cubic-bezier(.2,.8,.2,1)",
@@ -319,7 +357,12 @@ function TransitionContents({
     );
     const parts = [animation];
     if (changesHeight)
-      parts.push(host.animate([{ height: `${from}px` }, { height: `${target}px` }], timing));
+      parts.push(
+        host.animate(
+          [{ height: `${heightRange.from}px` }, { height: `${heightRange.to}px` }],
+          timing,
+        ),
+      );
     const synchronized: Animation[] = [...parts];
     retired.current.forEach((flight, copy) => {
       if (flight) return;

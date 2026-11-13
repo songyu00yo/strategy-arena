@@ -293,7 +293,183 @@ async function openSupplement(page: Page) {
   return dialog;
 }
 
+type HeightClick = { at: number; height: number; expanded: boolean; trusted: boolean };
+
+function measuredHeightTransition(
+  frames: Awaited<ReturnType<typeof endProbe>>,
+  click: HeightClick,
+  target: number,
+  until: number,
+) {
+  const samples = frames.flatMap((frame) => {
+    const paper = frame.dialogs.find((dialog) => dialog.name === "调整条件");
+    return paper && frame.at >= click.at && frame.at < until
+      ? [{ at: frame.at, height: paper.height }]
+      : [];
+  });
+  const moving = samples.filter(
+    (sample, index) => index > 0 && Math.abs(sample.height - samples[index - 1].height) > 0.1,
+  );
+  const reached = samples.find((sample) => Math.abs(sample.height - target) <= 1);
+  expect(moving.length).toBeGreaterThan(0);
+  const motionSpanMs = moving.at(-1)!.at - moving[0].at;
+  const intermediate = samples.filter(
+    (sample) =>
+      sample.height > Math.min(click.height, target) + 2 &&
+      sample.height < Math.max(click.height, target) - 2,
+  );
+  expect(click.trusted).toBe(true);
+  expect(Math.abs(target - click.height)).toBeGreaterThan(100);
+  expect(intermediate.length).toBeGreaterThan(0);
+  expect(reached).toBeDefined();
+  expect(reached!.at - click.at).toBeGreaterThanOrEqual(80);
+  expect(motionSpanMs).toBeGreaterThanOrEqual(140);
+  expect(
+    samples.some((sample) => sample.at - click.at < 80 && Math.abs(sample.height - target) <= 1),
+  ).toBe(false);
+  return { samples, motionSpanMs, firstAtTargetMs: reached!.at - click.at };
+}
+
 for (const width of [1440, 390]) {
+  test(`normal settled height: long complete editing expands, reverses and preserves scroll at ${width}px`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const unexpected = await openDetail(page);
+    const supplement = await openSupplement(page);
+    await expect(supplement).not.toHaveAttribute("data-overlay-motion-active", "true");
+    await supplement.getByRole("button", { name: "调整条件", exact: true }).click();
+    const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+    await expect(conditions).not.toHaveAttribute("data-overlay-motion-active", "true");
+    // The regression concerns an idle paper, after its handoff and initial field animation finish.
+    await page.waitForTimeout(250);
+    const toggle = conditions.getByRole("button", { name: /^完整编辑/ });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const collapsed = (await conditions.boundingBox())!.height;
+    const originalPageScroll = await page.evaluate(() => scrollY);
+    await page.evaluate(() => {
+      const clicks: HeightClick[] = [];
+      const record = (event: MouseEvent) => {
+        const button = (event.target as Element | null)?.closest("button");
+        if (!button?.textContent?.trim().startsWith("完整编辑")) return;
+        clicks.push({
+          at: performance.now(),
+          height: button.closest("dialog")!.getBoundingClientRect().height,
+          expanded: button.getAttribute("aria-expanded") === "true",
+          trusted: event.isTrusted,
+        });
+      };
+      document.addEventListener("click", record, true);
+      Object.assign(window, { __conditionHeightProbe: { clicks, record } });
+    });
+    await beginProbe(page);
+    await toggle.click();
+    await page.waitForTimeout(300);
+    const expanded = (await conditions.boundingBox())!.height;
+    const complete = conditions.locator('[data-disclosure-region][id$="-complete"]');
+    await expect
+      .poll(() => complete.evaluate((node) => (node as HTMLElement).style.height))
+      .toBe("auto");
+    await expect(toggle).toBeFocused();
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(250);
+    expect(Math.abs((await conditions.boundingBox())!.height - collapsed)).toBeLessThanOrEqual(1);
+
+    await toggle.click();
+    await page.waitForFunction(
+      ({ collapsed, expanded }) => {
+        const paper = document.querySelector<HTMLElement>("dialog[open].modal-side");
+        const height = paper?.getBoundingClientRect().height ?? 0;
+        return height > collapsed + (expanded - collapsed) * 0.25 && height < expanded - 16;
+      },
+      { collapsed, expanded },
+    );
+    // Native keyboard activation interrupts the moving control without waiting for stable geometry.
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => {
+      const region = document.querySelector<HTMLElement>(
+        '[data-disclosure-region][id$="-complete"]',
+      );
+      return region?.getAnimations().some((animation) => {
+        const time = animation.currentTime;
+        const duration = Number(animation.effect?.getTiming().duration);
+        return typeof time === "number" && time > 16 && time < duration * 0.5;
+      });
+    });
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(300);
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(Math.abs((await conditions.boundingBox())!.height - expanded)).toBeLessThanOrEqual(1);
+    const frames = await endProbe(page);
+    const clicks = await page.evaluate(() => {
+      const state = (
+        window as unknown as {
+          __conditionHeightProbe: { clicks: HeightClick[]; record: (event: MouseEvent) => void };
+        }
+      ).__conditionHeightProbe;
+      document.removeEventListener("click", state.record, true);
+      return state.clicks;
+    });
+    await info.attach("settled-height-original-geometry", {
+      body: JSON.stringify({ collapsed, expanded, clicks, originalPageScroll, frames }),
+      contentType: "application/json",
+    });
+    expect(clicks).toHaveLength(5);
+    expect(clicks.map((click) => click.expanded)).toEqual([false, true, false, true, false]);
+    const opening = measuredHeightTransition(frames, clicks[0], expanded, clicks[1].at);
+    const closing = measuredHeightTransition(frames, clicks[1], collapsed, clicks[2].at);
+    for (const click of clicks.slice(3)) {
+      expect(click.height).toBeGreaterThan(collapsed + 2);
+      expect(click.height).toBeLessThan(expanded - 2);
+    }
+    expect(
+      frames.every((frame) =>
+        frame.dialogs.every(
+          (paper) => paper.height >= collapsed - 1 && paper.height <= expanded + 1,
+        ),
+      ),
+    ).toBe(true);
+    expect(frames.every((frame) => frame.scrollY === originalPageScroll)).toBe(true);
+    await expect
+      .poll(() => complete.evaluate((node) => (node as HTMLElement).style.height))
+      .toBe("auto");
+    const body = conditions.locator(".condition-editor-body");
+    const scrollRange = await body.evaluate((node) => node.scrollHeight - node.clientHeight);
+    expect(scrollRange).toBeGreaterThan(100);
+    const bodyBox = (await body.boundingBox())!;
+    await page.mouse.move(bodyBox.x + bodyBox.width - 2, bodyBox.y + bodyBox.height / 2);
+    await page.mouse.wheel(0, 5000);
+    await expect
+      .poll(async () => Math.abs(scrollRange - (await body.evaluate((node) => node.scrollTop))))
+      .toBeLessThanOrEqual(1);
+    const previousScroll = await body.evaluate((node) => node.scrollTop);
+    await info.attach("native-scroll-range-and-offset", {
+      body: JSON.stringify({ scrollRange, scrollTop: previousScroll }),
+      contentType: "application/json",
+    });
+    await conditions.getByRole("button", { name: /^补充说明/ }).click();
+    await page.waitForTimeout(260);
+    expect(
+      Math.abs((await body.evaluate((node) => node.scrollTop)) - previousScroll),
+    ).toBeLessThanOrEqual(1);
+    expect(await page.evaluate(() => scrollY)).toBe(originalPageScroll);
+    await info.attach("settled-visible-height-and-reversal", {
+      body: JSON.stringify({
+        collapsed,
+        expanded,
+        clicks,
+        opening,
+        closing,
+        previousScroll,
+      }),
+      contentType: "application/json",
+    });
+    await conditions.getByRole("button", { name: "取消", exact: true }).click();
+    await expectPaperReleased(page);
+    expect(await page.evaluate(() => scrollY)).toBe(originalPageScroll);
+    expect(unexpected).toEqual([]);
+  });
+
   test(`normal interruption: Escape closes a moving handoff and releases its source at ${width}px`, async ({
     page,
   }, info) => {

@@ -131,6 +131,7 @@ export function ArenaConsole({
   const railState = useRef({ hover: false, keyboard: false, pressing: false, touch: false });
   const railRelease = useRef<ReturnType<typeof createMotionScope> | null>(null);
   const seekIntent = useRef({ epoch: 0, pending: 0 });
+  const pausedOnPointerDown = useRef(false);
   const [stageTransition, setStageTransition] = useState<StageTextTransition | null>(null);
   const renderedEpoch = seekIntent.current.epoch;
   const paused = useMotionPaused();
@@ -895,7 +896,7 @@ export function ArenaConsole({
             directed={directed}
             seeking={seeking}
             textTransition={stageTransition}
-            camera={playing || seeking}
+            camera={playing || seeking || playbackPaused}
             lead={lead}
             located={selectedAttack}
             reviewing={reviewing}
@@ -956,7 +957,24 @@ export function ArenaConsole({
                 >
                   ←
                 </button>
-                <button type="button" disabled={beats.length < 2} onClick={replay}>
+                <button
+                  type="button"
+                  disabled={beats.length < 2}
+                  onPointerDown={(event) => {
+                    if (!event.isPrimary || event.button !== 0 || event.currentTarget.disabled)
+                      return;
+                    pausedOnPointerDown.current = playing;
+                    if (playing) replay();
+                  }}
+                  onPointerCancel={() => {
+                    pausedOnPointerDown.current = false;
+                  }}
+                  onClick={(event) => {
+                    const alreadyPaused = pausedOnPointerDown.current && event.detail !== 0;
+                    pausedOnPointerDown.current = false;
+                    if (!alreadyPaused) replay();
+                  }}
+                >
                   {playing ? "暂停放映" : index < last || playbackPaused ? "继续放映" : "从头放映"}
                 </button>
                 <button

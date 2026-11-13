@@ -45,11 +45,17 @@ export function replayPaperTiming(
   opening: boolean,
   closing: boolean,
   speed = 1,
+  openingWindow = 1,
 ) {
   const rate = Math.max(1, speed);
   const foldStart = Math.max(frame.duration - PAPER_MOTION.fold * rate, frame.duration * 0.4);
   return {
-    open: frame.settled || !opening ? 1 : easeOut(frame.elapsed / (PAPER_MOTION.open * rate)),
+    open:
+      frame.settled || !opening
+        ? 1
+        : easeOut(
+            frame.elapsed / Math.min(PAPER_MOTION.open * rate, frame.duration * openingWindow),
+          ),
     fold:
       frame.settled || !closing
         ? 0
@@ -343,6 +349,16 @@ export function ReplayQuestionScene({
       node: HTMLElement;
       content: HTMLElement[];
     } | null = null;
+    let nativeReturn: {
+      scope: ReturnType<typeof createMotionScope>;
+      transform: Animation;
+      parts: Animation[];
+      duration: number;
+      start: number;
+      rate: number;
+      started: boolean;
+      running: boolean;
+    } | null = null;
     const clearTransfer = () => {
       transfer?.scope.dispose();
       transfer = null;
@@ -352,31 +368,62 @@ export function ReplayQuestionScene({
     const clickTimes = userConfirmation ? [0.4] : replayChoiceTimes(choices.length);
 
     const localSignature = (frame: PlaybackFrame) => {
+      if (action.kind === "questions") return activeStepId;
+      if (action.kind !== "answer") return `${activeStepId}:${frame.progress >= 0.8}`;
       const shown = targetQuestion
         ? replayAnswerAt(targetQuestion, currentAnswer, frame.progress)
         : null;
-      return JSON.stringify([
-        activeStepId,
-        shown?.state,
-        shown?.value,
-        frame.progress >= 0.2,
-        frame.progress >= 0.45,
-        frame.progress >= 0.75,
-        frame.progress >= 0.8,
-      ]);
+      return JSON.stringify([activeStepId, shown?.state, shown?.value, frame.progress >= 0.75]);
     };
 
     const paint = (frame: PlaybackFrame) => {
       if (!cache || frame.stepId !== activeStepId) return;
-      const paper = replayPaperTiming(frame, opening, closing, returnRate);
+      const paper = replayPaperTiming(
+        frame,
+        opening,
+        closing,
+        returnRate,
+        action.kind === "summary_submit" ? 0.25 : 1,
+      );
       const open = reducedMotion ? 1 : paper.open;
       const handoff = action.kind === "handoff";
-      const fold =
+      let fold =
         reducedMotion || !cache.destination || frame.settled
           ? 0
           : handoff
             ? bounded(frame.elapsed / frame.duration)
             : paper.fold;
+      if (frame.settled && nativeReturn) {
+        nativeReturn.scope.dispose();
+        nativeReturn = null;
+      }
+      if (nativeReturn && fold > 0 && !nativeReturn.started && frame.running && !motionPaused()) {
+        const offset = Math.max(0, frame.elapsed - nativeReturn.start);
+        for (const part of nativeReturn.parts) {
+          part.playbackRate = playbackRate.current;
+          part.currentTime = offset;
+          part.play();
+        }
+        nativeReturn.started = true;
+        nativeReturn.running = true;
+        nativeReturn.rate = playbackRate.current;
+      }
+      if (nativeReturn?.started) {
+        const running = frame.running && !motionPaused();
+        if (nativeReturn.rate !== playbackRate.current) {
+          for (const part of nativeReturn.parts) part.updatePlaybackRate(playbackRate.current);
+          nativeReturn.rate = playbackRate.current;
+        }
+        if (nativeReturn.running !== running) {
+          for (const part of nativeReturn.parts) {
+            if (!running) part.pause();
+            else if (part.playState !== "finished") part.play();
+          }
+          nativeReturn.running = running;
+        }
+        const time = nativeReturn.transform.currentTime;
+        if (typeof time === "number") fold = bounded(time / nativeReturn.duration);
+      }
       const destination = cache.destination;
       const source = cache.source;
       const returning = destination
@@ -451,13 +498,18 @@ export function ReplayQuestionScene({
       const carry = cache.transferOutside && replayHandoffActive(frame, fold, true);
 
       // Geometry was read during refresh. All frame writes follow the completed calculation.
-      element.style.transform =
-        "translate3d(" + x + "px," + y + "px,0) scale(" + scaleX + "," + scaleY + ")";
+      const nativeMoving = nativeReturn?.started === true;
+      if (!nativeMoving)
+        element.style.transform =
+          "translate3d(" + x + "px," + y + "px,0) scale(" + scaleX + "," + scaleY + ")";
       if (cache.shadow) cache.shadow.style.opacity = String(1 - open);
-      for (const content of cache.content)
-        content.style.opacity = String(returning?.contentOpacity ?? 1);
+      if (!nativeMoving)
+        for (const content of cache.content)
+          content.style.opacity = String(returning?.contentOpacity ?? 1);
       element.dataset.replayOpened = String(open >= 1);
       element.dataset.replayFold = fold.toFixed(3);
+      element.dataset.replayPhase =
+        frame.progress < 0.2 ? "show" : frame.progress < 0.8 ? "answer" : "settle";
       viewport.dataset.scrollPhase = scrollPhase;
       viewport.dataset.scrollTarget = scroll.toFixed(3);
       if (pressedControl !== control) resetControl();
@@ -469,7 +521,7 @@ export function ReplayQuestionScene({
         );
         control.dataset.replayPressed = "true";
       }
-      if (transfer) {
+      if (transfer && !nativeMoving) {
         const node = transfer.node;
         node.style.opacity = document.hidden
           ? "0"
@@ -481,7 +533,8 @@ export function ReplayQuestionScene({
         for (const content of transfer.content)
           content.style.opacity = String(returning?.contentOpacity ?? 1);
       }
-      element.style.opacity = carry ? "0" : String(returning?.opacity ?? 1);
+      if (!nativeMoving || transfer)
+        element.style.opacity = carry ? "0" : String(returning?.opacity ?? 1);
       element.dataset.stripOwner = carry ? "body" : "local";
       if (frame.running && Math.abs(scroll - cache.scroll) > 0.1) {
         viewport.scrollTop = scroll;
@@ -501,7 +554,7 @@ export function ReplayQuestionScene({
 
     const measure = () => {
       scheduled = 0;
-      if (disposed) return;
+      if (disposed || nativeReturn?.started) return;
       const page = layoutPoint(element);
       const bodyPage = layoutPoint(viewport);
       const width = element.offsetWidth;
@@ -647,6 +700,65 @@ export function ReplayQuestionScene({
         const carriedBody = node.querySelector<HTMLElement>(".replay-question-body");
         if (carriedBody) carriedBody.scrollTop = viewport.scrollTop;
       }
+      // Prepare idle compositor effects while the sheet is still being read. Once started,
+      // the browser owns the entire return, including frames where React is busy.
+      if (closing && destination && !reducedMotion && !frameRef.current.settled) {
+        nativeReturn?.scope.dispose();
+        const scope = createMotionScope();
+        const start =
+          action.kind === "handoff"
+            ? 0
+            : Math.max(duration - PAPER_MOTION.fold * Math.max(1, returnRate), duration * 0.4);
+        const span = duration - start;
+        const returnOrigin =
+          action.kind === "handoff" && source
+            ? { x: source.x, y: source.y, scale: Math.min(0.85, source.scaleX * 0.8) }
+            : undefined;
+        const from = replayReturnPose(0, destination, returnOrigin);
+        const to = replayReturnPose(1, destination, returnOrigin);
+        const easing = "cubic-bezier(.3333333333,0,.6666666667,1)";
+        const transformFrames = [from, to].map((pose) => ({
+          transform: `translate3d(${pose.x}px,${pose.y}px,0) scale(${pose.scale})`,
+        }));
+        const options: KeyframeAnimationOptions = { duration: span, fill: "both" };
+        const transform = scope.prepare(transfer?.node ?? element, transformFrames, {
+          ...options,
+          easing,
+        });
+        const parts = [transform];
+        if (transfer) parts.push(scope.prepare(element, transformFrames, { ...options, easing }));
+        parts.push(
+          scope.prepare(
+            transfer?.node ?? element,
+            [{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.62, easing }, { opacity: 0 }],
+            options,
+          ),
+        );
+        for (const content of [...cache.content, ...(transfer?.content ?? [])]) {
+          parts.push(
+            scope.prepare(
+              content,
+              [
+                { opacity: 1, offset: 0 },
+                { opacity: 1, offset: 0.15, easing },
+                { opacity: 0, offset: 0.7 },
+                { opacity: 0, offset: 1 },
+              ],
+              options,
+            ),
+          );
+        }
+        nativeReturn = {
+          scope,
+          transform,
+          parts,
+          duration: span,
+          start,
+          rate: playbackRate.current,
+          started: false,
+          running: false,
+        };
+      }
       origin ??= headingPoint;
       // Attribution is observable in browser evidence, including every fallback.
       element.dataset.flipOrigin = source
@@ -736,6 +848,7 @@ export function ReplayQuestionScene({
       observer.disconnect();
       unsubscribe?.();
       unsubscribePause();
+      nativeReturn?.scope.dispose();
       clearTransfer();
       resetControl();
       viewport.removeEventListener("scroll", scrollBody);

@@ -138,7 +138,7 @@ describe("physical time and semantic playback progress", () => {
     const samples = Array.from({ length: 1001 }, (_, elapsed) =>
       playbackProgressAt(elapsed, 1000, 0.4),
     );
-    expect(new Set(samples.map(playbackStateKey)).size).toBe(9);
+    expect(new Set(samples.map(playbackStateKey)).size).toBe(3);
     for (let index = 1; index < samples.length; index++) {
       expect(samples[index]).toBeGreaterThan(samples[index - 1]);
     }
@@ -176,7 +176,7 @@ describe("continuous playback timeline", () => {
     });
     for (let sample = 0; sample <= 840; sample++) timeline.publish(frame(sample / 840));
     expect(samples).toHaveLength(841);
-    expect(states.size).toBe(9);
+    expect(states.size).toBe(3);
     expect(timeline.read().progress).toBe(1);
     unsubscribe();
     timeline.publish(frame(0));

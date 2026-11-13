@@ -1,12 +1,60 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/** Explicit WAAPI doubles. These exercise ownership without a browser compositor. */
+class SyntheticKeyframeEffect {
+  constructor(
+    readonly target: Element,
+    readonly frames: Keyframe[],
+    readonly options: KeyframeAnimationOptions,
+  ) {}
+}
+
+class SyntheticAnimation extends EventTarget {
+  playState: AnimationPlayState = "idle";
+  currentTime: number | null = null;
+  onfinish: (() => void) | null = null;
+
+  constructor(
+    readonly effect: SyntheticKeyframeEffect,
+    readonly timeline: object,
+  ) {
+    super();
+  }
+
+  play = vi.fn(() => {
+    this.playState = "running";
+    this.currentTime ??= 0;
+  });
+
+  pause = vi.fn(() => {
+    this.playState = "paused";
+    this.currentTime ??= 0;
+  });
+
+  cancel = vi.fn(() => {
+    this.playState = "idle";
+    this.currentTime = null;
+    this.dispatchEvent(new Event("cancel"));
+  });
+}
+
 describe("console motion ownership and interruption", () => {
-  let page: EventTarget & { hidden: boolean; querySelectorAll: ReturnType<typeof vi.fn> };
+  let page: EventTarget & {
+    hidden: boolean;
+    timeline: object;
+    querySelectorAll: ReturnType<typeof vi.fn>;
+  };
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    page = Object.assign(new EventTarget(), { hidden: false, querySelectorAll: vi.fn(() => []) });
+    page = Object.assign(new EventTarget(), {
+      hidden: false,
+      timeline: {},
+      querySelectorAll: vi.fn(() => []),
+    });
     vi.stubGlobal("document", page);
+    vi.stubGlobal("KeyframeEffect", SyntheticKeyframeEffect);
+    vi.stubGlobal("Animation", SyntheticAnimation);
     vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) =>
       setTimeout(() => run(performance.now()), 16),
     );
@@ -15,6 +63,109 @@ describe("console motion ownership and interruption", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("prepares an idle native effect without starting it or assigning a visual time", async () => {
+    const motion = await import("../src/components/console/motion-runtime");
+    const scope = motion.createMotionScope();
+    const animate = vi.fn();
+    const node = { animate } as unknown as Element;
+    const frames = [
+      { transform: "none", opacity: 1 },
+      { transform: "translateX(200px)", opacity: 0 },
+    ];
+    const options = { duration: 300, fill: "both" } as const;
+    const animation = scope.prepare(node, frames, options) as unknown as SyntheticAnimation;
+    expect(animation.effect).toBeInstanceOf(SyntheticKeyframeEffect);
+    expect(animation.effect.target).toBe(node);
+    expect(animation.effect.frames).toBe(frames);
+    expect(animation.effect.options).toBe(options);
+    expect(animation.timeline).toBe(page.timeline);
+    expect(animation.playState).toBe("idle");
+    expect(animation.currentTime).toBeNull();
+    expect(animation.play).not.toHaveBeenCalled();
+    expect(animation.pause).not.toHaveBeenCalled();
+    expect(animate).not.toHaveBeenCalled();
+    scope.dispose();
+    expect(animation.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps prepared idle effects untouched across held creation, hold release and timer arming", async () => {
+    const motion = await import("../src/components/console/motion-runtime");
+    const release = motion.acquireMotionHold();
+    const scope = motion.createMotionScope();
+    const animation = scope.prepare({} as Element, [], {
+      duration: 300,
+    }) as unknown as SyntheticAnimation;
+    scope.later(100, vi.fn());
+    release();
+    const releaseAgain = motion.acquireMotionHold();
+    releaseAgain();
+    vi.advanceTimersByTime(200);
+    expect(animation.playState).toBe("idle");
+    expect(animation.currentTime).toBeNull();
+    expect(animation.play).not.toHaveBeenCalled();
+    expect(animation.pause).not.toHaveBeenCalled();
+    scope.dispose();
+  });
+
+  it("pauses and resumes a prepared effect after its owner explicitly starts it", async () => {
+    const motion = await import("../src/components/console/motion-runtime");
+    const scope = motion.createMotionScope();
+    const animation = scope.prepare({} as Element, [], {
+      duration: 300,
+    }) as unknown as SyntheticAnimation;
+    animation.play();
+    animation.currentTime = 125;
+    const release = motion.acquireMotionHold();
+    expect(animation.playState).toBe("paused");
+    expect(animation.pause).toHaveBeenCalledOnce();
+    expect(animation.currentTime).toBe(125);
+    release();
+    expect(animation.playState).toBe("running");
+    expect(animation.play).toHaveBeenCalledTimes(2);
+    expect(animation.currentTime).toBe(125);
+    scope.dispose();
+  });
+
+  it("cancels both prepared and started effects on disposal and never revives them on release", async () => {
+    const motion = await import("../src/components/console/motion-runtime");
+    const scope = motion.createMotionScope();
+    const idle = scope.prepare({} as Element, [], { duration: 300 });
+    const running = scope.prepare({} as Element, [], { duration: 300 });
+    running.play();
+    const release = motion.acquireMotionHold();
+    scope.dispose();
+    scope.dispose();
+    release();
+    expect(idle.cancel).toHaveBeenCalledOnce();
+    expect(running.cancel).toHaveBeenCalledOnce();
+    expect(idle.playState).toBe("idle");
+    expect(running.playState).toBe("idle");
+    expect(idle.currentTime).toBeNull();
+    expect(running.currentTime).toBeNull();
+    expect(idle.play).not.toHaveBeenCalled();
+    expect(running.play).toHaveBeenCalledOnce();
+    expect(idle.onfinish).toBeNull();
+    expect(running.onfinish).toBeNull();
+  });
+
+  it("shares finish and cancel cleanup with immediately started animations", async () => {
+    const motion = await import("../src/components/console/motion-runtime");
+    const scope = motion.createMotionScope();
+    const finished = scope.prepare({} as Element, [], { duration: 300 });
+    const filled = scope.prepare({} as Element, [], { duration: 300, fill: "both" });
+    const cancelled = scope.prepare({} as Element, [], { duration: 300 });
+    finished.dispatchEvent(new Event("finish"));
+    filled.dispatchEvent(new Event("finish"));
+    cancelled.cancel();
+    scope.dispose();
+    expect(finished.cancel).not.toHaveBeenCalled();
+    expect(filled.cancel).toHaveBeenCalledOnce();
+    expect(cancelled.cancel).toHaveBeenCalledOnce();
+    const late = scope.prepare({} as Element, [], { duration: 300 });
+    expect(late.cancel).toHaveBeenCalledOnce();
+    expect(late.playState).toBe("idle");
   });
 
   it("keeps independent overlay holds and excludes hidden-tab time", async () => {

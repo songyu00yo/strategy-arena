@@ -94,6 +94,24 @@ export function createMotionScope(origin: MotionOrigin = "story") {
     }
   };
   const unsubscribe = origin === "story" ? subscribeMotionPause(arm) : () => {};
+  const register = (animation: Animation, options: KeyframeAnimationOptions) => {
+    if (disposed) {
+      animation.cancel();
+      return animation;
+    }
+    animations.add(animation);
+    animation.addEventListener(
+      "finish",
+      () => {
+        // Finished fill effects still own a visual pose until their step is disposed.
+        if (options.fill !== "both" && options.fill !== "forwards") animations.delete(animation);
+      },
+      { once: true },
+    );
+    if (paused() && animation.playState !== "idle") animation.pause();
+    animation.addEventListener("cancel", () => animations.delete(animation), { once: true });
+    return animation;
+  };
   return {
     now: clock,
     later(ms: number, run: () => void) {
@@ -106,23 +124,13 @@ export function createMotionScope(origin: MotionOrigin = "story") {
       return node;
     },
     animate(node: Element, frames: Keyframe[], options: KeyframeAnimationOptions) {
-      const animation = node.animate(frames, options);
-      if (disposed) {
-        animation.cancel();
-        return animation;
-      }
-      animations.add(animation);
-      animation.addEventListener(
-        "finish",
-        () => {
-          // Finished fill effects still own a visual pose until their step is disposed.
-          if (options.fill !== "both" && options.fill !== "forwards") animations.delete(animation);
-        },
-        { once: true },
+      return register(node.animate(frames, options), options);
+    },
+    prepare(node: Element, frames: Keyframe[], options: KeyframeAnimationOptions) {
+      return register(
+        new Animation(new KeyframeEffect(node, frames, options), document.timeline),
+        options,
       );
-      if (paused()) animation.pause();
-      animation.addEventListener("cancel", () => animations.delete(animation), { once: true });
-      return animation;
     },
     dispose() {
       if (disposed) return;

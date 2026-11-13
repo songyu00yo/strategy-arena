@@ -38,7 +38,7 @@ export function createPlaybackTimeline(initial: PlaybackFrame) {
 }
 
 /** These boundaries change recorded facts. Motion between them belongs to the timeline. */
-const STATE_BOUNDARIES = [0.15, 0.2, 0.32, 0.45, 0.75, 0.8, 0.94, 1];
+const STATE_BOUNDARIES = [0.8, 1];
 export function playbackStateKey(progress: number) {
   return STATE_BOUNDARIES.filter((at) => progress >= at).length;
 }

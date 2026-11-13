@@ -108,6 +108,7 @@ function RecordedExampleEntry({
   const { title, modelId } = metadata;
   const clarification = version.workflow === "clarification";
   const simulated = metadata.caseType === "simulated_real_model";
+  const [ready, setReady] = useState(false);
   const [paused, setPaused] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -115,22 +116,97 @@ function RecordedExampleEntry({
   const startButton = useRef<HTMLButtonElement>(null);
   const started = useRef(false);
   const remaining = useRef(clarification ? 1600 : 5200);
+  const countdown = useRef<{ stop: () => void } | null>(null);
   const exit = useRef<Animation | null>(null);
   useEffect(() => {
-    const visibility = () => setHidden(document.hidden);
+    if (leaving) return;
+    let visibleFrames = 0;
+    let prepared = false;
+    const loop = createMotionLoop(() => {
+      if (document.readyState !== "complete" || document.hidden) {
+        visibleFrames = 0;
+        return false;
+      }
+      const paper = form.current;
+      if (!paper) return false;
+      const entering = paper
+        .getAnimations()
+        .some(
+          (animation) =>
+            animation instanceof CSSAnimation &&
+            animation.animationName === "recorded-entry-in" &&
+            (animation.pending ||
+              animation.playState === "running" ||
+              animation.playState === "paused"),
+        );
+      if (entering) {
+        visibleFrames = 0;
+        return true;
+      }
+      const box = paper.getBoundingClientRect();
+      const style = getComputedStyle(paper);
+      if (
+        !box.width ||
+        !box.height ||
+        box.bottom <= 0 ||
+        box.top >= innerHeight ||
+        style.visibility !== "visible" ||
+        Number(style.opacity) < 0.99
+      ) {
+        visibleFrames = 0;
+        return false;
+      }
+      // Leave a painted, readable frame after load and the original entrance.
+      if (++visibleFrames < 2) return true;
+      prepared = true;
+      setReady(true);
+      return false;
+    }, "interaction");
+    const wake = () => {
+      if (!prepared) loop.wake();
+    };
+    window.addEventListener("load", wake);
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("scroll", wake, { passive: true });
+    window.addEventListener("resize", wake);
+    return () => {
+      loop.dispose();
+      window.removeEventListener("load", wake);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("scroll", wake);
+      window.removeEventListener("resize", wake);
+    };
+  }, [leaving]);
+  useEffect(() => {
+    const visibility = () => {
+      if (document.hidden) countdown.current?.stop();
+      setHidden(document.hidden);
+    };
     visibility();
     document.addEventListener("visibilitychange", visibility);
     return () => document.removeEventListener("visibilitychange", visibility);
   }, []);
   useEffect(() => {
-    if (paused || hidden || leaving) return;
-    const began = performance.now();
-    const timer = setTimeout(() => startButton.current?.click(), remaining.current);
-    return () => {
-      clearTimeout(timer);
-      remaining.current = Math.max(0, remaining.current - (performance.now() - began));
+    if (!ready || paused || hidden || leaving) return;
+    const scope = createMotionScope("interaction");
+    const began = scope.now();
+    let stopped = false;
+    const active = {
+      stop() {
+        if (stopped) return;
+        stopped = true;
+        scope.dispose();
+        remaining.current = Math.max(0, remaining.current - (scope.now() - began));
+        if (countdown.current === active) countdown.current = null;
+      },
     };
-  }, [paused, hidden, leaving]);
+    countdown.current = active;
+    scope.later(remaining.current, () => {
+      if (document.hidden) active.stop();
+      else startButton.current?.click();
+    });
+    return active.stop;
+  }, [ready, paused, hidden, leaving]);
   useEffect(() => {
     const preference = matchMedia("(prefers-reduced-motion: reduce)");
     const settle = () => {
@@ -142,8 +218,13 @@ function RecordedExampleEntry({
       exit.current?.cancel();
     };
   }, []);
+  const togglePaused = () => {
+    countdown.current?.stop();
+    setPaused((value) => !value);
+  };
   const begin = () => {
     if (started.current) return;
+    countdown.current?.stop();
     started.current = true;
     setLeaving(true);
     if (!form.current || reducedMotion()) return onStart();
@@ -174,7 +255,15 @@ function RecordedExampleEntry({
     <div className="console-shell home recorded-entry-shell">
       <ClickFx />
       <header className="site-header">
-        <Link transitionTypes={["paper-back"]} href="/?examples=open" className="text-button">
+        <Link
+          href="/?examples=open"
+          className="text-button"
+          onNavigate={(event) => {
+            event.preventDefault();
+            // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Native document transitions keep destination controls live.
+            window.location.assign("/?examples=open");
+          }}
+        >
           <ArrowLeft size={16} /> 返回案例
         </Link>
         <span>
@@ -203,7 +292,15 @@ function RecordedExampleEntry({
         >
           <label className="recorded-entry-goal">
             <span>{clarification ? "你想做什么" : "你想解决什么问题？"}</span>
-            <textarea readOnly value={originalGoal} rows={4} onFocus={() => setPaused(true)} />
+            <textarea
+              readOnly
+              value={originalGoal}
+              rows={4}
+              onFocus={() => {
+                countdown.current?.stop();
+                setPaused(true);
+              }}
+            />
           </label>
           <dl className="recorded-entry-fields">
             {fields.map(([label, value], index) => (
@@ -225,7 +322,13 @@ function RecordedExampleEntry({
               type="button"
               className="text-button"
               disabled={leaving}
-              onClick={() => setPaused((value) => !value)}
+              onPointerDown={(event) => {
+                if (event.isPrimary && event.button === 0 && !event.currentTarget.disabled)
+                  togglePaused();
+              }}
+              onClick={(event) => {
+                if (event.detail === 0) togglePaused();
+              }}
             >
               {paused ? <Play size={14} /> : <Pause size={14} />}
               {paused ? "继续自动开始" : "暂停自动开始"}
@@ -233,7 +336,7 @@ function RecordedExampleEntry({
             <button
               ref={startButton}
               type="submit"
-              className={`primary-button recorded-entry-start ${paused || hidden ? "is-paused" : ""}`}
+              className={`primary-button recorded-entry-start ${!ready || paused || hidden ? "is-paused" : ""}`}
               data-compact={clarification || undefined}
               disabled={leaving}
             >
@@ -303,7 +406,14 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
     return (
       <main className="recorded-missing">
         <h1>这份示例没有可回看的版本</h1>
-        <Link transitionTypes={["paper-back"]} href="/">
+        <Link
+          href="/"
+          onNavigate={(event) => {
+            event.preventDefault();
+            // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Native document transitions keep destination controls live.
+            window.location.assign("/");
+          }}
+        >
           返回首页
         </Link>
       </main>
@@ -423,10 +533,14 @@ export function RecordedExampleViewer({ payload }: { payload: RecordedExamplePay
           slate={
             <>
               <Link
-                transitionTypes={["paper-back"]}
                 className="recorded-back"
                 href="/?examples=open"
                 aria-label="返回示例"
+                onNavigate={(event) => {
+                  event.preventDefault();
+                  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Native document transitions keep destination controls live.
+                  window.location.assign("/?examples=open");
+                }}
               >
                 <ArrowLeft size={17} />
               </Link>

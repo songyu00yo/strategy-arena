@@ -1,4 +1,3 @@
-import { ViewTransition } from "react";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { notFound } from "next/navigation";
@@ -34,15 +33,5 @@ export default async function RecordedExamplePage({
     "utf8",
   );
   const payload = JSON.parse(source) as RecordedExamplePayload;
-  return (
-    <ViewTransition
-      name="paper-page"
-      default="none"
-      share="paper-page"
-      enter="paper-page-enter"
-      exit="paper-page-exit"
-    >
-      <RecordedExampleViewer payload={payload} />
-    </ViewTransition>
-  );
+  return <RecordedExampleViewer payload={payload} />;
 }

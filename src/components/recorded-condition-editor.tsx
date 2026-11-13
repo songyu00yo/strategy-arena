@@ -14,7 +14,7 @@ import { stepContext } from "@/lib/step-context";
 import { routeModel } from "@/lib/model-routing";
 import type { Health } from "./use-arena";
 import { ConditionEditor } from "./condition-editor";
-import { Modal } from "./modal";
+import { isDialogBackdropClick, Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
 import { prepareRecordedIntake } from "./recorded-intake";
 import "./recorded-challenge.css";
@@ -78,7 +78,7 @@ export function RecordedConditionEditor({
     const cancel = (event: Event) => {
       if (
         event.type === "cancel" ||
-        event.target === dialog ||
+        (event instanceof MouseEvent && isDialogBackdropClick(event, dialog)) ||
         (event.target instanceof Element && event.target.closest('button[aria-label="关闭弹窗"]'))
       )
         cancelRequests();

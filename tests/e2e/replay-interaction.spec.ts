@@ -190,7 +190,7 @@ test("explicit synthetic fixture: a later successful repair cannot hide the fail
   await expect(page.locator(".c-root")).toBeVisible();
   await go(page, 1);
   await expect(page.locator('.c-time [data-round="1"]')).toHaveAttribute("data-state", "failed");
-  await expect(page.locator(".c-board-B .c-board-body")).toContainText(failed.summary);
+  await expect(page.locator('[data-board="B"] > .c-board-body')).toContainText(failed.summary);
   await go(page, 2);
   await expect(page.locator('.c-time [data-round="1"]')).toHaveAttribute("data-state", "passed");
 });

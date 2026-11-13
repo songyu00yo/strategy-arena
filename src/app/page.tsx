@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  ViewTransition,
-  startTransition,
-} from "react";
+import { useCallback, useEffect, useId, useRef, useState, startTransition } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -1192,20 +1184,7 @@ function Page() {
   );
 }
 
-export default function PageWithMotion() {
-  return (
-    <ViewTransition
-      name="paper-page"
-      default="none"
-      share="paper-page"
-      update={{ "arena-seek": "none", default: "paper-page" }}
-      enter="paper-page-enter"
-      exit="paper-page-exit"
-    >
-      <Page />
-    </ViewTransition>
-  );
-}
+export default Page;
 
 function CornerIcon() {
   return <span aria-hidden="true">↳</span>;

@@ -87,7 +87,11 @@ function ExampleGallery() {
             <Link
               key={example.slug}
               href={`/examples/${example.slug}`}
-              transitionTypes={["paper-forward"]}
+              onNavigate={(event) => {
+                event.preventDefault();
+                // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Native document transitions keep destination controls live.
+                window.location.assign(`/examples/${example.slug}`);
+              }}
               className="recorded-example-card"
               aria-label={`回看${example.direction}需求梳理示例：${example.title}`}
             >

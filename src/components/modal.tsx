@@ -4,6 +4,21 @@ import { X } from "lucide-react";
 import { useOverlayMotion, type OverlayMotionHandle } from "./overlay-motion";
 import "./overlay-motion.css";
 
+/** Native dialogs target their paper padding and their backdrop at the dialog itself. */
+export function isDialogBackdropClick(
+  event: Pick<MouseEvent, "target" | "clientX" | "clientY">,
+  dialog: HTMLElement | null | undefined,
+) {
+  if (!dialog || event.target !== dialog) return false;
+  const box = dialog.getBoundingClientRect();
+  return (
+    event.clientX < box.left ||
+    event.clientX > box.right ||
+    event.clientY < box.top ||
+    event.clientY > box.bottom
+  );
+}
+
 export function Modal({
   title,
   children,
@@ -38,15 +53,7 @@ export function Modal({
         close();
       }}
       onClick={(e) => {
-        if (e.target !== panel.current) return;
-        const box = panel.current.getBoundingClientRect();
-        if (
-          e.clientX < box.left ||
-          e.clientX > box.right ||
-          e.clientY < box.top ||
-          e.clientY > box.bottom
-        )
-          close();
+        if (isDialogBackdropClick(e, panel.current)) close();
       }}
     >
       <div className="modal-heading">

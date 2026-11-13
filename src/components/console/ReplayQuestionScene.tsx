@@ -293,6 +293,7 @@ export function ReplayQuestionScene({
   const refresh = useRef<() => void>(() => {});
   const pointerPosition = useRef<Point | null>(null);
   const followed = useRef({ id: "", playing: false, seeking: false, speed });
+  const followScroll = useRef<(() => void) | null>(null);
   const playbackRate = useRef(speed);
   useLayoutEffect(() => {
     playbackRate.current = speed;
@@ -898,10 +899,16 @@ export function ReplayQuestionScene({
     const shouldFollow =
       previous.id !== action.id ||
       (!previous.playing && activePlaying) ||
+      (previous.playing && !playing) ||
       (!previous.seeking && seeking) ||
       (activePlaying && previous.speed !== speed);
     followed.current = { id: action.id, playing: activePlaying, seeking, speed };
-    if (!shouldFollow || action.kind === "handoff") return;
+    if (!shouldFollow) return;
+    if (action.kind === "handoff") {
+      followScroll.current?.();
+      followScroll.current = null;
+      return;
+    }
     const element = root.current;
     if (!element) return;
     const page = layoutPoint(element);
@@ -909,13 +916,19 @@ export function ReplayQuestionScene({
     const top = (viewport?.offsetTop ?? 0) + 12;
     const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight) - 12;
     if (page.y - scrollY < top || page.y - scrollY + element.offsetHeight > bottom) {
-      return moveScroll(
+      // Navigation uses the interaction clock. Pausing the recorded answer keeps
+      // its pose while the window finishes bringing that paper into reading view.
+      followScroll.current = moveScroll(
         window,
         { left: scrollX, top: Math.max(0, page.y - top) },
         { duration: 240, onFinish: () => refresh.current() },
       );
+    } else {
+      followScroll.current?.();
+      followScroll.current = null;
     }
   }, [action.id, action.kind, playing, seeking, speed]);
+  useLayoutEffect(() => () => followScroll.current?.(), []);
 
   const rows = questions.length
     ? questions.map((question) => ({

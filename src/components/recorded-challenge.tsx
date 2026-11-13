@@ -14,7 +14,7 @@ import type { StepContext } from "@/lib/step-context";
 import { routeModel } from "@/lib/model-routing";
 import type { Health } from "./use-arena";
 import { DisclosureMotion } from "./disclosure-motion";
-import { Modal } from "./modal";
+import { isDialogBackdropClick, Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
 import { ModelSelector } from "./model-selector";
 import type { SupplementDraft } from "./supplement-draft";
@@ -138,10 +138,10 @@ export function RecordedChallenge({
       .finally(() => controllers.current.delete(controller));
     // Cancel immediately when the shared modal begins closing, before its exit animation ends.
     const dialog = form.current?.closest("dialog");
-    const onClick = (event: Event) => {
+    const onClick = (event: MouseEvent) => {
       const node = event.target;
       if (
-        node === dialog ||
+        isDialogBackdropClick(event, dialog) ||
         (node instanceof Element && node.closest('button[aria-label="关闭弹窗"]'))
       )
         cancelRequests();

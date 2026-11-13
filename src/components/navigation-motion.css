@@ -2,20 +2,15 @@
 @view-transition {
   navigation: auto;
 }
-::view-transition-group(root),
-::view-transition-group(.paper-page) {
+::view-transition-group(root) {
   animation-duration: 360ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.3, 1);
 }
-::view-transition-old(root),
-::view-transition-old(.paper-page),
-::view-transition-old(.paper-page-exit) {
+::view-transition-old(root) {
   animation: paper-route-leave 220ms cubic-bezier(0.4, 0, 0.2, 1) both;
   mix-blend-mode: normal;
 }
-::view-transition-new(root),
-::view-transition-new(.paper-page),
-::view-transition-new(.paper-page-enter) {
+::view-transition-new(root) {
   animation: paper-route-enter 360ms cubic-bezier(0.22, 1, 0.3, 1) both;
   mix-blend-mode: normal;
 }

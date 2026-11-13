@@ -19,6 +19,77 @@ export function disclosureTargetHeight(inner: HTMLElement) {
   return Math.max(0, height);
 }
 
+/** Capture current text and field values without adding another live control surface. */
+export function capturePaperContents(source: HTMLElement) {
+  const copy = source.cloneNode(true) as HTMLElement;
+  const controls = [
+    ...source.querySelectorAll<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement
+    >("input, textarea, select, button"),
+  ];
+  copy
+    .querySelectorAll<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement
+    >("input, textarea, select, button")
+    .forEach((field, index) => {
+      const original = controls[index];
+      field.value = original.value;
+      if (field instanceof HTMLInputElement && original instanceof HTMLInputElement)
+        field.checked = original.checked;
+      const appearance = getComputedStyle(original);
+      for (const property of ["opacity", "color", "background-color", "border-color", "box-shadow"])
+        field.style.setProperty(property, appearance.getPropertyValue(property));
+      field.disabled = true;
+    });
+  copy.removeAttribute("id");
+  copy.querySelectorAll("[id]").forEach((child) => child.removeAttribute("id"));
+  const sourceNodes = [source, ...source.querySelectorAll<HTMLElement>("*")];
+  const copiedNodes = [copy, ...copy.querySelectorAll<HTMLElement>("*")];
+  const scrollPositions = sourceNodes.map((node, index) => ({
+    copy: copiedNodes[index],
+    top: node.scrollTop,
+    left: node.scrollLeft,
+  }));
+  const animated = new Set(
+    source
+      .getAnimations({ subtree: true })
+      .map((animation) => (animation.effect as KeyframeEffect | null)?.target),
+  );
+  sourceNodes.forEach((source, index) => {
+    const captured = copiedNodes[index];
+    captured.removeAttribute("data-board");
+    captured.removeAttribute("data-claim");
+    captured.removeAttribute("data-step-source");
+    captured.removeAttribute("data-disclosure-motion-active");
+    captured.removeAttribute("data-disclosure-target-height");
+    captured.style.transition = "none";
+    if (!animated.has(source)) return;
+    const style = getComputedStyle(source);
+    captured.style.animation = "none";
+    for (const property of [
+      "transform",
+      "translate",
+      "scale",
+      "rotate",
+      "opacity",
+      "height",
+      "width",
+    ])
+      captured.style.setProperty(property, style.getPropertyValue(property));
+  });
+  copy.inert = true;
+  copy.setAttribute("aria-hidden", "true");
+  copy.style.pointerEvents = "none";
+  return {
+    copy,
+    restoreScroll: () =>
+      scrollPositions.forEach(({ copy, top, left }) => {
+        if (top) copy.scrollTop = top;
+        if (left) copy.scrollLeft = left;
+      }),
+  };
+}
+
 /** A reversible disclosure: its own interaction clock is independent of story playback. */
 export function DisclosureMotion({
   open,
@@ -188,63 +259,9 @@ function TransitionContents({
     if (!reducedMotion()) {
       const pose = getComputedStyle(el);
       host.style.height = `${host.getBoundingClientRect().height}px`;
-      const copy = el.cloneNode(true) as HTMLElement;
-      const controls = [
-        ...el.querySelectorAll<
-          HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement
-        >("input, textarea, select, button"),
-      ];
-      copy
-        .querySelectorAll<
-          HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement
-        >("input, textarea, select, button")
-        .forEach((field, index) => {
-          const original = controls[index];
-          field.value = original.value;
-          if (field instanceof HTMLInputElement && original instanceof HTMLInputElement)
-            field.checked = original.checked;
-          const appearance = getComputedStyle(original);
-          for (const property of [
-            "opacity",
-            "color",
-            "background-color",
-            "border-color",
-            "box-shadow",
-          ])
-            field.style.setProperty(property, appearance.getPropertyValue(property));
-          field.disabled = true;
-        });
-      copy.removeAttribute("id");
-      copy.querySelectorAll("[id]").forEach((child) => child.removeAttribute("id"));
-      const sourceNodes = [el, ...el.querySelectorAll<HTMLElement>("*")];
-      const copiedNodes = [copy, ...copy.querySelectorAll<HTMLElement>("*")];
-      const animated = new Set(
-        el
-          .getAnimations({ subtree: true })
-          .map((animation) => (animation.effect as KeyframeEffect | null)?.target),
-      );
-      sourceNodes.forEach((source, index) => {
-        const captured = copiedNodes[index];
-        captured.removeAttribute("data-disclosure-motion-active");
-        captured.removeAttribute("data-disclosure-target-height");
-        captured.style.transition = "none";
-        if (!animated.has(source)) return;
-        const style = getComputedStyle(source);
-        captured.style.animation = "none";
-        for (const property of [
-          "transform",
-          "translate",
-          "scale",
-          "rotate",
-          "opacity",
-          "height",
-          "width",
-        ])
-          captured.style.setProperty(property, style.getPropertyValue(property));
-      });
-      copy.inert = true;
+      const captured = capturePaperContents(el);
+      const copy = captured.copy;
       copy.dataset.disclosureRetiring = "true";
-      copy.setAttribute("aria-hidden", "true");
       Object.assign(copy.style, {
         position: "absolute",
         inset: "0 auto auto 0",
@@ -257,10 +274,7 @@ function TransitionContents({
         zIndex: "1",
       });
       host.appendChild(copy);
-      sourceNodes.forEach((source, index) => {
-        if (source.scrollTop) copiedNodes[index].scrollTop = source.scrollTop;
-        if (source.scrollLeft) copiedNodes[index].scrollLeft = source.scrollLeft;
-      });
+      captured.restoreScroll();
       retired.current.set(copy, null);
     }
     setShown(requested.current);

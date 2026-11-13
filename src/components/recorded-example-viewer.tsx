@@ -207,7 +207,7 @@ function RecordedExampleEntry({
           </label>
           <dl className="recorded-entry-fields">
             {fields.map(([label, value], index) => (
-              <div key={label} style={{ animationDelay: `${180 + index * 100}ms` }}>
+              <div key={label} style={{ animationDelay: `${40 + Math.min(index, 5) * 20}ms` }}>
                 <dt>{label}</dt>
                 <dd>{value}</dd>
               </div>

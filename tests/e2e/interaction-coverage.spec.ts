@@ -414,9 +414,11 @@ async function fixtureApis(
     }
     if (path === `/api/intakes/${draft.id}` && method === "PATCH") {
       const body = request.postDataJSON();
+      const { summary, ...fields } = body;
       draft = {
         ...draft,
-        ...body,
+        ...fields,
+        ...(summary ? { challenge: summary.challenge, assumptions: summary.assumptions } : {}),
         revision: draft.revision + 1,
         answers: body.answers
           ? body.answers.map((answer: { questionId: string }) => ({
@@ -677,7 +679,12 @@ for (const width of [1440, 390]) {
       await runtimeCheckpoint(page, testInfo, `source-${filename.replaceAll(".", "-")}`);
     }
     await activate(page.getByRole("button", { name: "收起材料预览", exact: true }));
-    await page.getByLabel("选择参考材料", { exact: true }).setInputFiles({
+    await activate(page.getByRole("button", { name: "上传参考材料", exact: true }));
+    await runtimeCheckpoint(page, testInfo, "attachment-file-picker-expanded");
+    const choosingFile = page.waitForEvent("filechooser");
+    await activate(page.getByRole("button", { name: "选择文件", exact: true }));
+    const fileChooser = await choosingFile;
+    await fileChooser.setFiles({
       name: "explicit-material.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("EXPLICIT TEST FILE"),
@@ -857,6 +864,220 @@ for (const width of [1440, 390]) {
 }
 
 for (const width of [1440, 390]) {
+  test(`explicit UI fixture: legacy demo form disclosures and reversible options inventory at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const api = await fixtureApis(page);
+    await page.route("**/api/health", (route) =>
+      route.fulfill({
+        json: {
+          status: "ok",
+          version: "demo",
+          model: api.snapshot.model,
+          accessGranted: true,
+          requiresAccessCode: false,
+        },
+      }),
+    );
+    await page.goto("/");
+    const form = page.locator("form.challenge-form");
+    await expect(form).toBeVisible();
+    await form
+      .getByRole("textbox", { name: "你的目标、备选方案或想法", exact: true })
+      .fill("【测试替身】仅登记兼容演示表单，不提交模型。");
+    await activate(form.getByRole("button", { name: "内容创作", exact: true }));
+    await activate(form.getByRole("button", { name: /说说你现在的处境/ }));
+    await form
+      .getByRole("textbox", { name: /^你现在的处境/ })
+      .fill("【测试替身】材料仅用于表单交互。");
+    await runtimeCheckpoint(page, testInfo, "legacy-situation-expanded");
+    await activate(form.getByRole("button", { name: /说说你现在的处境/ }));
+    await expect(form.getByRole("textbox", { name: /^你现在的处境/ })).toBeHidden();
+    await activate(form.getByRole("button", { name: "添加备选方案、材料或预算", exact: false }));
+    await activate(form.getByRole("button", { name: "添加一个选项", exact: true }));
+    await activate(form.getByRole("button", { name: "添加一个选项", exact: true }));
+    await form.getByRole("textbox", { name: "备选方案 1", exact: true }).fill("【测试替身】选项甲");
+    await form.getByRole("textbox", { name: "备选方案 2", exact: true }).fill("【测试替身】选项乙");
+    await activate(form.getByRole("button", { name: "删除备选方案 1", exact: true }));
+    await expect(form.getByRole("textbox", { name: "备选方案 1", exact: true })).toHaveValue(
+      "【测试替身】选项乙",
+    );
+    await form.getByRole("textbox", { name: /^参考材料/ }).fill("【测试替身】原始材料。");
+    await form.getByRole("spinbutton", { name: /^预算上限/ }).fill("100");
+    await form.getByRole("spinbutton", { name: /^可投入时间/ }).fill("2");
+    await runtimeCheckpoint(page, testInfo, "legacy-details-expanded");
+    await activate(form.getByRole("button", { name: "收起补充信息", exact: false }));
+    await activate(form.getByRole("button", { name: "添加备选方案、材料或预算", exact: false }));
+    await expect(form.getByRole("textbox", { name: "备选方案 1", exact: true })).toHaveValue(
+      "【测试替身】选项乙",
+    );
+    await runtimeCheckpoint(page, testInfo, "legacy-details-reopened");
+    expect(api.calls.filter((call) => call.startsWith("POST"))).toEqual([]);
+    expect(api.unexpected).toEqual([]);
+  });
+
+  test(`explicit UI fixture: history pagination and actual saved record openings inventory at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const draft = fixtureIntake({ goal: "【测试替身】可恢复的分页草稿" });
+    const api = await fixtureApis(page, draft);
+    const arenaHistory = {
+      id: api.snapshot.id,
+      goal: "【测试替身】分页中的原讨论",
+      createdAt: api.snapshot.createdAt,
+      activeVersionId: api.snapshot.activeVersionId,
+      status: "completed",
+      stage: "judge",
+      versionCount: 1,
+    };
+    const paginatedReads: string[] = [];
+    for (const kind of ["arenas", "intakes"] as const) {
+      await page.route(new RegExp(`/api/${kind}\\?`), (route) => {
+        const cursor = new URL(route.request().url()).searchParams.get("cursor");
+        paginatedReads.push(`${kind}:${cursor ?? "first"}`);
+        const item =
+          kind === "arenas"
+            ? arenaHistory
+            : { id: draft.id, goal: draft.goal, updatedAt: draft.updatedAt, status: draft.status };
+        return route.fulfill({
+          json: cursor
+            ? { items: [item], nextCursor: null }
+            : { items: [], nextCursor: `explicit-${kind}-cursor` },
+        });
+      });
+    }
+    await page.goto("/");
+    await activate(page.getByRole("button", { name: "我的历史", exact: true }));
+    const history = page.getByRole("dialog", { name: "我的历史与恢复码", exact: true });
+    await activate(history.getByRole("button", { name: "更多讨论", exact: true }));
+    await activate(history.getByRole("button", { name: "更多草稿", exact: true }));
+    await expect(history.getByRole("button", { name: "更多讨论", exact: true })).toHaveCount(0);
+    await expect(history.getByRole("button", { name: "更多草稿", exact: true })).toHaveCount(0);
+    await runtimeCheckpoint(page, testInfo, "history-pages-loaded");
+    await activate(history.getByRole("button", { name: /【测试替身】分页中的原讨论/ }));
+    await expect(history).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "查看路线 A 的详情", exact: true }),
+    ).toBeVisible();
+    await runtimeCheckpoint(page, testInfo, "history-arena-opened");
+    await activate(page.getByRole("button", { name: "我的历史", exact: true }));
+    await activate(history.getByRole("button", { name: "更多草稿", exact: true }));
+    await activate(history.getByRole("button", { name: /【测试替身】可恢复的分页草稿/ }));
+    await expect(history).toBeHidden();
+    await expect(page.getByRole("textbox", { name: "你想做什么", exact: true })).toHaveValue(
+      draft.goal,
+    );
+    await runtimeCheckpoint(page, testInfo, "history-intake-opened");
+    expect(paginatedReads).toContain("arenas:explicit-arenas-cursor");
+    expect(paginatedReads).toContain("intakes:explicit-intakes-cursor");
+    expect(api.calls).toContain(`GET /api/arenas/${api.snapshot.id}`);
+    expect(api.calls).toContain(`GET /api/intakes/${draft.id}`);
+    expect(api.unexpected).toEqual([]);
+  });
+
+  test(`explicit UI fixture: summary conflict choices and failed save retry inventory at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    let draft = fixtureIntake({
+      status: "summary",
+      revision: 5,
+      challenge: { ...structuredClone(fixtureChallenge), constraints: "【测试替身】服务器限制。" },
+      assumptions: ["【测试替身】保留的假设。"],
+    });
+    const api = await fixtureApis(page, draft);
+    let rejectNextSave = false;
+    let failedSaves = 0;
+    let successfulSaves = 0;
+    await page.route(`**/api/intakes/${draft.id}`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        if (rejectNextSave) {
+          rejectNextSave = false;
+          failedSaves++;
+          return route.fulfill({
+            status: 503,
+            json: { error: "明确测试替身：摘要保存暂时失败。" },
+          });
+        }
+        const { summary } = route.request().postDataJSON();
+        expect(summary).toBeDefined();
+        successfulSaves++;
+        draft = { ...draft, revision: draft.revision + 1, ...summary };
+      }
+      return route.fulfill({ json: draft });
+    });
+    const local = {
+      draftId: draft.id,
+      baseRevision: 4,
+      challenge: { ...draft.challenge!, constraints: "【测试替身】本机待恢复限制。" },
+      assumptions: draft.assumptions,
+      updatedAt: "2026-11-14T00:00:00.000Z",
+    };
+    await page.addInitScript(
+      ({ id, journal }) => {
+        localStorage.setItem("strategy-arena:intake-id", id);
+        if (!sessionStorage.getItem("explicit-summary-conflict-seeded")) {
+          sessionStorage.setItem("explicit-summary-conflict-seeded", "true");
+          sessionStorage.setItem("strategy-arena:intake-tab-summary", JSON.stringify(journal));
+        }
+      },
+      { id: draft.id, journal: local },
+    );
+    await page.goto("/");
+    const conflict = page.getByRole("alert").filter({ hasText: "本机还有尚未保存的摘要修改。" });
+    await expect(conflict).toBeVisible();
+    await expect(page.getByLabel("摘要修改差异", { exact: true })).toContainText(
+      "【测试替身】本机待恢复限制。",
+    );
+    await expect(page.getByLabel("摘要修改差异", { exact: true })).toContainText(
+      "【测试替身】服务器限制。",
+    );
+    await runtimeCheckpoint(page, testInfo, "summary-conflict-compared");
+    await activate(page.getByRole("button", { name: "恢复本机未保存的修改", exact: true }));
+    await expect(
+      page.getByRole("status").filter({ hasText: "摘要草稿已保存，提交后确认" }),
+    ).toBeVisible();
+    expect(draft.challenge?.constraints).toBe(local.challenge.constraints);
+    await runtimeCheckpoint(page, testInfo, "summary-local-restored");
+    draft = {
+      ...draft,
+      revision: draft.revision + 1,
+      challenge: { ...draft.challenge!, constraints: "【测试替身】更新后的服务器限制。" },
+    };
+    await page.evaluate(
+      (journal) => {
+        sessionStorage.setItem("strategy-arena:intake-tab-summary", JSON.stringify(journal));
+      },
+      { ...local, baseRevision: draft.revision - 1 },
+    );
+    await page.reload();
+    await expect(conflict).toBeVisible();
+    await activate(page.getByRole("button", { name: "保留服务器版本", exact: true }));
+    await expect(conflict).toBeHidden();
+    const constraints = page.getByRole("textbox", { name: "必须满足的限制", exact: true });
+    await expect(constraints).toHaveValue("【测试替身】更新后的服务器限制。");
+    await runtimeCheckpoint(page, testInfo, "summary-server-retained");
+    rejectNextSave = true;
+    await constraints.fill("【测试替身】失败后仍需保留的编辑。");
+    await expect(page.getByRole("button", { name: "重试保存摘要", exact: true })).toBeVisible();
+    await expect(constraints).toHaveValue("【测试替身】失败后仍需保留的编辑。");
+    await runtimeCheckpoint(page, testInfo, "summary-save-failed");
+    await activate(page.getByRole("button", { name: "重试保存摘要", exact: true }));
+    await expect(
+      page.getByRole("status").filter({ hasText: "摘要草稿已保存，提交后确认" }),
+    ).toBeVisible();
+    expect(draft.challenge?.constraints).toBe("【测试替身】失败后仍需保留的编辑。");
+    expect(failedSaves).toBe(1);
+    expect(successfulSaves).toBe(2);
+    await runtimeCheckpoint(page, testInfo, "summary-save-retried");
+    expect(api.unexpected).toEqual([]);
+  });
+
   test(`explicit UI fixture: live conditions, editable ideas and submit failure inventory at ${width}px`, async ({
     page,
   }, testInfo) => {
@@ -880,6 +1101,8 @@ for (const width of [1440, 390]) {
       await runtimeCheckpoint(page, testInfo, `condition-${button}`);
     }
     await activate(dialog.getByRole("button", { name: /^完整编辑/ }));
+    await activate(dialog.getByRole("button", { name: "添加一个选项", exact: true }));
+    await activate(dialog.getByRole("button", { name: "添加一个选项", exact: true }));
     await dialog
       .getByRole("textbox", { name: "备选方案 1", exact: true })
       .fill("【测试替身】已有想法一");
@@ -896,9 +1119,9 @@ for (const width of [1440, 390]) {
     await activate(dialog.getByRole("button", { name: "展开改动", exact: true }));
     await runtimeCheckpoint(page, testInfo, "condition-changes");
     await activate(dialog.getByRole("button", { name: "按新条件重新推演", exact: true }));
-    await expect(
-      page.getByText("明确测试替身：提交暂时失败，输入继续保留。", { exact: false }),
-    ).toBeVisible();
+    await expect(dialog.getByRole("alert")).toContainText(
+      "明确测试替身：提交暂时失败，输入继续保留。",
+    );
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("textbox", { name: "备选方案 1", exact: true })).toHaveValue(
       "【测试替身】已有想法一",
@@ -918,7 +1141,10 @@ for (const width of [1440, 390]) {
     await page.goto(`/?arena=${api.snapshot.id}`);
     await activate(page.getByRole("button", { name: "查看路线 A 的详情", exact: true }));
     const detail = page.getByRole("dialog", { name: /^第 \d+ 步 ·/ });
-    await activate(detail.getByRole("button", { name: "质疑这条判断", exact: true }).first());
+    await expect(detail).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(detail).toBeHidden();
+    await activate(page.locator('[data-board="A"] button[title="质疑这条判断"]').first());
     const challenge = page.getByRole("dialog", { name: "质疑这条判断", exact: true });
     await expect(challenge).toBeVisible();
     await runtimeCheckpoint(page, testInfo, "claim-challenge");
@@ -929,7 +1155,7 @@ for (const width of [1440, 390]) {
     await runtimeCheckpoint(page, testInfo, "claim-original");
     await page.keyboard.press("Escape");
     await expect(challenge).toBeHidden();
-    await activate(page.getByRole("button", { name: "模型与版本", exact: true }));
+    await activate(page.getByRole("button", { name: "真实模型推演", exact: true }));
     const info = page.getByRole("dialog", { name: "模型与运行信息", exact: true });
     await expect(info).toBeVisible();
     await runtimeCheckpoint(page, testInfo, "model-information");

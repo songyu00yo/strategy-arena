@@ -1198,7 +1198,7 @@ export default function PageWithMotion() {
       name="paper-page"
       default="none"
       share="paper-page"
-      update="paper-page"
+      update={{ "arena-seek": "none", default: "paper-page" }}
       enter="paper-page-enter"
       exit="paper-page-exit"
     >

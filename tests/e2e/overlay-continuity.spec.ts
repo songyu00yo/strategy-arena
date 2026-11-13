@@ -1,8 +1,9 @@
 // Saved real-model simulation record with explicit health fixtures. No model providers are contacted.
 import { expect, test, type Page } from "@playwright/test";
 
-async function openDetail(page: Page) {
+async function openDetail(page: Page, keyboard = false) {
   const unexpected: string[] = [];
+  page.on("pageerror", (error) => unexpected.push("page error: " + error.message));
   await page.route("**/api/**", (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -23,7 +24,11 @@ async function openDetail(page: Page) {
   await page.getByRole("button", { name: "开始回看", exact: true }).click();
   await page.getByRole("button", { name: "第 1 步", exact: true }).click();
   await expect(page.locator(".initial-paper-transfer")).toHaveCount(0);
-  await page.getByRole("button", { name: "查看第 1 步", exact: true }).click();
+  const opener = page.getByRole("button", { name: "查看第 1 步", exact: true });
+  if (keyboard) {
+    await opener.focus();
+    await page.keyboard.press("Enter");
+  } else await opener.click();
   await expect(page.locator(".c-pull")).toBeVisible();
   return unexpected;
 }
@@ -172,4 +177,421 @@ for (const width of [1440, 390]) {
       expect(unexpected).toEqual([]);
     });
   }
+}
+
+// These are normal running animations. The only supplied data is the health fixture
+// above and the explicitly labelled text entered into the form.
+async function waitForMovingPaper(page: Page, name: string, start = 0.15, end = 0.65) {
+  await page.waitForFunction(
+    ({ name, start, end }) => {
+      const dialog = [...document.querySelectorAll<HTMLElement>("dialog[open]")].find(
+        (node) => node.querySelector(".modal-heading h2")?.textContent?.trim() === name,
+      );
+      const animation = dialog
+        ?.getAnimations()
+        .find(
+          (entry) =>
+            entry.effect instanceof KeyframeEffect &&
+            entry.effect.getKeyframes().some((frame) => typeof frame.transform === "string"),
+        );
+      const time = animation?.currentTime;
+      const duration = Number(animation?.effect?.getTiming().duration);
+      if (
+        !dialog ||
+        !animation ||
+        dialog.dataset.overlayMotionPhase !== "handoff" ||
+        animation.pending ||
+        typeof time !== "number" ||
+        time < duration * start ||
+        time > duration * end
+      )
+        return false;
+      Object.assign(window, {
+        __movingPaper: {
+          dialog,
+          animation,
+          parts: dialog.getAnimations({ subtree: true }),
+          time,
+          duration,
+        },
+      });
+      return true;
+    },
+    { name, start, end },
+  );
+}
+
+async function closedPaperState(page: Page) {
+  return page.evaluate(() => {
+    const probe = (
+      window as unknown as {
+        __movingPaper?: { time: number; duration: number; parts: Animation[] };
+      }
+    ).__movingPaper;
+    return {
+      interruptedAt: probe?.time,
+      duration: probe?.duration,
+      oldEffectsCancelled: probe?.parts.every(
+        (part) => part.playState === "idle" && part.currentTime === null,
+      ),
+      held: document.querySelector(".c-root")?.classList.contains("held"),
+      overflow: document.body.style.overflow,
+      snapshots: document.querySelectorAll(".overlay-handoff-snapshot").length,
+      pulled: document.querySelectorAll("[data-step-source].pulled, [data-step-source].past-gap")
+        .length,
+    };
+  });
+}
+
+async function expectPaperReleased(page: Page) {
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
+  await expect(page.locator(".overlay-handoff-snapshot")).toHaveCount(0);
+  await expect(page.locator(".c-root")).not.toHaveClass(/held/);
+  await expect(page.locator("[data-step-source].pulled, [data-step-source].past-gap")).toHaveCount(
+    0,
+  );
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("");
+}
+
+async function openSupplement(page: Page) {
+  await page.waitForTimeout(380);
+  await page.locator(".c-pull").getByRole("button", { name: "补充或质疑", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "补充这一步", exact: true });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+for (const width of [1440, 390]) {
+  test(`normal interruption: Escape closes a moving handoff and releases its source at ${width}px`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const unexpected = await openDetail(page);
+    const supplement = await openSupplement(page);
+    await beginProbe(page);
+    await waitForMovingPaper(page, "补充这一步", 0.4, 0.64);
+    const snapshotBefore = await supplement
+      .locator(".overlay-handoff-snapshot")
+      .evaluate((node) => Number(getComputedStyle(node).opacity));
+    expect(snapshotBefore).toBeLessThanOrEqual(0.01);
+    await page.keyboard.press("Escape");
+    const snapshotClosing = await supplement
+      .locator(".overlay-handoff-snapshot")
+      .evaluate((node) => Number(getComputedStyle(node).opacity));
+    expect(snapshotClosing).toBeLessThanOrEqual(0.01);
+    await expectPaperReleased(page);
+    const frames = await endProbe(page);
+    const state = await closedPaperState(page);
+    expect(state.interruptedAt).toBeGreaterThan(0);
+    expect(state.interruptedAt!).toBeLessThan(state.duration!);
+    expect(state.oldEffectsCancelled).toBe(true);
+    expect(frames.some((frame) => frame.dialogs.some((dialog) => dialog.phase === "closing"))).toBe(
+      true,
+    );
+    const lastPaper = frames.findLastIndex((frame) =>
+      frame.dialogs.some((dialog) => dialog.opacity > 0.02),
+    );
+    expect(
+      frames
+        .slice(0, lastPaper + 1)
+        .every((frame) => frame.held && frame.dialogs.some((dialog) => dialog.opacity > 0)),
+    ).toBe(true);
+    await info.attach("escape-interrupted-handoff", {
+      body: JSON.stringify({ state, snapshotBefore, snapshotClosing, frames }),
+      contentType: "application/json",
+    });
+    expect(unexpected).toEqual([]);
+  });
+
+  test(`normal interruption: a real click retargets an unfinished handoff at ${width}px`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const unexpected = await openDetail(page);
+    const supplement = await openSupplement(page);
+    await beginProbe(page);
+    await waitForMovingPaper(page, "补充这一步", 0.42, 0.68);
+    await page.evaluate(() => {
+      const probe = (
+        window as unknown as {
+          __movingPaper: { dialog: HTMLElement; animation: Animation; duration: number };
+        }
+      ).__movingPaper;
+      const button = [...probe.dialog.querySelectorAll("button")].find(
+        (node) => node.textContent?.trim() === "调整条件",
+      )!;
+      const record = (event: MouseEvent) => {
+        if ((event.target as Element | null)?.closest("button") !== button) return;
+        Object.assign(window, {
+          __retargetClick: {
+            trusted: event.isTrusted,
+            time: Number(probe.animation.currentTime),
+            duration: probe.duration,
+            phase: probe.dialog.dataset.overlayMotionPhase,
+          },
+        });
+        document.removeEventListener("click", record, true);
+      };
+      document.addEventListener("click", record, true);
+    });
+    // Direct mouse coordinates avoid Playwright waiting for a deliberately moving button to settle.
+    const box = await supplement
+      .getByRole("button", { name: "调整条件", exact: true })
+      .boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+    await expect(conditions).toBeVisible();
+    const click = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __retargetClick: { trusted: boolean; time: number; duration: number; phase: string };
+          }
+        ).__retargetClick,
+    );
+    expect(click.trusted).toBe(true);
+    expect(click.phase).toBe("handoff");
+    expect(click.time).toBeGreaterThan(0);
+    expect(click.time).toBeLessThan(click.duration);
+    await expect(conditions).not.toHaveAttribute("data-overlay-motion-active", "true");
+    const frames = await endProbe(page);
+    expect(
+      frames.every((frame) => frame.held && frame.dialogs.some((dialog) => dialog.opacity > 0)),
+    ).toBe(true);
+    const state = await closedPaperState(page);
+    expect(state.oldEffectsCancelled).toBe(true);
+    await info.attach("real-click-retarget", {
+      body: JSON.stringify({ click, frames }),
+      contentType: "application/json",
+    });
+    await conditions.getByRole("button", { name: "取消", exact: true }).click();
+    await expectPaperReleased(page);
+    expect(unexpected).toEqual([]);
+  });
+
+  test(`normal layout: viewport and expanded content resize one moving paper at ${width}px`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const unexpected = await openDetail(page);
+    const supplement = await openSupplement(page);
+    await waitForMovingPaper(page, "补充这一步", 0.4, 0.6);
+    const snapshotBeforeResize = await supplement
+      .locator(".overlay-handoff-snapshot")
+      .evaluate((node) => Number(getComputedStyle(node).opacity));
+    expect(snapshotBeforeResize).toBeLessThanOrEqual(0.01);
+    // Passive instrumentation records the interrupted native transform before cancel.
+    // It leaves the browser clock and animation behavior intact.
+    await page.evaluate(() => {
+      const probe = (
+        window as unknown as {
+          __movingPaper: { dialog: HTMLElement; animation: Animation; duration: number };
+        }
+      ).__movingPaper;
+      const element = probe.dialog;
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+      const box = element.getBoundingClientRect();
+      const old = {
+        left: box.left - matrix.m41,
+        top: box.top - matrix.m42,
+        width: element.offsetWidth,
+        height: element.offsetHeight,
+      };
+      const originalCancel = probe.animation.cancel;
+      probe.animation.cancel = function () {
+        const pose = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+        Object.assign(window, {
+          __resizeStart: {
+            time: Number(this.currentTime),
+            duration: probe.duration,
+            expected: {
+              x: old.left + pose.m41,
+              y: old.top + pose.m42,
+              width: old.width * pose.m11,
+              height: old.height * pose.m22,
+            },
+          },
+        });
+        originalCancel.call(this);
+      };
+      window.addEventListener(
+        "resize",
+        () => {
+          const box = element.getBoundingClientRect();
+          Object.assign(window, {
+            __synchronousResize: {
+              phase: element.dataset.overlayMotionPhase,
+              originalState: probe.animation.playState,
+              snapshotOpacity: element.querySelector(".overlay-handoff-snapshot")
+                ? Number(
+                    getComputedStyle(element.querySelector(".overlay-handoff-snapshot")!).opacity,
+                  )
+                : 0,
+              box: { x: box.x, y: box.y, width: box.width, height: box.height },
+            },
+          });
+        },
+        { once: true },
+      );
+    });
+    await beginProbe(page);
+    await page.setViewportSize({
+      width: width === 390 ? 430 : 1280,
+      height: width === 390 ? 780 : 760,
+    });
+    await page.waitForFunction(() => {
+      const dialog = document.querySelector<HTMLElement>("dialog[open].overlay-motion");
+      if (dialog?.dataset.overlayMotionPhase !== "resizing") return false;
+      const animation = dialog
+        .getAnimations()
+        .find(
+          (entry) =>
+            entry.effect instanceof KeyframeEffect &&
+            entry.effect.getKeyframes().some((frame) => typeof frame.transform === "string"),
+        );
+      if (!animation || !(animation.effect instanceof KeyframeEffect)) return false;
+      const first = new DOMMatrixReadOnly(String(animation.effect.getKeyframes()[0].transform));
+      const current = new DOMMatrixReadOnly(getComputedStyle(dialog).transform);
+      const box = dialog.getBoundingClientRect();
+      Object.assign(window, {
+        __resizeDestination: {
+          from: {
+            x: box.left - current.m41 + first.m41,
+            y: box.top - current.m42 + first.m42,
+            width: dialog.offsetWidth * first.m11,
+            height: dialog.offsetHeight * first.m22,
+          },
+        },
+      });
+      return true;
+    });
+    const redirect = await page.evaluate(() => ({
+      old: (
+        window as unknown as {
+          __resizeStart: {
+            time: number;
+            duration: number;
+            expected: { x: number; y: number; width: number; height: number };
+          };
+        }
+      ).__resizeStart,
+      next: (
+        window as unknown as {
+          __resizeDestination: { from: { x: number; y: number; width: number; height: number } };
+        }
+      ).__resizeDestination,
+    }));
+    const synchronous = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __synchronousResize: {
+              phase: string;
+              originalState: string;
+              snapshotOpacity: number;
+              box: { x: number; y: number; width: number; height: number };
+            };
+          }
+        ).__synchronousResize,
+    );
+    expect(synchronous.phase).toBe("resizing");
+    expect(synchronous.originalState).toBe("idle");
+    expect(synchronous.snapshotOpacity).toBeLessThanOrEqual(0.01);
+    expect(redirect.old.time).toBeGreaterThan(0);
+    expect(redirect.old.time).toBeLessThan(redirect.old.duration);
+    for (const key of ["x", "y", "width", "height"] as const) {
+      expect(Math.abs(redirect.old.expected[key] - redirect.next.from[key])).toBeLessThanOrEqual(1);
+      expect(Math.abs(redirect.old.expected[key] - synchronous.box[key])).toBeLessThanOrEqual(1);
+    }
+    await expect(supplement).not.toHaveAttribute("data-overlay-motion-active", "true");
+    await supplement.getByRole("button", { name: "调整条件", exact: true }).click();
+    const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+    await expect(conditions).not.toHaveAttribute("data-overlay-motion-active", "true");
+    await conditions.getByRole("button", { name: /完整编辑/ }).click();
+    await expect(conditions.getByRole("textbox", { name: "目标", exact: true })).toBeVisible();
+    await page.waitForTimeout(280);
+    const frames = await endProbe(page);
+    expect(
+      frames.every((frame) => frame.held && frame.dialogs.some((dialog) => dialog.opacity > 0)),
+    ).toBe(true);
+    const fit = await conditions.boundingBox();
+    expect(fit).not.toBeNull();
+    const viewport = page.viewportSize()!;
+    expect(fit!.x).toBeGreaterThanOrEqual(0);
+    expect(fit!.y).toBeGreaterThanOrEqual(0);
+    expect(fit!.x + fit!.width).toBeLessThanOrEqual(viewport.width + 1);
+    expect(fit!.y + fit!.height).toBeLessThanOrEqual(viewport.height + 1);
+    await info.attach("native-viewport-and-content-redirect", {
+      body: JSON.stringify({ redirect, synchronous, snapshotBeforeResize, fit, frames }),
+      contentType: "application/json",
+    });
+    await page.keyboard.press("Escape");
+    await expectPaperReleased(page);
+    expect(unexpected).toEqual([]);
+  });
+
+  test(`normal keyboard: handoff focus returns to the original usable opener at ${width}px`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const unexpected = await openDetail(page, true);
+    await page.waitForTimeout(380);
+    const action = page.locator(".c-pull").getByRole("button", { name: "补充或质疑", exact: true });
+    await action.focus();
+    await page.keyboard.press("Enter");
+    const supplement = page.getByRole("dialog", { name: "补充这一步", exact: true });
+    await expect(
+      supplement.getByRole("textbox", { name: "你想补充或询问什么？", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expectPaperReleased(page);
+    const opener = page.getByRole("button", { name: "查看第 1 步", exact: true });
+    await expect(opener).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".c-pull")).toBeVisible();
+    const focus = await page.evaluate(() => ({
+      tag: document.activeElement?.tagName,
+      label: document.activeElement?.getAttribute("aria-label"),
+    }));
+    await info.attach("keyboard-focus-after-reopen", {
+      body: JSON.stringify(focus),
+      contentType: "application/json",
+    });
+    await page.keyboard.press("Escape");
+    await expectPaperReleased(page);
+    expect(unexpected).toEqual([]);
+  });
+
+  test(`normal cleanup: an old handoff cannot retire a newly reopened source at ${width}px`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    const unexpected = await openDetail(page);
+    const source = page.locator('[data-step-source="0"]');
+    await openSupplement(page);
+    await expect(source).toHaveClass(/pulled/);
+    await page.keyboard.press("Escape");
+    await expectPaperReleased(page);
+    await page.getByRole("button", { name: "查看第 1 步", exact: true }).click();
+    await expect(page.locator(".c-pull")).toBeVisible();
+    await expect(source).toHaveClass(/pulled/);
+    await page.waitForTimeout(1700);
+    await expect(source).toHaveClass(/pulled/);
+    await expect(page.locator(".c-root")).toHaveClass(/held/);
+    const state = await page.evaluate(() => ({
+      open: document.querySelectorAll("dialog[open]").length,
+      snapshots: document.querySelectorAll(".overlay-handoff-snapshot").length,
+      sourceClass: document.querySelector('[data-step-source="0"]')?.className,
+    }));
+    expect(state.open).toBe(1);
+    expect(state.snapshots).toBe(0);
+    await info.attach("old-source-lease-retirement", {
+      body: JSON.stringify(state),
+      contentType: "application/json",
+    });
+    await page.keyboard.press("Escape");
+    await expectPaperReleased(page);
+    expect(unexpected).toEqual([]);
+  });
 }

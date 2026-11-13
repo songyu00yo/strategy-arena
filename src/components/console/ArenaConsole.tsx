@@ -8,6 +8,8 @@ import {
   useMemo,
   useRef,
   useState,
+  startTransition,
+  addTransitionType,
   type CSSProperties,
 } from "react";
 import {
@@ -26,7 +28,7 @@ import { verdictLabel } from "@/lib/verdict-label";
 import { Chars, reducedMotion, ROUTE_COLOR, Roll } from "./effects";
 import { RecordWall, VerdictFilm } from "./fx";
 import { RouteChart } from "./RouteChart";
-import { RouteStage } from "./RouteStage";
+import { RouteStage, captureStageText, type StageTextTransition } from "./RouteStage";
 import { StepCard } from "./StepCard";
 import { ResultRegion } from "./ResultRegion";
 import { acquireMotionHold, createMotionScope, motionNow, useMotionPaused } from "./motion-runtime";
@@ -123,6 +125,10 @@ export function ArenaConsole({
   const [stepwise, setStepwise] = useState(false);
   const [wholeResult, setWholeResult] = useState(false);
   const [openStep, setOpenStep] = useState<number | null>(null);
+  const [seekRevision, setSeekRevision] = useState(0);
+  const seekIntent = useRef({ epoch: 0, pending: 0 });
+  const [stageTransition, setStageTransition] = useState<StageTextTransition | null>(null);
+  const renderedEpoch = seekIntent.current.epoch;
   const paused = useMotionPaused();
   const nowPanel = useRef<HTMLElement>(null);
   const resultPanel = useRef<HTMLElement>(null);
@@ -151,13 +157,14 @@ export function ArenaConsole({
   const seen = new Set(shown.map((b) => b.id));
   const live = version.status === "running" || version.status === "ready";
   const advanceReplay = useCallback(() => {
+    if (seekIntent.current.pending || renderedEpoch !== seekIntent.current.epoch) return;
     if (index < last) return setCursor(index + 1);
     if (live) return;
     if (current?.replayAction?.kind === "handoff" && !filmDone) return;
     setPlaying(false);
     setMotion(false);
     setCursor(null);
-  }, [index, last, live, current?.replayAction?.kind, filmDone]);
+  }, [index, last, live, current?.replayAction?.kind, filmDone, renderedEpoch]);
   const { progress: replayProgress, timeline: replayTimeline } = usePlaybackProgress({
     stepId: clarification ? (current?.id ?? "") : "",
     duration: playbackDuration(current),
@@ -201,6 +208,7 @@ export function ArenaConsole({
   useEffect(() => {
     if (!startedLive.current || reducedMotion()) return;
     const frame = requestAnimationFrame(() => {
+      if (!startedLive.current || seekIntent.current.pending) return;
       setMotion(true);
       setCursor(0);
       setPlaying(true);
@@ -217,13 +225,14 @@ export function ArenaConsole({
     if (startFromBeginning) setCursor((cursor) => (cursor === -1 ? 0 : cursor));
   }, [startFromBeginning]);
   const endFilm = useCallback(() => {
+    if (seekIntent.current.pending || renderedEpoch !== seekIntent.current.epoch) return;
     setFilmDone(true);
     if (clarification && current?.replayAction?.kind === "handoff") {
       setPlaying(false);
       setMotion(false);
       setCursor(null);
     }
-  }, [clarification, current?.replayAction?.kind]);
+  }, [clarification, current?.replayAction?.kind, renderedEpoch]);
   const endIntro = useCallback(() => {
     setIntro(false);
     try {
@@ -266,8 +275,10 @@ export function ArenaConsole({
     const full = SHOT_MS[stage] + (firstOfStage ? 560 : 0);
     const hold =
       backlog > 0 && startedLive.current ? Math.max(650, full / (1 + backlog * 0.5)) : full;
+    const timerEpoch = seekIntent.current.epoch;
     const timer = setTimeout(
       () => {
+        if (seekIntent.current.pending || timerEpoch !== seekIntent.current.epoch) return;
         if (index < last) return setCursor(live || index + 1 < last ? index + 1 : null);
         if (live) return;
         setPlaying(false);
@@ -300,21 +311,44 @@ export function ArenaConsole({
   const goTo = useCallback(
     (i: number) => {
       const target = Math.max(0, Math.min(i, last));
-      if (last < 0 || target === index) return;
+      if (last < 0 || (target === index && !seekIntent.current.pending)) return;
+      const epoch = ++seekIntent.current.epoch;
+      seekIntent.current.pending = epoch;
+      const capturedStage = captureStageText(consoleRoot.current, epoch);
       startedLive.current = false;
-      setIntro(false);
-      // A seek performs the chosen shot directly; interruptions replace its choreography.
-      setPlaying((p) => p && stepwise && target === index + 1 && target < last);
-      setPlaybackPaused(false);
-      setSeeking(true);
-      setMotion(true);
-      setFilmDone(true);
+      const keepPlaying = playing && stepwise && target === index + 1 && target < last;
+      // The old playback may finish while React prepares the next paper snapshot.
+      // Its captured epoch cannot replace this explicitly requested destination.
+      startTransition(() => {
+        addTransitionType("arena-seek");
+        const latest = () => epoch === seekIntent.current.epoch;
+        setIntro((value) => (latest() ? false : value));
+        setPlaying((value) => (latest() ? keepPlaying : value));
+        setPlaybackPaused((value) => (latest() ? false : value));
+        setSeeking((value) => (latest() ? true : value));
+        setMotion((value) => (latest() ? true : value));
+        setFilmDone((value) => (latest() ? true : value));
+        setCursor((value) => (latest() ? (target >= last ? null : target) : value));
+        setStageTransition((value) => (latest() ? capturedStage : value));
+        setSeekRevision((value) => (latest() ? epoch : value));
+      });
       shotClock.current = { id: "", elapsed: 0 };
-      setCursor(target >= last ? null : target);
     },
-    [last, index, stepwise],
+    [last, index, playing, stepwise],
   );
+  useLayoutEffect(() => {
+    if (!seekRevision || seekIntent.current.pending !== seekRevision) return;
+    // Leave the guard through the current frame, including any old completion callback.
+    const frame = requestAnimationFrame(() => {
+      if (seekIntent.current.pending === seekRevision) seekIntent.current.pending = 0;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [seekRevision]);
   const replay = useCallback(() => {
+    if (seekIntent.current.pending) {
+      seekIntent.current.epoch++;
+      seekIntent.current.pending = 0;
+    }
     startedLive.current = false;
     if (playing) {
       setPlaybackPaused(true);
@@ -782,6 +816,7 @@ export function ArenaConsole({
             playing={playing}
             directed={directed}
             seeking={seeking}
+            textTransition={stageTransition}
             camera={playing || seeking}
             lead={lead}
             located={selectedAttack}

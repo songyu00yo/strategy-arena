@@ -173,7 +173,7 @@
   box-shadow: 0 10px 0 rgb(11 13 16 / 0.035);
   background: var(--card);
   transform-origin: 50% 70%;
-  animation: recorded-entry-in 800ms cubic-bezier(0.19, 1, 0.22, 1) both;
+  animation: recorded-entry-in 360ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
 .recorded-entry-goal {
   display: flex;
@@ -215,7 +215,7 @@
   border-top: 1px solid var(--line);
   font-size: 12px;
   line-height: 1.75;
-  animation: recorded-field-in 650ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation: recorded-field-in 220ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 .recorded-entry-fields dt {
   color: var(--quiet);

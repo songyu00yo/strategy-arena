@@ -1,4 +1,6 @@
 "use client";
+import { moveScroll } from "@/components/motion-scroll";
+import { capturePaperContents } from "@/components/disclosure-motion";
 import { claimLabel, readableClaimText } from "@/components/claim-label";
 import {
   useCallback,
@@ -56,6 +58,47 @@ const spring = (s: Spring, target: number, k: number, c: number, dt: number) => 
 const axis = (): Spring => ({ p: 0, v: 0 });
 const bodyOf = () => ({ x: axis(), y: axis(), z: axis(), r: axis(), rest: true });
 
+export interface StageTextTransition {
+  revision: number;
+  boards: Array<{
+    id: string;
+    height: number;
+    width: number;
+    opacity: string;
+    contents: ReturnType<typeof capturePaperContents>;
+  }>;
+}
+
+/** Read the actual composed paper before a manual seek can replace its text. */
+export function captureStageText(
+  root: HTMLElement | null,
+  revision: number,
+): StageTextTransition | null {
+  if (!root || reducedMotion()) return null;
+  return {
+    revision,
+    boards: [...root.querySelectorAll<HTMLElement>(".c-stage3 [data-board]")].map((board) => {
+      const contents = capturePaperContents(board);
+      const originalText = board.querySelectorAll<HTMLElement>(
+        ":scope > header, :scope > .c-board-body",
+      );
+      const copiedText = contents.copy.querySelectorAll<HTMLElement>(
+        ":scope > header, :scope > .c-board-body",
+      );
+      originalText.forEach((node, index) => {
+        copiedText[index].style.opacity = getComputedStyle(node).opacity;
+      });
+      return {
+        id: board.dataset.board!,
+        height: board.offsetHeight,
+        width: board.offsetWidth,
+        opacity: getComputedStyle(board).opacity,
+        contents,
+      };
+    }),
+  };
+}
+
 /** Three boards in real 3D space. A sprung camera and sprung boards keep every step flowing into the next. */
 export function RouteStage({
   version,
@@ -79,6 +122,7 @@ export function RouteStage({
   replayAnswersVisible,
   playing = false,
   timeline,
+  textTransition,
 }: {
   version: ArenaVersion;
   demo: boolean;
@@ -102,6 +146,7 @@ export function RouteStage({
   replayAnswersVisible?: RecordedAnswer[];
   playing?: boolean;
   timeline?: PlaybackTimeline;
+  textTransition?: StageTextTransition | null;
 }) {
   const reducePreference = useReducedMotion();
   const motionSpeed = seeking ? 1.25 : speed;
@@ -156,8 +201,112 @@ export function RouteStage({
     const body = stage.current?.querySelector<HTMLElement>(
       `[data-board="${current?.agent}"] .c-board-body`,
     );
-    if (body) body.scrollTop = 0;
+    if (body) return moveScroll(body, { top: 0 }, { duration: 220 });
   }, [beatId, current?.agent, foreground]);
+  useLayoutEffect(() => {
+    const host = stage.current;
+    if (!host || !textTransition || reducedMotion()) return;
+    const scope = createMotionScope("interaction");
+    const originals: Array<{ node: HTMLElement; height: string }> = [];
+    const animations: Animation[] = [];
+    const heightMotions: Array<{ board: HTMLElement; animation: Animation; width: number }> = [];
+    let disposed = false;
+    const finish = () => {
+      if (disposed) return;
+      disposed = true;
+      window.removeEventListener("resize", resize);
+      scope.dispose();
+      originals.forEach(({ node, height }) => {
+        node.style.height = height;
+      });
+    };
+    const resize = () => {
+      if (disposed) return;
+      for (const item of heightMotions) {
+        if (Math.abs(item.board.offsetWidth - item.width) < 0.5) continue;
+        item.width = item.board.offsetWidth;
+        const height = item.board.getBoundingClientRect().height;
+        const effect = item.animation.effect as KeyframeEffect;
+        // Read natural wrapping without a stale fixed-height effect, then continue
+        // from the still-visible height within this same pre-paint callback.
+        effect.target = null;
+        const target = item.board.offsetHeight;
+        effect.setKeyframes([{ height: `${height}px` }, { height: `${target}px` }]);
+        effect.updateTiming({ duration: 160 });
+        item.animation.currentTime = 0;
+        effect.target = item.board;
+        item.animation.play();
+      }
+    };
+    for (const captured of textTransition.boards) {
+      const board = host.querySelector<HTMLElement>(`[data-board="${captured.id}"]`);
+      if (!board) continue;
+      const originalHeight = board.style.height;
+      const targetHeight = board.offsetHeight;
+      const text = [
+        ...board.querySelectorAll<HTMLElement>(":scope > header, :scope > .c-board-body"),
+      ];
+      for (const node of [board, ...text]) {
+        node.getAnimations().forEach((animation) => {
+          if (animation instanceof CSSTransition && animation.transitionProperty === "opacity")
+            animation.finish();
+        });
+      }
+      const targetOpacity = getComputedStyle(board).opacity;
+      const targetOpacities = text.map((node) => getComputedStyle(node).opacity);
+      const copy = scope.own(captured.contents.copy);
+      copy.dataset.stageRetiring = "true";
+      copy.querySelector(":scope > .c-outline")?.remove();
+      Object.assign(copy.style, {
+        position: "absolute",
+        inset: "auto",
+        left: `${-board.clientLeft}px`,
+        top: `${-board.clientTop}px`,
+        margin: "0",
+        width: `${captured.width}px`,
+        height: `${captured.height}px`,
+        maxHeight: "none",
+        minHeight: "0",
+        background: "transparent",
+        borderColor: "transparent",
+        boxShadow: "none",
+        transform: "none",
+        translate: "none",
+        rotate: "none",
+        scale: "none",
+        opacity: "1",
+        zIndex: "2",
+        pointerEvents: "none",
+      });
+      board.appendChild(copy);
+      captured.contents.restoreScroll();
+      originals.push({ node: board, height: originalHeight });
+      const timing: KeyframeAnimationOptions = {
+        duration: 220,
+        easing: "cubic-bezier(.22,1,.3,1)",
+        fill: "both",
+      };
+      const heightAnimation = scope.animate(
+        board,
+        [{ height: `${captured.height}px` }, { height: `${targetHeight}px` }],
+        timing,
+      );
+      heightMotions.push({ board, animation: heightAnimation, width: board.offsetWidth });
+      animations.push(
+        heightAnimation,
+        scope.animate(board, [{ opacity: captured.opacity }, { opacity: targetOpacity }], timing),
+        scope.animate(copy, [{ opacity: 1 }, { opacity: 0 }], timing),
+      );
+      text.forEach((node, index) =>
+        animations.push(
+          scope.animate(node, [{ opacity: 0 }, { opacity: targetOpacities[index] }], timing),
+        ),
+      );
+    }
+    window.addEventListener("resize", resize);
+    void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish);
+    return finish;
+  }, [textTransition]);
   useEffect(() => {
     live.current = attacks;
     filming.current = camera;
@@ -775,7 +924,8 @@ export function RouteStage({
     if (!hot) return;
     const claim = stage.current?.querySelector<HTMLElement>(`[data-claim="${hot}"]`);
     const body = claim?.closest<HTMLElement>(".c-board-body");
-    if (claim && body) body.scrollTop = Math.max(0, claim.offsetTop - 28);
+    if (claim && body)
+      return moveScroll(body, { top: Math.max(0, claim.offsetTop - 28) }, { duration: 260 });
   }, [hot]);
 
   // Only an actual opening sequence raises the boards; history and seeks stay readable.

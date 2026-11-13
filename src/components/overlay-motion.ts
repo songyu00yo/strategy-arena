@@ -74,6 +74,15 @@ function shifted(quad: Quad, x: number, y: number): Quad {
   return quad.map((point) => ({ x: point.x + x, y: point.y + y })) as Quad;
 }
 
+const FOCUSABLE =
+  'button:not(:disabled),a[href],input:not([type="hidden"]):not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,[tabindex]:not([tabindex="-1"]),[contenteditable="true"]';
+
+function usableReturnTarget(candidate: HTMLElement | null | undefined, panel: HTMLElement) {
+  if (!candidate?.isConnected || panel.contains(candidate) || candidate.closest("[inert]"))
+    return null;
+  return candidate.matches(FOCUSABLE) ? candidate : null;
+}
+
 /** One paper owns its geometry, content, backdrop and interruption until the next overlay accepts it. */
 export function useOverlayMotion<T extends HTMLElement>(
   kind: "modal" | "drawer",
@@ -127,9 +136,17 @@ export function useOverlayMotion<T extends HTMLElement>(
     mounted.current = true;
     closing.current = false;
     const active = document.activeElement as HTMLElement | null;
-    if (openingOrigin.current?.element.isConnected)
-      returnFocus.current = openingOrigin.current.element;
-    else if (active && !element.contains(active)) returnFocus.current = active;
+    // A projected source can be a non-focusable card shell. Return to the real
+    // control inside it, keeping the geometric source separate from keyboard focus.
+    returnFocus.current =
+      usableReturnTarget(readMotionOrigin()?.element, element) ??
+      usableReturnTarget(openingOrigin.current?.element, element) ??
+      usableReturnTarget(
+        openingOrigin.current?.element.querySelector<HTMLElement>(FOCUSABLE),
+        element,
+      ) ??
+      usableReturnTarget(active, element) ??
+      returnFocus.current;
     const previousFocus = returnFocus.current;
     const releaseScroll = acquireOverlayScrollLock();
     const releaseMotion = acquireMotionHold();
@@ -161,7 +178,6 @@ export function useOverlayMotion<T extends HTMLElement>(
     let previousSize = { width: element.offsetWidth, height: element.offsetHeight };
     let previousViewport = { width: innerWidth, height: innerHeight };
     let disposed = false;
-    let resizeFrame = 0;
     const veil = kind === "modal" ? element : backdrop.current;
     const pseudo = kind === "modal" ? "::backdrop" : "::before";
     const backdropTarget = veil ? getComputedStyle(veil, pseudo) : null;
@@ -341,13 +357,19 @@ export function useOverlayMotion<T extends HTMLElement>(
             };
           }),
         );
-        const begin = isClosing || phase === "resizing" ? (nodeStarts.get(node) ?? 1) : 0;
-        add(node, [
-          { opacity: begin, offset: 0 },
-          { opacity: begin, offset: isClosing ? 0 : Math.min(0.28, 0.1 + index * 0.035) },
-          { opacity: isClosing ? 0 : 1, offset: isClosing ? 0.6 : 0.78 },
-          { opacity: isClosing ? 0 : 1 },
-        ]);
+        const arriving = phase === "opening" || phase === "handoff";
+        const begin = arriving ? 0 : (nodeStarts.get(node) ?? 1);
+        add(
+          node,
+          arriving
+            ? [
+                { opacity: begin, offset: 0 },
+                { opacity: begin, offset: Math.min(0.2, 0.12 + index * 0.025) },
+                { opacity: 1, offset: 0.56 },
+                { opacity: 1 },
+              ]
+            : [{ opacity: begin }, { opacity: isClosing ? 0 : 1 }],
+        );
       });
       if (snapshot && (carriedQuad || snapshotQuad)) {
         const source = carriedQuad ?? snapshotQuad!;
@@ -362,9 +384,10 @@ export function useOverlayMotion<T extends HTMLElement>(
             return { transform: cssMatrix(multiply(inverse(projection), multiply(delta, plane))) };
           }),
         );
+        const snapshotOpacity = Number(getComputedStyle(snapshot).opacity);
         add(snapshot, [
-          { opacity: Number(getComputedStyle(snapshot).opacity) || 1, offset: 0 },
-          { opacity: 0, offset: isClosing ? 0.6 : 0.62 },
+          { opacity: Number.isFinite(snapshotOpacity) ? snapshotOpacity : 1, offset: 0 },
+          { opacity: 0, offset: phase === "handoff" ? 0.32 : 1 },
           { opacity: 0 },
         ]);
       }
@@ -408,7 +431,6 @@ export function useOverlayMotion<T extends HTMLElement>(
     } else incoming?.accept();
 
     const resize = () => {
-      resizeFrame = 0;
       if (disposed) return;
       const next = { width: element.offsetWidth, height: element.offsetHeight };
       const same =
@@ -437,12 +459,11 @@ export function useOverlayMotion<T extends HTMLElement>(
       }
       start(from, closing.current ? "closing" : "resizing", tangent(active));
     };
-    const scheduleResize = () => {
-      if (!resizeFrame && !disposed) resizeFrame = requestAnimationFrame(resize);
-    };
-    const observer = new ResizeObserver(scheduleResize);
+    // RO runs after layout and before paint. Redirect now so a changed natural
+    // box cannot display one frame with the previous relative transform.
+    const observer = new ResizeObserver(resize);
     observer.observe(element);
-    addEventListener("resize", scheduleResize, { passive: true });
+    addEventListener("resize", resize, { passive: true });
     const media = matchMedia("(prefers-reduced-motion: reduce)");
     const onPreference = () => {
       if (!media.matches) return;
@@ -455,8 +476,7 @@ export function useOverlayMotion<T extends HTMLElement>(
       mounted.current = false;
       closeAction.current = null;
       observer.disconnect();
-      removeEventListener("resize", scheduleResize);
-      cancelAnimationFrame(resizeFrame);
+      removeEventListener("resize", resize);
       media.removeEventListener("change", onPreference);
       stop(false);
       snapshot?.remove();

@@ -222,46 +222,81 @@ export function RouteStage({
     };
     const resize = () => {
       if (disposed) return;
-      for (const item of heightMotions) {
-        if (Math.abs(item.board.offsetWidth - item.width) < 0.5) continue;
-        item.width = item.board.offsetWidth;
-        const height = item.board.getBoundingClientRect().height;
-        const effect = item.animation.effect as KeyframeEffect;
-        // Read natural wrapping without a stale fixed-height effect, then continue
-        // from the still-visible height within this same pre-paint callback.
+      const resized = heightMotions.flatMap((item) => {
+        const width = item.board.offsetWidth;
+        if (Math.abs(width - item.width) < 0.5) return [];
+        return [
+          {
+            item,
+            width,
+            // Layout height stays independent of the stage's 3D scale and rotation.
+            height: parseFloat(getComputedStyle(item.board).height),
+            effect: item.animation.effect as KeyframeEffect,
+          },
+        ];
+      });
+      // Measure all natural heights together, without alternating a layout write
+      // and a forced read for each paper in the same frame.
+      resized.forEach(({ effect }) => {
         effect.target = null;
-        const target = item.board.offsetHeight;
+      });
+      const targets = resized.map(({ item }) => item.board.offsetHeight);
+      resized.forEach(({ item, width, height, effect }, index) => {
+        item.width = width;
+        const target = targets[index];
         effect.setKeyframes([{ height: `${height}px` }, { height: `${target}px` }]);
         effect.updateTiming({ duration: 160 });
         item.animation.currentTime = 0;
         effect.target = item.board;
         item.animation.play();
-      }
+      });
     };
-    for (const captured of textTransition.boards) {
+    const papers = textTransition.boards.flatMap((captured) => {
       const board = host.querySelector<HTMLElement>(`[data-board="${captured.id}"]`);
-      if (!board) continue;
-      const originalHeight = board.style.height;
-      const targetHeight = board.offsetHeight;
+      if (!board) return [];
       const text = [
         ...board.querySelectorAll<HTMLElement>(":scope > header, :scope > .c-board-body"),
       ];
-      for (const node of [board, ...text]) {
-        node.getAnimations().forEach((animation) => {
-          if (animation instanceof CSSTransition && animation.transitionProperty === "opacity")
-            animation.finish();
-        });
-      }
-      const targetOpacity = getComputedStyle(board).opacity;
-      const targetOpacities = text.map((node) => getComputedStyle(node).opacity);
+      return [
+        {
+          captured,
+          board,
+          text,
+          opacityTransitions: [board, ...text].flatMap((node) =>
+            node
+              .getAnimations()
+              .filter(
+                (animation) =>
+                  animation instanceof CSSTransition && animation.transitionProperty === "opacity",
+              ),
+          ),
+        },
+      ];
+    });
+    papers.forEach(({ opacityTransitions }) => {
+      opacityTransitions.forEach((animation) => animation.finish());
+    });
+    // Read the entire stage before attaching or animating any retiring paper.
+    const measured = papers.map((paper) => ({
+      ...paper,
+      originalHeight: paper.board.style.height,
+      targetHeight: paper.board.offsetHeight,
+      width: paper.board.offsetWidth,
+      left: paper.board.clientLeft,
+      top: paper.board.clientTop,
+      targetOpacity: getComputedStyle(paper.board).opacity,
+      targetOpacities: paper.text.map((node) => getComputedStyle(node).opacity),
+    }));
+    const prepared = measured.map((paper) => {
+      const { captured, board, originalHeight } = paper;
       const copy = scope.own(captured.contents.copy);
       copy.dataset.stageRetiring = "true";
       copy.querySelector(":scope > .c-outline")?.remove();
       Object.assign(copy.style, {
         position: "absolute",
         inset: "auto",
-        left: `${-board.clientLeft}px`,
-        top: `${-board.clientTop}px`,
+        left: `${-paper.left}px`,
+        top: `${-paper.top}px`,
         margin: "0",
         width: `${captured.width}px`,
         height: `${captured.height}px`,
@@ -278,20 +313,31 @@ export function RouteStage({
         zIndex: "2",
         pointerEvents: "none",
       });
-      board.appendChild(copy);
-      captured.contents.restoreScroll();
       originals.push({ node: board, height: originalHeight });
-      const timing: KeyframeAnimationOptions = {
-        duration: 220,
-        easing: "cubic-bezier(.22,1,.3,1)",
-        fill: "both",
-      };
+      return { ...paper, copy };
+    });
+    prepared.forEach(({ board, copy }) => board.appendChild(copy));
+    const timing: KeyframeAnimationOptions = {
+      duration: 220,
+      easing: "cubic-bezier(.22,1,.3,1)",
+      fill: "both",
+    };
+    for (const {
+      captured,
+      board,
+      copy,
+      text,
+      targetHeight,
+      targetOpacity,
+      targetOpacities,
+      width,
+    } of prepared) {
       const heightAnimation = scope.animate(
         board,
         [{ height: `${captured.height}px` }, { height: `${targetHeight}px` }],
         timing,
       );
-      heightMotions.push({ board, animation: heightAnimation, width: board.offsetWidth });
+      heightMotions.push({ board, animation: heightAnimation, width });
       animations.push(
         heightAnimation,
         scope.animate(board, [{ opacity: captured.opacity }, { opacity: targetOpacity }], timing),
@@ -303,6 +349,7 @@ export function RouteStage({
         ),
       );
     }
+    prepared.forEach(({ captured }) => captured.contents.restoreScroll());
     window.addEventListener("resize", resize);
     void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish);
     return finish;

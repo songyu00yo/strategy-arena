@@ -228,12 +228,44 @@ async function closedPaperState(page: Page) {
         __movingPaper?: { time: number; duration: number; parts: Animation[] };
       }
     ).__movingPaper;
+    const nativeTransitions =
+      probe?.parts.filter((part): part is CSSTransition => part instanceof CSSTransition) ?? [];
     return {
       interruptedAt: probe?.time,
       duration: probe?.duration,
-      oldEffectsCancelled: probe?.parts.every(
-        (part) => part.playState === "idle" && part.currentTime === null,
+      oldEffectsCancelled: probe?.parts
+        .filter((part) => !(part instanceof CSSTransition))
+        .every(
+          (part) =>
+            part.playState === "idle" &&
+            part.currentTime === null &&
+            part.onfinish === null &&
+            part.oncancel === null,
+        ),
+      oldTransitionsSettled: nativeTransitions.every(
+        (part) =>
+          part.onfinish === null &&
+          part.oncancel === null &&
+          ["background-size", "box-shadow", "border-color", "background-color", "color"].includes(
+            part.transitionProperty,
+          ) &&
+          ((part.playState === "idle" && part.currentTime === null) ||
+            (part.playState === "finished" &&
+              typeof part.currentTime === "number" &&
+              part.currentTime >= Number(part.effect?.getComputedTiming().endTime))),
       ),
+      nativeTransitions: nativeTransitions.map((part) => ({
+        property: part.transitionProperty,
+        target:
+          part.effect instanceof KeyframeEffect && part.effect.target instanceof Element
+            ? { tag: part.effect.target.tagName, className: part.effect.target.className }
+            : null,
+        state: part.playState,
+        currentTime: part.currentTime,
+        endTime: part.effect?.getComputedTiming().endTime,
+        hasFinishCallback: part.onfinish !== null,
+        hasCancelCallback: part.oncancel !== null,
+      })),
       held: document.querySelector(".c-root")?.classList.contains("held"),
       overflow: document.body.style.overflow,
       snapshots: document.querySelectorAll(".overlay-handoff-snapshot").length,
@@ -282,9 +314,14 @@ for (const width of [1440, 390]) {
     await expectPaperReleased(page);
     const frames = await endProbe(page);
     const state = await closedPaperState(page);
+    await info.attach("escape-interrupted-handoff", {
+      body: JSON.stringify({ state, snapshotBefore, snapshotClosing, frames }),
+      contentType: "application/json",
+    });
     expect(state.interruptedAt).toBeGreaterThan(0);
     expect(state.interruptedAt!).toBeLessThan(state.duration!);
     expect(state.oldEffectsCancelled).toBe(true);
+    expect(state.oldTransitionsSettled).toBe(true);
     expect(frames.some((frame) => frame.dialogs.some((dialog) => dialog.phase === "closing"))).toBe(
       true,
     );
@@ -296,10 +333,6 @@ for (const width of [1440, 390]) {
         .slice(0, lastPaper + 1)
         .every((frame) => frame.held && frame.dialogs.some((dialog) => dialog.opacity > 0)),
     ).toBe(true);
-    await info.attach("escape-interrupted-handoff", {
-      body: JSON.stringify({ state, snapshotBefore, snapshotClosing, frames }),
-      contentType: "application/json",
-    });
     expect(unexpected).toEqual([]);
   });
 
@@ -360,11 +393,12 @@ for (const width of [1440, 390]) {
       frames.every((frame) => frame.held && frame.dialogs.some((dialog) => dialog.opacity > 0)),
     ).toBe(true);
     const state = await closedPaperState(page);
-    expect(state.oldEffectsCancelled).toBe(true);
     await info.attach("real-click-retarget", {
-      body: JSON.stringify({ click, frames }),
+      body: JSON.stringify({ click, state, frames }),
       contentType: "application/json",
     });
+    expect(state.oldEffectsCancelled).toBe(true);
+    expect(state.oldTransitionsSettled).toBe(true);
     await conditions.getByRole("button", { name: "取消", exact: true }).click();
     await expectPaperReleased(page);
     expect(unexpected).toEqual([]);

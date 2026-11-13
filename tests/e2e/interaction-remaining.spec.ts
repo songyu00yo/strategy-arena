@@ -1,4 +1,5 @@
-// Explicit synthetic fixtures. All APIs and source-link navigation are intercepted.
+// Provider APIs use explicit fixtures and source-link navigation is intercepted.
+// The attachment scenario uploads and downloads marked test material in the isolated acceptance database.
 // Trusted mouse/keyboard records establish operated entries, separately from motion acceptance.
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -396,7 +397,7 @@ for (const width of [1440, 390]) {
     await checkpoint(page, info, "material-original-downloaded");
     await click(page.getByRole("button", { name: "explicit-source.txt · 第 1 行", exact: true }));
     await click(page.getByRole("button", { name: "收起补充回答与材料", exact: true }));
-    await click(page.getByRole("button", { name: "查看这条质疑的证据", exact: true }).first());
+    await click(page.locator('button[title="查看这条质疑的证据"]').first());
     const evidence = page.getByRole("dialog", { name: "这一条，站得住吗？", exact: true });
     const popup = page.waitForEvent("popup");
     await click(

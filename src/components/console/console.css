@@ -39,9 +39,15 @@
   font-variant-numeric: tabular-nums;
 }
 .console-shell .site-footer,
-.console-shell .skip-link:not(:focus),
 .console-shell .wordmark {
   display: none;
+}
+.console-shell .skip-link {
+  top: 12px;
+  transform: translateY(-72px);
+}
+.console-shell .skip-link:focus {
+  transform: translateY(0);
 }
 .console-shell .site-header {
   position: absolute;

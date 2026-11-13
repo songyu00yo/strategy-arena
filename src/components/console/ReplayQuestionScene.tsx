@@ -591,8 +591,12 @@ export function ReplayQuestionScene({
         sourceBox.left < Math.min(innerWidth, stageBox.right) &&
         sourceBox.bottom > Math.max(0, stageBox.top) &&
         sourceBox.top < Math.min(innerHeight, stageBox.bottom);
+      // The final receipt starts at C even when C is outside the current viewport.
+      // Scrolling must not switch its origin between the board and the stage plane.
+      const useBoardSource =
+        visibleSource || (action.kind === "handoff" && !!sourceBox?.width && !!sourceBox.height);
       const source = replayFlipGeometry(
-        visibleSource && sourceBox ? sourceBox : stageBox,
+        useBoardSource && sourceBox ? sourceBox : stageBox,
         targetBox,
       );
       const destination = receiverBox ? replayFlipGeometry(receiverBox, targetBox) : null;
@@ -762,13 +766,13 @@ export function ReplayQuestionScene({
       origin ??= headingPoint;
       // Attribution is observable in browser evidence, including every fallback.
       element.dataset.flipOrigin = source
-        ? visibleSource
+        ? useBoardSource
           ? action.kind === "handoff"
             ? "board-c"
             : "board-b"
           : "stage-plane"
         : "unavailable";
-      element.dataset.flipFallback = visibleSource
+      element.dataset.flipFallback = useBoardSource
         ? ""
         : !board
           ? "board-missing"
@@ -896,7 +900,7 @@ export function ReplayQuestionScene({
       (!previous.seeking && seeking) ||
       (activePlaying && previous.speed !== speed);
     followed.current = { id: action.id, playing: activePlaying, seeking, speed };
-    if (!shouldFollow) return;
+    if (!shouldFollow || action.kind === "handoff") return;
     const element = root.current;
     if (!element) return;
     const page = layoutPoint(element);
@@ -907,7 +911,7 @@ export function ReplayQuestionScene({
       window.scrollTo({ left: scrollX, top: Math.max(0, page.y - top), behavior: "instant" });
       refresh.current();
     }
-  }, [action.id, playing, seeking, speed]);
+  }, [action.id, action.kind, playing, seeking, speed]);
 
   const rows = questions.length
     ? questions.map((question) => ({

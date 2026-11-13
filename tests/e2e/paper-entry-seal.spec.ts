@@ -135,7 +135,16 @@ for (const width of [1440, 390]) {
     expect(firstFlight?.duration).toBe(420);
     await expect(page.locator(".initial-paper-transfer")).toHaveCount(0);
 
+    // This fixture isolates entry visibility and the final seal. Hold the live rail before seeking.
+    await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((button) => {
+      if (button instanceof HTMLButtonElement) button.click();
+    });
+    await expect(page.getByRole("button", { name: "继续放映", exact: true })).toBeVisible();
     await page.getByRole("button", { name: `第 ${steps.length - 1} 步`, exact: true }).click();
+    await expect(page.locator('.c-time [aria-current="step"]')).toHaveAttribute(
+      "aria-label",
+      `第 ${steps.length - 1} 步`,
+    );
     await page.evaluate(() => {
       const state = {
         frames: [] as {

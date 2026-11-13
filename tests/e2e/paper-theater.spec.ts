@@ -39,6 +39,48 @@ async function playQuestion(page: Page) {
   return blocked;
 }
 
+type ReturnPose = { x: number; y: number; sx: number; sy: number };
+type ReturnKeyframes = { from: ReturnPose; to: ReturnPose };
+type NativePoseWindow = ReturnPose & {
+  timeBefore: number | null;
+  timeAfter: number | null;
+  progressBefore: number | null;
+  progressAfter: number | null;
+};
+type NativeReturnFrame = NativePoseWindow & {
+  at: number;
+  fold: number;
+  semanticFold: number;
+  nativeState: string | null;
+  nativeTime: number | null;
+  nativeDuration: number | null;
+  nativeRate: number | null;
+  nativeTransformCount: number;
+  portalTransformCount: number;
+  owner: string;
+  opacity: number;
+  width: number;
+  height: number;
+  bodyDisplay: string;
+  footerDisplay: string;
+  flipOrigin: string;
+  scrollX: number;
+  scrollY: number;
+  portalPose: NativePoseWindow | null;
+};
+
+function expectNativePoseAtAmount(
+  pose: ReturnPose,
+  keyframes: ReturnKeyframes,
+  amount: number,
+  tolerance: number,
+) {
+  const x = keyframes.from.x + (keyframes.to.x - keyframes.from.x) * amount;
+  const y = keyframes.from.y + (keyframes.to.y - keyframes.from.y) * amount;
+  expect(Math.abs(pose.x - x)).toBeLessThan(tolerance);
+  expect(Math.abs(pose.y - y)).toBeLessThan(tolerance);
+}
+
 for (const width of [1440, 390]) {
   for (const kind of ["round_confirm", "summary_submit", "handoff"] as const) {
     test(`paper theater: ${kind} returns in one continuous motion at ${width}px`, async ({
@@ -53,62 +95,70 @@ for (const width of [1440, 390]) {
       );
       expect(index).toBeGreaterThan(0);
       await page.getByRole("button", { name: `第 ${index} 步`, exact: true }).click();
-      // These rAF observations verify main-thread-visible poses and frame gaps during normal playback.
-      // They do not sample the compositor's intermediate frames while JavaScript is blocked.
+      // These rAF observations cover normal main-thread-visible poses and callbacks.
+      // Compositor intermediate frames during a JavaScript block are not observed here.
       const sampling = page.evaluate(
         (targetStep) =>
           new Promise<{
-            frames: Array<{
-              at: number;
-              fold: number;
-              semanticFold: number;
-              nativeState: string | null;
-              nativeTime: number | null;
-              nativeDuration: number | null;
-              nativeRate: number | null;
-              x: number;
-              y: number;
-              sx: number;
-              sy: number;
-              owner: string;
-              opacity: number;
-              width: number;
-              height: number;
-              bodyDisplay: string;
-              footerDisplay: string;
-              portalX: number | null;
-              portalY: number | null;
-            }>;
+            frames: NativeReturnFrame[];
             portalCreatedAt: number[];
             destination: { x: number; y: number } | null;
+            keyframes: ReturnKeyframes | null;
+            portalKeyframes: ReturnKeyframes | null;
           }>((resolve) => {
-            const frames: Array<{
-              at: number;
-              fold: number;
-              semanticFold: number;
-              nativeState: string | null;
-              nativeTime: number | null;
-              nativeDuration: number | null;
-              nativeRate: number | null;
-              x: number;
-              y: number;
-              sx: number;
-              sy: number;
-              owner: string;
-              opacity: number;
-              width: number;
-              height: number;
-              bodyDisplay: string;
-              footerDisplay: string;
-              portalX: number | null;
-              portalY: number | null;
-            }> = [];
+            const frames: NativeReturnFrame[] = [];
             const portalCreatedAt: number[] = [];
             let destination: { x: number; y: number } | null = null;
+            let keyframes: ReturnKeyframes | null = null;
+            let portalKeyframes: ReturnKeyframes | null = null;
             let seen = false;
             const began = performance.now();
+            const transformAnimations = (node: HTMLElement | null) =>
+              node
+                ?.getAnimations()
+                .filter(
+                  (animation) =>
+                    animation.effect instanceof KeyframeEffect &&
+                    animation.effect
+                      .getKeyframes()
+                      .some((frame) => typeof frame.transform === "string"),
+                ) ?? [];
+            const readPose = (
+              node: HTMLElement,
+              animation: Animation | undefined,
+            ): NativePoseWindow => {
+              const effect = animation?.effect;
+              const timeBefore =
+                typeof animation?.currentTime === "number" ? animation.currentTime : null;
+              const progressBefore = effect?.getComputedTiming().progress ?? null;
+              const transform = getComputedStyle(node).transform;
+              const timeAfter =
+                typeof animation?.currentTime === "number" ? animation.currentTime : null;
+              const progressAfter = effect?.getComputedTiming().progress ?? null;
+              const pose = new DOMMatrixReadOnly(transform);
+              return {
+                x: pose.m41,
+                y: pose.m42,
+                sx: pose.m11,
+                sy: pose.m22,
+                timeBefore,
+                timeAfter,
+                progressBefore,
+                progressAfter,
+              };
+            };
+            const readKeyframes = (animation: Animation | undefined): ReturnKeyframes | null => {
+              if (!(animation?.effect instanceof KeyframeEffect)) return null;
+              const keys = animation.effect.getKeyframes();
+              if (!keys.length) return null;
+              const poses = [keys[0], keys[keys.length - 1]].map((key) => {
+                const pose = new DOMMatrixReadOnly(String(key.transform));
+                return { x: pose.m41, y: pose.m42, sx: pose.m11, sy: pose.m22 };
+              });
+              return { from: poses[0], to: poses[1] };
+            };
             const observer = new MutationObserver((records) => {
-              for (const record of records) {
+              for (const record of records)
                 for (const node of record.addedNodes) {
                   if (
                     node instanceof HTMLElement &&
@@ -119,7 +169,6 @@ for (const width of [1440, 390]) {
                     portalCreatedAt.push(Number(paper?.dataset.replayFold ?? 0));
                   }
                 }
-              }
             });
             observer.observe(document.body, { childList: true, subtree: true });
             const tick = (time: number) => {
@@ -130,25 +179,20 @@ for (const width of [1440, 390]) {
               const paper = document.querySelector<HTMLElement>(".replay-question-scene");
               if (active && paper) {
                 seen = true;
-                const movingNode =
-                  document.querySelector<HTMLElement>(".replay-handoff-strip") ?? paper;
-                const native = movingNode
-                  .getAnimations()
-                  .find(
-                    (animation) =>
-                      animation.effect instanceof KeyframeEffect &&
-                      animation.effect
-                        .getKeyframes()
-                        .some((frame) => typeof frame.transform === "string"),
-                  );
-                const nativeTime =
-                  typeof native?.currentTime === "number" ? native.currentTime : null;
+                const portal = document.querySelector<HTMLElement>(".replay-handoff-strip");
+                const nativeAnimations = transformAnimations(paper);
+                const portalAnimations = transformAnimations(portal);
+                const native = nativeAnimations[0];
+                const portalNative = portalAnimations[0];
+                keyframes ??= readKeyframes(native);
+                portalKeyframes ??= readKeyframes(portalNative);
+                const pose = readPose(paper, native);
+                const portalPose = portal ? readPose(portal, portalNative) : null;
                 const nativeDuration = native ? Number(native.effect?.getTiming().duration) : null;
                 const fold =
-                  nativeTime !== null && nativeDuration
-                    ? Math.max(0, Math.min(1, nativeTime / nativeDuration))
+                  pose.timeAfter !== null && nativeDuration
+                    ? Math.max(0, Math.min(1, pose.timeAfter / nativeDuration))
                     : Number(paper.dataset.replayFold);
-                const pose = new DOMMatrixReadOnly(getComputedStyle(paper).transform);
                 if (!destination && fold > 0) {
                   const target = paper.dataset.foldTarget;
                   const receiver =
@@ -175,22 +219,17 @@ for (const width of [1440, 390]) {
                     };
                   }
                 }
-                const portal = document.querySelector<HTMLElement>(".replay-handoff-strip");
-                const portalPose = portal
-                  ? new DOMMatrixReadOnly(getComputedStyle(portal).transform)
-                  : null;
                 frames.push({
+                  ...pose,
                   at: time,
                   fold,
                   semanticFold: Number(paper.dataset.replayFold),
                   nativeState: native?.playState ?? null,
-                  nativeTime,
+                  nativeTime: pose.timeAfter,
                   nativeDuration,
                   nativeRate: native?.playbackRate ?? null,
-                  x: pose.m41,
-                  y: pose.m42,
-                  sx: pose.m11,
-                  sy: pose.m22,
+                  nativeTransformCount: nativeAnimations.length,
+                  portalTransformCount: portalAnimations.length,
                   owner: paper.dataset.stripOwner ?? "local",
                   opacity: Number(getComputedStyle(paper).opacity),
                   width: paper.offsetWidth,
@@ -199,14 +238,16 @@ for (const width of [1440, 390]) {
                     .display,
                   footerDisplay: getComputedStyle(paper.querySelector(".replay-question-footer")!)
                     .display,
-                  portalX: portalPose?.m41 ?? null,
-                  portalY: portalPose?.m42 ?? null,
+                  flipOrigin: paper.dataset.flipOrigin ?? "",
+                  scrollX,
+                  scrollY,
+                  portalPose,
                 });
               }
               if ((!seen || (active && paper)) && time - began < 10000) requestAnimationFrame(tick);
               else {
                 observer.disconnect();
-                resolve({ frames, portalCreatedAt, destination });
+                resolve({ frames, portalCreatedAt, destination, keyframes, portalKeyframes });
               }
             };
             requestAnimationFrame(tick);
@@ -226,47 +267,50 @@ for (const width of [1440, 390]) {
         true,
       );
       expect(returning.every((frame) => frame.nativeRate === 1)).toBe(true);
+      expect(returning.every((frame) => frame.nativeTransformCount === 1)).toBe(true);
       expect(returning[0].fold).toBeLessThan(0.2);
       expect(returning.at(-1)!.fold).toBeGreaterThan(0.85);
-      const reference = returning.find((frame) => frame.fold >= 0.45 && frame.fold <= 0.65)!;
-      expect(reference).toBeDefined();
-      const smooth = (value: number) => value * value * (3 - 2 * value);
-      const first = returning[0];
-      const referenceAmount = smooth(reference.fold);
-      const firstAmount = smooth(first.fold);
-      const dx = (reference.x - first.x) / (referenceAmount - firstAmount);
-      const dy = (reference.y - first.y) / (referenceAmount - firstAmount);
-      const origin = { x: first.x - dx * firstAmount, y: first.y - dy * firstAmount };
-      const distance = Math.hypot(dx, dy);
+      expect(returning.some((frame) => frame.fold >= 0.45 && frame.fold <= 0.65)).toBe(true);
+      expect(sample.keyframes).not.toBeNull();
       expect(sample.destination).not.toBeNull();
+      const keys = sample.keyframes!;
+      const dx = keys.to.x - keys.from.x;
+      const dy = keys.to.y - keys.from.y;
+      const distance = Math.hypot(dx, dy);
       expect(distance).toBeGreaterThan(0);
-      // Receiving cards can nearly share the paper's center on narrow screens.
-      // Verify the measured destination instead of imposing an invented minimum travel distance.
-      expect(Math.abs(origin.x + dx - sample.destination!.x)).toBeLessThan(distance * 0.004 + 0.01);
-      expect(Math.abs(origin.y + dy - sample.destination!.y)).toBeLessThan(distance * 0.004 + 0.01);
+      // Compare native endpoints with independent receiver geometry, including near-coincident centers.
+      expect(Math.abs(keys.to.x - sample.destination!.x)).toBeLessThan(distance * 0.004 + 0.01);
+      expect(Math.abs(keys.to.y - sample.destination!.y)).toBeLessThan(distance * 0.004 + 0.01);
       const early = returning.find((frame) => frame.fold >= 0.15 && frame.fold < 0.35);
       expect(early).toBeDefined();
-      expect(Math.hypot(early!.x - origin.x, early!.y - origin.y)).toBeGreaterThan(distance * 0.05);
+      expect(Math.hypot(early!.x - keys.from.x, early!.y - keys.from.y)).toBeGreaterThan(
+        distance * 0.05,
+      );
       const gaps: number[] = [];
       for (let at = 0; at < returning.length; at++) {
         const frame = returning[at];
-        const amount = smooth(frame.fold);
-        // data-replay-fold is rounded to .001, while transforms retain full precision.
-        expect(Math.abs(frame.x - (origin.x + dx * amount))).toBeLessThan(distance * 0.004);
-        expect(Math.abs(frame.y - (origin.y + dy * amount))).toBeLessThan(distance * 0.004);
+        // Running WebKit style and Animation clocks are sampled on separate engine phases.
+        // All coordinates from one computed matrix must share the same measured scale phase.
+        const scalePhase = (frame.sx - keys.from.sx) / (keys.to.sx - keys.from.sx);
+        expect(scalePhase).toBeGreaterThanOrEqual(0);
+        expect(scalePhase).toBeLessThanOrEqual(1);
+        expectNativePoseAtAmount(frame, keys, scalePhase, distance * 0.004);
         expect(Math.abs(frame.sx - frame.sy)).toBeLessThan(0.001);
         if (frame.owner === "body") {
-          expect(frame.portalX).not.toBeNull();
-          expect(frame.portalY).not.toBeNull();
-          expect(Math.abs(frame.portalX! - frame.x)).toBeLessThan(0.01);
-          expect(Math.abs(frame.portalY! - frame.y)).toBeLessThan(0.01);
+          expect(frame.portalTransformCount).toBe(1);
+          expect(frame.portalPose).not.toBeNull();
+          expect(sample.portalKeyframes).not.toBeNull();
+          const portalKeys = sample.portalKeyframes!;
+          const portalPhase =
+            (frame.portalPose!.sx - portalKeys.from.sx) / (portalKeys.to.sx - portalKeys.from.sx);
+          expectNativePoseAtAmount(frame.portalPose!, portalKeys, portalPhase, distance * 0.004);
         }
         if (at > 0) {
           const previous = returning[at - 1];
           expect(frame.fold).toBeGreaterThanOrEqual(previous.fold);
           expect(frame.sx).toBeLessThanOrEqual(previous.sx + 0.001);
-          expect(Math.hypot(frame.x - origin.x, frame.y - origin.y)).toBeGreaterThanOrEqual(
-            Math.hypot(previous.x - origin.x, previous.y - origin.y) - 0.01,
+          expect(Math.hypot(frame.x - keys.from.x, frame.y - keys.from.y)).toBeGreaterThanOrEqual(
+            Math.hypot(previous.x - keys.from.x, previous.y - keys.from.y) - 0.01,
           );
           if (frame.fold > previous.fold) gaps.push(frame.at - previous.at);
         }
@@ -279,6 +323,15 @@ for (const width of [1440, 390]) {
       expect(sample.portalCreatedAt.every((fold) => fold === 0)).toBe(true);
       if (kind === "handoff") {
         expect(sample.portalCreatedAt).toHaveLength(1);
+        expect(sample.frames.every((frame) => frame.flipOrigin === "board-c")).toBe(true);
+        expect(
+          Math.max(...sample.frames.map((frame) => frame.scrollY)) -
+            Math.min(...sample.frames.map((frame) => frame.scrollY)),
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.max(...sample.frames.map((frame) => frame.scrollX)) -
+            Math.min(...sample.frames.map((frame) => frame.scrollX)),
+        ).toBeLessThanOrEqual(1);
         expect(sample.frames.every((frame) => frame.width <= 320 && frame.height <= 100)).toBe(
           true,
         );
@@ -288,10 +341,16 @@ for (const width of [1440, 390]) {
           ),
         ).toBe(true);
         expect(returning.every((frame) => frame.owner === "body")).toBe(true);
+        expect(sample.portalKeyframes).not.toBeNull();
+        for (const end of ["from", "to"] as const) {
+          expect(Math.abs(sample.portalKeyframes![end].x - keys[end].x)).toBeLessThan(0.01);
+          expect(Math.abs(sample.portalKeyframes![end].y - keys[end].y)).toBeLessThan(0.01);
+          expect(Math.abs(sample.portalKeyframes![end].sx - keys[end].sx)).toBeLessThan(0.001);
+        }
         await expect(page.locator(".replay-handoff-strip")).toHaveCount(0);
         await expect(page.locator(".c-root")).toHaveClass(/at-result/);
       }
-      await page.screenshot({ path: `work/compact-motion/${kind}-${width}.png` });
+      await page.screenshot({ path: testInfo.outputPath(`${kind}-${width}.png`) });
       expect(blocked).toEqual([]);
     });
   }
@@ -355,6 +414,8 @@ async function nativeReturnSnapshot(page: Page) {
   return page.evaluate(() => {
     const probe = (window as unknown as { __nativeReturnProbe: NativeReturnProbe })
       .__nativeReturnProbe;
+    const transform = getComputedStyle(probe.node).transform;
+    const pose = new DOMMatrixReadOnly(transform);
     return {
       at: performance.now(),
       time: Number(probe.animation.currentTime),
@@ -362,7 +423,8 @@ async function nativeReturnSnapshot(page: Page) {
       rate: probe.animation.playbackRate,
       state: probe.animation.playState,
       pending: probe.animation.pending,
-      transform: getComputedStyle(probe.node).transform,
+      transform,
+      pose: { x: pose.m41, y: pose.m42, sx: pose.m11, sy: pose.m22 },
       sameAnimation: probe.node.getAnimations().includes(probe.animation),
       partCount: probe.parts.length,
     };
@@ -398,6 +460,68 @@ for (const kind of ["round_confirm", "handoff"] as const) {
     const held = await nativeReturnSnapshot(page);
     expect(held.time).toBe(paused.time);
     expect(held.transform).toBe(paused.transform);
+    // Explicit static currentTime fixture verifies easing while every native part is held.
+    const curve = await page.evaluate(async () => {
+      const probe = (window as unknown as { __nativeReturnProbe: NativeReturnProbe })
+        .__nativeReturnProbe;
+      const originalTimes = probe.parts.map((part) => part.currentTime);
+      const duration = Number(probe.animation.effect?.getTiming().duration);
+      const raw = (probe.animation.effect as KeyframeEffect).getKeyframes();
+      const ends = [raw[0], raw[raw.length - 1]].map((key) => {
+        const matrix = new DOMMatrixReadOnly(String(key.transform));
+        return { x: matrix.m41, y: matrix.m42, sx: matrix.m11, sy: matrix.m22 };
+      });
+      const frames: Array<{ fraction: number; time: number; pose: ReturnPose }> = [];
+      const settle = () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+      for (const fraction of [0, 0.15, 0.3, 0.5, 0.7, 0.9, 1]) {
+        for (const part of probe.parts) part.currentTime = Math.round(duration * fraction);
+        await settle();
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(probe.node).transform);
+        frames.push({
+          fraction,
+          time: Number(probe.animation.currentTime),
+          pose: { x: matrix.m41, y: matrix.m42, sx: matrix.m11, sy: matrix.m22 },
+        });
+      }
+      for (let index = 0; index < probe.parts.length; index++) {
+        probe.parts[index].pause();
+        probe.parts[index].currentTime = originalTimes[index];
+      }
+      await settle();
+      return {
+        coverage: "explicit static paused-currentTime fixture",
+        dynamicFrameQualityMeasured: false,
+        keyframes: { from: ends[0], to: ends[1] },
+        frames,
+      };
+    });
+    const curveDistance = Math.hypot(
+      curve.keyframes.to.x - curve.keyframes.from.x,
+      curve.keyframes.to.y - curve.keyframes.from.y,
+    );
+    for (const frame of curve.frames) {
+      expect(frame.time).toBe(Math.round(frame.fraction * paused.duration));
+      const amount = frame.fraction * frame.fraction * (3 - 2 * frame.fraction);
+      expectNativePoseAtAmount(frame.pose, curve.keyframes, amount, curveDistance * 0.004);
+      expect(
+        Math.abs(
+          frame.pose.sx -
+            (curve.keyframes.from.sx + (curve.keyframes.to.sx - curve.keyframes.from.sx) * amount),
+        ),
+      ).toBeLessThan(0.001);
+      expect(Math.abs(frame.pose.sx - frame.pose.sy)).toBeLessThan(0.001);
+    }
+    await testInfo.attach(`explicit-static-native-curve-${kind}`, {
+      body: JSON.stringify(curve),
+      contentType: "application/json",
+    });
+    const restored = await nativeReturnSnapshot(page);
+    expect(restored.time).toBe(paused.time);
+    expect(Math.abs(restored.pose.x - paused.pose.x)).toBeLessThan(curveDistance * 0.004);
+    expect(Math.abs(restored.pose.y - paused.pose.y)).toBeLessThan(curveDistance * 0.004);
     await page.getByRole("button", { name: "放映速度", exact: true }).click();
     await expect(page.getByRole("button", { name: "放映速度", exact: true })).toHaveText("慢速");
     await page.waitForFunction(() => {
@@ -408,7 +532,7 @@ for (const kind of ["round_confirm", "handoff"] as const) {
     const changed = await nativeReturnSnapshot(page);
     expect(changed.sameAnimation).toBe(true);
     expect(changed.time).toBe(paused.time);
-    expect(changed.transform).toBe(paused.transform);
+    expect(changed.transform).toBe(restored.transform);
     await page.getByRole("button", { name: "继续放映", exact: true }).click();
     await page.waitForFunction((heldTime) => {
       const probe = (window as unknown as { __nativeReturnProbe: NativeReturnProbe })
@@ -438,7 +562,7 @@ for (const kind of ["round_confirm", "handoff"] as const) {
       `第 ${questionIndex + 1} 步`,
     );
     await testInfo.attach(`native-${kind}-control-states`, {
-      body: JSON.stringify({ paused, held, changed, resumed }),
+      body: JSON.stringify({ paused, held, restored, changed, resumed }),
       contentType: "application/json",
     });
     expect(blocked).toEqual([]);

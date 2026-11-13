@@ -77,7 +77,7 @@ for (const width of [1440, 390]) {
             opacity: Number(style.opacity),
             transform: style.transform,
             animation: !!animation,
-            duration: animation?.effect?.getTiming().duration,
+            duration: Number(animation?.effect?.getTiming().duration),
             ready: visible && active === "第 1 步",
           });
         }
@@ -88,7 +88,7 @@ for (const width of [1440, 390]) {
     });
     await page.getByRole("button", { name: "开始回看", exact: true }).click();
     await page.waitForTimeout(300);
-    await visibilityDelay.evaluate((node) => node.remove());
+    await visibilityDelay.evaluate((node) => node.parentNode?.removeChild(node));
     await page.waitForFunction(
       () => (window as unknown as { __entryProbe: { done: boolean } }).__entryProbe.done,
     );
@@ -151,7 +151,7 @@ for (const width of [1440, 390]) {
           state.frames.push({
             at: performance.now() - began,
             opacity: Number(getComputedStyle(seal).opacity),
-            duration: animation?.effect?.getTiming().duration,
+            duration: Number(animation?.effect?.getTiming().duration),
             currentTime: typeof animation?.currentTime === "number" ? animation.currentTime : null,
           });
         }

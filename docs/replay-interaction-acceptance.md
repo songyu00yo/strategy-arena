@@ -1,5 +1,7 @@
 # 案例操作回放与动画衔接验收
 
+本文保留 `9c49fd2` 阶段的验收记录。当前纸面剧场版本、性能对照和录像见[纸面剧场动效验收](paper-theater-acceptance.md)。
+
 ## 本轮身份与查看方式
 
 实施工作区为 `/Users/songyu00yo/Documents/传智杯AI Web/work/codex-agent-rag-mcp`，分支为 `codex/clarification-core`。基准为 `c6c2b7bfc447c0ba023f224dc78a92d40ad92e81`。

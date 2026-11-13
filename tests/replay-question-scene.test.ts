@@ -170,7 +170,7 @@ describe("controlled recorded question scenes", () => {
     const destination = { x: 400, y: -180, scaleX: 0.5, scaleY: 0.2 };
     const start = replayReturnPose(0, destination);
     const end = replayReturnPose(1, destination);
-    expect(start).toEqual({ x: 0, y: -0, scale: 1, opacity: 1, contentOpacity: 1 });
+    expect(start).toEqual({ x: 0, y: 0, scale: 1, opacity: 1, contentOpacity: 1 });
     expect(end).toMatchObject({
       x: destination.x,
       y: destination.y,
@@ -211,6 +211,32 @@ describe("controlled recorded question scenes", () => {
     expect(beforeThreshold).toBeGreaterThan(0);
     expect(afterThreshold).toBeGreaterThan(0);
     expect(Math.abs(afterThreshold - beforeThreshold)).toBeLessThan(0.01);
+  });
+
+  it("carries the handoff from the measured C origin without resetting its position or scale", () => {
+    const origin = { x: -120, y: 65, scale: 0.6 };
+    const destination = { x: 400, y: -180, scaleX: 0.5, scaleY: 0.2 };
+    const pose = (progress: number) => replayReturnPose(progress, destination, origin);
+    expect(pose(0)).toEqual({ ...origin, opacity: 1, contentOpacity: 1 });
+    expect(pose(1)).toMatchObject({ x: destination.x, y: destination.y, opacity: 0 });
+    expect(pose(1).scale).toBeCloseTo(0.36);
+    const samples = Array.from({ length: 101 }, (_, index) => pose(index / 100));
+    for (let index = 1; index < samples.length; index++) {
+      const previous = samples[index - 1];
+      const current = samples[index];
+      expect(current.x).toBeGreaterThan(previous.x);
+      expect(current.y).toBeLessThan(previous.y);
+      expect(current.scale).toBeLessThan(previous.scale);
+      const progress = (current.x - origin.x) / (destination.x - origin.x);
+      expect((current.y - origin.y) / (destination.y - origin.y)).toBeCloseTo(progress);
+      expect((origin.scale - current.scale) / (origin.scale - pose(1).scale)).toBeCloseTo(progress);
+    }
+    const delta = 0.00001;
+    expect((pose(delta).x - origin.x) / delta).toBeLessThan(0.02);
+    expect((destination.x - pose(1 - delta).x) / delta).toBeLessThan(0.02);
+    const before = (pose(0.42).x - pose(0.42 - delta).x) / delta;
+    const after = (pose(0.42 + delta).x - pose(0.42).x) / delta;
+    expect(Math.abs(after - before)).toBeLessThan(0.01);
   });
 
   it("uses one 120ms press per actual selection and a curved decelerating pointer path", () => {
@@ -282,7 +308,8 @@ describe("controlled recorded question scenes", () => {
     expect(replayPaperTiming(paused, false, true)).toEqual(replayPaperTiming(frame, false, true));
     expect(replayHandoffActive({ ...paused, settled: true }, fold, true)).toBe(false);
     expect(replayHandoffActive({ ...frame, progress: 1 }, 1, true)).toBe(false);
-    expect(replayHandoffActive({ ...frame, progress: 0.79 }, fold, true)).toBe(false);
+    expect(replayHandoffActive({ ...frame, progress: 0.01 }, 0.001, true)).toBe(true);
+    expect(replayHandoffActive({ ...frame, progress: 0.79 }, fold, true)).toBe(true);
     expect(replayHandoffActive(paused, fold, false)).toBe(false);
   });
 

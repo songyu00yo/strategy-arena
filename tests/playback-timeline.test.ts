@@ -96,13 +96,18 @@ describe("compact recorded playback timing", () => {
   it.each([
     ["round_confirm", 950],
     ["summary_submit", 800],
-    ["summary_confirm", 750],
     ["handoff", 700],
   ] as const)("leaves return time after %s is confirmed", (kind, duration) => {
     const step = beat({ kind });
     expect(playbackDuration(step)).toBe(duration);
     expect(playbackCommitAt(step)).toBe(0.4);
     expect(duration * (1 - playbackCommitAt(step))).toBeGreaterThanOrEqual(300);
+  });
+
+  it("briefly acknowledges the saved summary confirmation without another paper return", () => {
+    const step = beat({ kind: "summary_confirm" });
+    expect(playbackDuration(step)).toBe(250);
+    expect(playbackCommitAt(step)).toBe(0.4);
   });
 });
 

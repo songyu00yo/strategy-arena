@@ -61,13 +61,14 @@ export function replayPaperTiming(
 export function replayReturnPose(
   progress: number,
   destination: NonNullable<ReturnType<typeof replayFlipGeometry>>,
+  origin: Point & { scale: number } = { x: 0, y: 0, scale: 1 },
 ) {
   const amount = smooth(progress);
   const scale = Math.min(0.38, Math.max(0.12, destination.scaleX * 0.72));
   return {
-    x: destination.x * amount,
-    y: destination.y * amount,
-    scale: 1 + (scale - 1) * amount,
+    x: origin.x + (destination.x - origin.x) * amount,
+    y: origin.y + (destination.y - origin.y) * amount,
+    scale: origin.scale + (scale - origin.scale) * amount,
     opacity: 1 - smooth((progress - 0.62) / 0.38),
     contentOpacity: 1 - smooth((progress - 0.15) / 0.55),
   };
@@ -122,7 +123,7 @@ export function replayHandoffOutside(
 
 /** A paused frame owns the same ornament until seeking or completion replaces it. */
 export function replayHandoffActive(frame: PlaybackFrame, fold: number, crossesClip: boolean) {
-  return crossesClip && fold > 0 && fold < 1 && frame.progress >= 0.8 && !frame.settled;
+  return crossesClip && fold > 0 && fold < 1 && !frame.settled;
 }
 
 type ReplayScrollPhase = "reading" | "accelerating" | "travel" | "settling" | "paused";
@@ -301,7 +302,9 @@ export function ReplayQuestionScene({
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
     // Latch the selected rate per action, preserving the return pose if speed changes mid-flight.
     const returnRate = playbackRate.current;
-    const board = stage.querySelector<HTMLElement>('[data-board="B"]');
+    const board = stage.querySelector<HTMLElement>(
+      action.kind === "handoff" ? '[data-board="C"]' : '[data-board="B"]',
+    );
     const receiver = nextRole
       ? stage.querySelector<HTMLElement>('[data-board="' + nextRole + '"]')
       : action.kind === "handoff"
@@ -367,10 +370,24 @@ export function ReplayQuestionScene({
       if (!cache || frame.stepId !== activeStepId) return;
       const paper = replayPaperTiming(frame, opening, closing, returnRate);
       const open = reducedMotion ? 1 : paper.open;
-      const fold = reducedMotion || !cache.destination ? 0 : paper.fold;
+      const handoff = action.kind === "handoff";
+      const fold =
+        reducedMotion || !cache.destination || frame.settled
+          ? 0
+          : handoff
+            ? bounded(frame.elapsed / frame.duration)
+            : paper.fold;
       const destination = cache.destination;
       const source = cache.source;
-      const returning = destination ? replayReturnPose(fold, destination) : null;
+      const returning = destination
+        ? replayReturnPose(
+            fold,
+            destination,
+            handoff && source
+              ? { x: source.x, y: source.y, scale: Math.min(0.85, source.scaleX * 0.8) }
+              : undefined,
+          )
+        : null;
       const x = (source?.x ?? 0) * (1 - open) + (returning?.x ?? 0);
       const y = (source?.y ?? 0) * (1 - open) + (returning?.y ?? 0);
       const scaleX = (1 + ((source?.scaleX ?? 1) - 1) * (1 - open)) * (returning?.scale ?? 1);
@@ -597,7 +614,7 @@ export function ReplayQuestionScene({
           context.setAttribute("aria-hidden", "true");
           context.inert = true;
           const node = element.cloneNode(true) as HTMLElement;
-          node.className = "replay-handoff-strip guided-intake";
+          node.className = `replay-handoff-strip guided-intake ${action.kind === "handoff" ? "is-handoff" : ""}`;
           node.dataset.replayHandoffFor = activeStepId;
           node.querySelector(".replay-question-pointer")?.remove();
           node.querySelectorAll("[id]").forEach((child) => child.removeAttribute("id"));
@@ -634,7 +651,9 @@ export function ReplayQuestionScene({
       // Attribution is observable in browser evidence, including every fallback.
       element.dataset.flipOrigin = source
         ? visibleSource
-          ? "board-b"
+          ? action.kind === "handoff"
+            ? "board-c"
+            : "board-b"
           : "stage-plane"
         : "unavailable";
       element.dataset.flipFallback = visibleSource
@@ -801,7 +820,7 @@ export function ReplayQuestionScene({
   return (
     <section
       ref={root}
-      className={`replay-question-scene guided-intake ${playing ? "is-playing" : ""} ${seeking ? "is-seeking" : ""}`}
+      className={`replay-question-scene guided-intake ${action.kind === "handoff" ? "is-handoff" : ""} ${playing ? "is-playing" : ""} ${seeking ? "is-seeking" : ""}`}
       aria-label="补问过程回放"
       data-replay-action={action.kind}
       data-replay-phase={phase}

@@ -40,7 +40,7 @@ async function playQuestion(page: Page) {
 }
 
 for (const width of [1440, 390]) {
-  for (const kind of ["round_confirm", "handoff"] as const) {
+  for (const kind of ["round_confirm", "summary_submit", "handoff"] as const) {
     test(`paper theater: ${kind} returns in one continuous motion at ${width}px`, async ({
       page,
     }, testInfo) => {
@@ -65,6 +65,10 @@ for (const width of [1440, 390]) {
               sy: number;
               owner: string;
               opacity: number;
+              width: number;
+              height: number;
+              bodyDisplay: string;
+              footerDisplay: string;
               portalX: number | null;
               portalY: number | null;
             }>;
@@ -79,6 +83,10 @@ for (const width of [1440, 390]) {
               sy: number;
               owner: string;
               opacity: number;
+              width: number;
+              height: number;
+              bodyDisplay: string;
+              footerDisplay: string;
               portalX: number | null;
               portalY: number | null;
             }> = [];
@@ -122,6 +130,12 @@ for (const width of [1440, 390]) {
                   sy: pose.m22,
                   owner: paper.dataset.stripOwner ?? "local",
                   opacity: Number(getComputedStyle(paper).opacity),
+                  width: paper.offsetWidth,
+                  height: paper.offsetHeight,
+                  bodyDisplay: getComputedStyle(paper.querySelector(".replay-question-body")!)
+                    .display,
+                  footerDisplay: getComputedStyle(paper.querySelector(".replay-question-footer")!)
+                    .display,
                   portalX: portalPose?.m41 ?? null,
                   portalY: portalPose?.m42 ?? null,
                 });
@@ -149,23 +163,24 @@ for (const width of [1440, 390]) {
       const reference = returning.find((frame) => frame.fold >= 0.45 && frame.fold <= 0.65)!;
       expect(reference).toBeDefined();
       const smooth = (value: number) => value * value * (3 - 2 * value);
+      const first = returning[0];
       const referenceAmount = smooth(reference.fold);
-      const distance = Math.hypot(reference.x, reference.y) / referenceAmount;
+      const firstAmount = smooth(first.fold);
+      const dx = (reference.x - first.x) / (referenceAmount - firstAmount);
+      const dy = (reference.y - first.y) / (referenceAmount - firstAmount);
+      const origin = { x: first.x - dx * firstAmount, y: first.y - dy * firstAmount };
+      const distance = Math.hypot(dx, dy);
       expect(distance).toBeGreaterThan(20);
       const early = returning.find((frame) => frame.fold >= 0.15 && frame.fold < 0.35);
       expect(early).toBeDefined();
-      expect(Math.hypot(early!.x, early!.y)).toBeGreaterThan(distance * 0.05);
+      expect(Math.hypot(early!.x - origin.x, early!.y - origin.y)).toBeGreaterThan(distance * 0.05);
       const gaps: number[] = [];
       for (let at = 0; at < returning.length; at++) {
         const frame = returning[at];
         const amount = smooth(frame.fold);
         // data-replay-fold is rounded to .001, while transforms retain full precision.
-        expect(Math.abs(frame.x - (reference.x * amount) / referenceAmount)).toBeLessThan(
-          distance * 0.004,
-        );
-        expect(Math.abs(frame.y - (reference.y * amount) / referenceAmount)).toBeLessThan(
-          distance * 0.004,
-        );
+        expect(Math.abs(frame.x - (origin.x + dx * amount))).toBeLessThan(distance * 0.004);
+        expect(Math.abs(frame.y - (origin.y + dy * amount))).toBeLessThan(distance * 0.004);
         expect(Math.abs(frame.sx - frame.sy)).toBeLessThan(0.001);
         if (frame.owner === "body") {
           expect(frame.portalX).not.toBeNull();
@@ -177,8 +192,8 @@ for (const width of [1440, 390]) {
           const previous = returning[at - 1];
           expect(frame.fold).toBeGreaterThanOrEqual(previous.fold);
           expect(frame.sx).toBeLessThanOrEqual(previous.sx + 0.001);
-          expect(Math.hypot(frame.x, frame.y)).toBeGreaterThanOrEqual(
-            Math.hypot(previous.x, previous.y) - 0.01,
+          expect(Math.hypot(frame.x - origin.x, frame.y - origin.y)).toBeGreaterThanOrEqual(
+            Math.hypot(previous.x - origin.x, previous.y - origin.y) - 0.01,
           );
           if (frame.fold > previous.fold) gaps.push(frame.at - previous.at);
         }
@@ -191,7 +206,15 @@ for (const width of [1440, 390]) {
       expect(sample.portalCreatedAt.every((fold) => fold === 0)).toBe(true);
       if (kind === "handoff") {
         expect(sample.portalCreatedAt).toHaveLength(1);
-        expect(returning.some((frame) => frame.owner === "body")).toBe(true);
+        expect(sample.frames.every((frame) => frame.width <= 320 && frame.height <= 100)).toBe(
+          true,
+        );
+        expect(
+          sample.frames.every(
+            (frame) => frame.bodyDisplay === "none" && frame.footerDisplay === "none",
+          ),
+        ).toBe(true);
+        expect(returning.every((frame) => frame.owner === "body")).toBe(true);
         await expect(page.locator(".replay-handoff-strip")).toHaveCount(0);
         await expect(page.locator(".c-root")).toHaveClass(/at-result/);
       }
@@ -201,25 +224,25 @@ for (const width of [1440, 390]) {
   }
 }
 
-test("paper theater: summary submission and acknowledgment stay open until their single final handoff", async ({
+test("paper theater: final summary acknowledgment does not reopen the question paper before handoff", async ({
   page,
 }, testInfo) => {
   const blocked = await openReplay(page);
-  const summary = steps.findIndex((step) => step.replayAction?.kind === "summary_submit");
+  const summary = steps.findLastIndex((step) => step.replayAction?.kind === "summary_submit");
   await page.getByRole("button", { name: `第 ${summary} 步`, exact: true }).click();
   const sampling = page.evaluate(
     () =>
-      new Promise<Array<{ kind: string; fold: number }>>((resolve) => {
-        const frames: Array<{ kind: string; fold: number }> = [];
+      new Promise<Array<{ kind: string; paper: boolean; fold: number }>>((resolve) => {
+        const frames: Array<{ kind: string; paper: boolean; fold: number }> = [];
         const began = performance.now();
         const tick = () => {
           const root = document.querySelector<HTMLElement>(".c-root");
           const paper = root?.querySelector<HTMLElement>(".replay-question-scene");
-          if (paper)
-            frames.push({
-              kind: root?.dataset.replayKind ?? "",
-              fold: Number(paper.dataset.replayFold),
-            });
+          frames.push({
+            kind: root?.dataset.replayKind ?? "",
+            paper: !!paper,
+            fold: Number(paper?.dataset.replayFold ?? 0),
+          });
           if (!root?.classList.contains("at-result") && performance.now() - began < 12000)
             requestAnimationFrame(tick);
           else resolve(frames);
@@ -233,11 +256,13 @@ test("paper theater: summary submission and acknowledgment stay open until their
     body: JSON.stringify(frames),
     contentType: "application/json",
   });
-  for (const kind of ["summary_submit", "summary_confirm"]) {
-    const actionFrames = frames.filter((frame) => frame.kind === kind);
-    expect(actionFrames.length).toBeGreaterThan(0);
-    expect(actionFrames.every((frame) => frame.fold === 0)).toBe(true);
-  }
+  const submitFrames = frames.filter((frame) => frame.kind === "summary_submit");
+  expect(submitFrames.some((frame) => frame.fold > 0)).toBe(true);
+  const firstReturn = submitFrames.findIndex((frame) => frame.fold > 0);
+  expect(submitFrames.slice(firstReturn).every((frame) => frame.fold > 0)).toBe(true);
+  const acknowledged = frames.filter((frame) => frame.kind === "summary_confirm");
+  expect(acknowledged.length).toBeGreaterThan(0);
+  expect(acknowledged.every((frame) => !frame.paper)).toBe(true);
   expect(frames.some((frame) => frame.kind === "handoff" && frame.fold > 0)).toBe(true);
   await expect(page.locator(".c-root")).toHaveClass(/at-result/);
   expect(blocked).toEqual([]);

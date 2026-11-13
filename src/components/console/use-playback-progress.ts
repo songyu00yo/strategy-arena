@@ -77,7 +77,7 @@ export function playbackDuration(beat: Beat | null): number {
   return {
     round_confirm: 950,
     summary_submit: 800,
-    summary_confirm: 750,
+    summary_confirm: 250,
     handoff: 700,
   }[action.kind];
 }

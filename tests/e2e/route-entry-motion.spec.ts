@@ -12,7 +12,7 @@ type RouteWindow = Window & {
 };
 
 // Explicit synthetic records, intercepted APIs and trusted browser input.
-async function fixture(page: Page) {
+async function fixture(page: Page, longResult = false) {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.addInitScript(() => {
     const inputs: unknown[] = [];
@@ -62,6 +62,10 @@ async function fixture(page: Page) {
   });
   const snapshot = configureFixtureModels(fixtureSnapshot());
   for (let i = 0; i < 5; i++) advanceFixture(snapshot);
+  if (longResult) {
+    snapshot.versions[0].verdict!.rationale =
+      "【测试替身】这段较长的说明用于核对完整结论与时间轴的可见交互。".repeat(45);
+  }
   const calls: string[] = [];
   await page.route("**/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -238,4 +242,103 @@ test("original five forced timeline clicks retain actual trusted targets after a
     "aria-current",
     "step",
   );
+  const region = page.locator(".c-result-region");
+  expect(
+    await region.evaluate((element) => element.getBoundingClientRect().height),
+  ).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: "第 4 步", exact: true })).toBeFocused();
+  // A mouse-focused tick releases its footprint when the pointer leaves.
+  await page.mouse.move(1, 1);
+  await expect
+    .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
+    .toBe(0);
+});
+
+test("keyboard timeline focus retains long-result space through reversals and releases on blur", async ({
+  page,
+}) => {
+  await fixture(page, true);
+  await page.goto("/");
+  await confirmFixtureIntake(page);
+  await page.getByRole("button", { name: "看完整结论", exact: true }).click();
+  const region = page.locator(".c-result-region");
+  await expect
+    .poll(() =>
+      region.evaluate((element) => element.getAnimations().some((a) => a.playState === "running")),
+    )
+    .toBe(false);
+  const height = await region.evaluate((element) => element.getBoundingClientRect().height);
+  expect(height).toBeGreaterThan(200);
+  await page.getByRole("button", { name: "第 1 步", exact: true }).focus();
+  await page.keyboard.press("Home");
+  await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+  await page.mouse.move(1, 1);
+  await page.waitForTimeout(400);
+  expect(await region.evaluate((element) => element.getBoundingClientRect().height)).toBeCloseTo(
+    height,
+    0,
+  );
+  await page.keyboard.press("End");
+  await expect(region).toHaveAttribute("aria-hidden", "false");
+  await page.keyboard.press("Home");
+  await expect(region).toHaveAttribute("aria-hidden", "true");
+  await page.getByRole("button", { name: "放映速度", exact: true }).focus();
+  await expect
+    .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
+    .toBe(0);
+});
+
+test.describe("touch timeline footprint", () => {
+  test.use({ hasTouch: true });
+  test("rapid touch selection releases its buffer and foreground details preserve the footprint", async ({
+    page,
+  }) => {
+    await fixture(page);
+    await page.goto("/");
+    await confirmFixtureIntake(page);
+    const region = page.locator(".c-result-region");
+    for (const step of [1, 6, 2, 8, 4]) {
+      const box = await page
+        .getByRole("button", { name: `第 ${step} 步`, exact: true })
+        .boundingBox();
+      expect(box).not.toBeNull();
+      await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    }
+    await expect(page.getByRole("button", { name: "第 4 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    expect(
+      await region.evaluate((element) => element.getBoundingClientRect().height),
+    ).toBeGreaterThan(0);
+    await expect
+      .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
+      .toBe(0);
+    await page.getByRole("button", { name: /回到结果/ }).click();
+    await expect
+      .poll(() =>
+        region.evaluate((element) =>
+          element.getAnimations().some((a) => a.playState === "running"),
+        ),
+      )
+      .toBe(false);
+    const box = await page.getByRole("button", { name: "第 1 步", exact: true }).boundingBox();
+    await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.getByRole("button", { name: "查看第 1 步", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    const details = page.getByRole("dialog", { name: "第 1 步 · 独立提案", exact: true });
+    await expect(details).toBeVisible();
+    await page.waitForTimeout(400);
+    expect(
+      await region.evaluate((element) => element.getBoundingClientRect().height),
+    ).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await expect(details).not.toBeVisible();
+    await expect
+      .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
+      .toBe(0);
+  });
 });

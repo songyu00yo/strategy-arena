@@ -327,7 +327,12 @@ test.describe("touch timeline footprint", () => {
       .toBe(false);
     const box = await page.getByRole("button", { name: "第 1 步", exact: true }).boundingBox();
     await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
     await page.getByRole("button", { name: "查看第 1 步", exact: true }).focus();
+    await expect(page.getByRole("button", { name: "查看第 1 步", exact: true })).toBeFocused();
     await page.keyboard.press("Enter");
     const details = page.getByRole("dialog", { name: "第 1 步 · 独立提案", exact: true });
     await expect(details).toBeVisible();

@@ -7,7 +7,11 @@ import { type ArenaVersion, type Attack } from "@/lib/contracts";
 import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
 import { readMotionOrigin } from "../motion-origin";
-import { handoffOverlay, deferOverlayHandoffCleanup } from "../overlay-handoff";
+import {
+  acquireOverlayScrollLock,
+  handoffOverlay,
+  deferOverlayHandoffCleanup,
+} from "../overlay-handoff";
 import { corners, project, inverse, multiply, cssMatrix, type Quad } from "../overlay-geometry";
 import "./step-card-motion.css";
 import {
@@ -542,6 +546,7 @@ export function StepCard({
       ? origin.element
       : (document.activeElement as HTMLElement | null);
     const release = acquireMotionHold();
+    const releaseScroll = acquireOverlayScrollLock();
     // A user can draw a card while a seek is still rearranging the deck. Freeze that exact pose.
     const deckTransitions = [...document.querySelectorAll<HTMLElement>("[data-step-source]")]
       .flatMap((card) => card.getAnimations())
@@ -636,6 +641,7 @@ export function StepCard({
       };
       if (!deferOverlayHandoffCleanup(el, settleDeck)) settleDeck();
       el.close();
+      releaseScroll();
       release();
       queueMicrotask(() => {
         // Evidence may take over in the same commit. Its focus must win that handoff.

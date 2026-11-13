@@ -20,6 +20,7 @@ export function ResultRegion({
 }) {
   const reducePreference = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
+  const settleInitialOpen = useRef(open);
   const animations = useRef<Animation[]>([]);
   const playbackRate = useRef(speed);
   useLayoutEffect(() => {
@@ -62,6 +63,12 @@ export function ResultRegion({
         parts = [];
         animations.current = [];
       };
+      // Existing results take their natural space before the first painted frame.
+      // The enclosing paper entrance remains, with stable controls below it.
+      if (settleInitialOpen.current) {
+        settleInitialOpen.current = false;
+        return finish();
+      }
       if (reducedMotion() || (next === 0 && parseFloat(height) === 0)) return finish();
       const timing = {
         duration: theater ? (open ? PAPER_MOTION.open : PAPER_MOTION.fold) : open ? 260 : 220,

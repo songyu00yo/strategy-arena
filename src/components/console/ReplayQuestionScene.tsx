@@ -501,6 +501,11 @@ export function ReplayQuestionScene({
       const sheetStyle = getComputedStyle(element);
       const sheetStyles = [
         "font-family",
+        "font-size",
+        "font-weight",
+        "line-height",
+        "letter-spacing",
+        "text-align",
         "color",
         "background",
         "border",

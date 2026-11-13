@@ -1,5 +1,7 @@
 # 纸面剧场动效验收
 
+本页保留上一轮记录。本轮紧凑节奏、原生收回、实际 Chrome 录像和剩余问题见[紧凑回放验收](compact-replay-acceptance.md)。
+
 ## 版本与查看
 
 实施目录为 `/Users/songyu00yo/Documents/传智杯AI Web/work/codex-agent-rag-mcp`，分支为 `codex/clarification-core`。本轮接续操作回放版本 `9c49fd2`，应用提交为 `8d9ca2f06c69e957d30de9157846d2f71e33b784`。本机验收构建为 `9126828b1f8e3556789176b5002744f73f8a5207`，后者只修正浏览器测试的类型。两者的 176 份应用文件逐份哈希一致。

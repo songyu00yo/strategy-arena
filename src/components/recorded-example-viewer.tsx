@@ -32,6 +32,9 @@ function handoffInitialPaper(form: HTMLFormElement, onStart: () => void) {
   paper.setAttribute("aria-hidden", "true");
   paper.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
   Object.assign(paper.style, {
+    animation: "none",
+    opacity: "1",
+    transform: "none",
     left: `${source.left}px`,
     top: `${source.top}px`,
     width: `${source.width}px`,

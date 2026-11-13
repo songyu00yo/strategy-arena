@@ -314,7 +314,7 @@ test("normal animation: all three speeds show the same mobile selection and conf
 // The replay must bring its stable, unfolded paper back into the viewport afterward.
 test("normal animation: mobile seek and resume keep the paper and each pressed control on screen", async ({
   page,
-}) => {
+}, testInfo) => {
   test.setTimeout(60000);
   await page.setViewportSize({ width: 390, height: 844 });
   for (const scenario of [
@@ -443,22 +443,38 @@ test("normal animation: mobile seek and resume keep the paper and each pressed c
       await expect(scene.locator(".replay-question-footer")).toBeInViewport({ ratio: 1 });
     }
 
-    await page.getByRole("button", { name: "暂停放映", exact: true }).evaluate((button) => {
-      if (button instanceof HTMLButtonElement) button.click();
+    await page.getByRole("button", { name: "暂停放映", exact: true }).click();
+    await expect(page.getByRole("button", { name: "继续放映", exact: true })).toBeVisible();
+    const scrolling = page.evaluate(
+      () =>
+        new Promise<{ trusted: boolean; positions: number[] }>((resolve) => {
+          window.addEventListener(
+            "wheel",
+            (event) => {
+              const positions = [scrollY];
+              const began = performance.now();
+              const sample = () => {
+                positions.push(scrollY);
+                if (performance.now() - began < 350) requestAnimationFrame(sample);
+                else resolve({ trusted: event.isTrusted, positions });
+              };
+              requestAnimationFrame(sample);
+            },
+            { once: true, capture: true },
+          );
+        }),
+    );
+    await page.mouse.wheel(0, -620);
+    const manual = await scrolling;
+    await testInfo.attach(`trusted-wheel-${scenario.type}`, {
+      body: JSON.stringify({ classification: "automated-trusted-browser-input", ...manual }),
+      contentType: "application/json",
     });
-    const manual = await page.evaluate(async () => {
-      const html = document.documentElement;
-      const original = html.style.scrollBehavior;
-      html.style.scrollBehavior = "auto";
-      window.scrollTo({ top: 0, behavior: "auto" });
-      html.style.scrollBehavior = original;
-      const top = scrollY;
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      );
-      return { before: top, after: scrollY };
-    });
-    expect(manual.after).toBe(manual.before);
+    expect(manual.trusted).toBe(true);
+    expect(manual.positions.length).toBeGreaterThan(2);
+    expect(
+      manual.positions.every((position, at) => !at || position <= manual.positions[at - 1] + 1),
+    ).toBe(true);
     expect(forbidden).toEqual([]);
   }
 });

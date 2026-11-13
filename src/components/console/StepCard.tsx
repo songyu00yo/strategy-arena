@@ -25,7 +25,12 @@ import {
 import { replayActionLines, stepContext, type StepContext } from "@/lib/step-context";
 import { projectReplay } from "@/lib/replay";
 
-type Flight = { parts: Animation[]; path: (t: number) => Quad; at: number; ms: number };
+type Flight = {
+  parts: Animation[];
+  driver: Animation;
+  path: (t: number) => Quad;
+  ms: number;
+};
 const DRAW_MS = 360;
 const LAND_MS = 240;
 const HANDOFF = 0.7;
@@ -55,11 +60,11 @@ function stopFlight(flight: Flight | null) {
 }
 function velocityOf(flight: Flight | null): Quad | undefined {
   if (!flight) return;
-  const elapsed = Math.min(flight.ms, performance.now() - flight.at);
-  if (elapsed >= flight.ms) return;
+  const elapsed = flight.driver.currentTime;
+  if (typeof elapsed !== "number" || elapsed <= 0 || elapsed >= flight.ms) return;
+  const dt = Math.min(elapsed, 8);
   const now = flight.path(elapsed / flight.ms);
-  const before = flight.path(Math.max(0, elapsed - 8) / flight.ms);
-  const dt = Math.max(1, Math.min(elapsed, 8));
+  const before = flight.path((elapsed - dt) / flight.ms);
   return now.map((p, i) => ({ x: (p.x - before[i].x) / dt, y: (p.y - before[i].y) / dt })) as Quad;
 }
 
@@ -528,13 +533,9 @@ export function StepCard({
         ),
       );
     }
-    // Starting every part at this common time prevents one-frame lag between the two card copies.
-    const start = document.timeline.currentTime;
-    if (typeof start === "number")
-      parts.forEach((part) => {
-        part.startTime = start;
-      });
-    flight.current = { parts, path, at: performance.now(), ms };
+    // These pending plays share this task's next ready refresh. Backdating them to
+    // an earlier document tick can advance the flight before its first visible paint.
+    flight.current = { parts, driver, path, ms };
     driver.onfinish = done;
   };
 
@@ -601,8 +602,8 @@ export function StepCard({
       });
       flight.current = {
         parts: [fade, backdrop],
+        driver: fade,
         path: () => corners(el),
-        at: performance.now(),
         ms: 160,
       };
       fade.onfinish = closing;

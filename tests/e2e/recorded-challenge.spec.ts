@@ -87,8 +87,11 @@ test("explicit UI fixture: a recorded clarification prepares the original intake
   await page.goto(`/examples/${metadata.slug}`);
   await page.getByRole("button", { name: "开始回看", exact: true }).click();
   await page.keyboard.press("End");
+  await expect(page.locator(".c-time button").last()).toHaveAttribute("aria-current", "step");
   const openSupplement = async () => {
-    await page.getByRole("button", { name: "查看第 1 步", exact: true }).focus();
+    const opener = page.getByRole("button", { name: "查看第 1 步", exact: true });
+    await opener.focus();
+    await expect(opener).toBeFocused();
     await page.keyboard.press("Enter");
     const card = page.getByRole("dialog", { name: /^第 1 步 ·/ });
     await expect(card).toBeVisible();

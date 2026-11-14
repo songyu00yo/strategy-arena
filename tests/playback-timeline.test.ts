@@ -66,7 +66,7 @@ describe("compact recorded playback timing", () => {
     ).toBe(1100);
   });
 
-  it("shows saved choices and text within the compact action limits", () => {
+  it("keeps ordinary actions compact and gives dense choices time to release and travel", () => {
     expect(playbackDuration(answerBeat({}))).toBe(650);
     expect(playbackDuration(answerBeat({ state: "unknown", value: "" }))).toBe(450);
     expect(playbackDuration(answerBeat({ state: "skipped", value: "" }))).toBe(450);
@@ -79,7 +79,7 @@ describe("compact recorded playback timing", () => {
       playbackDuration(
         answerBeat({ question: { ...question, type: "multiple" }, value: Array(6).fill("choice") }),
       ),
-    ).toBe(1300);
+    ).toBeCloseTo((5 * 240) / 0.52);
     expect(
       playbackDuration(answerBeat({ question: { ...question, type: "text" }, value: "hello" })),
     ).toBe(670);
@@ -91,6 +91,18 @@ describe("compact recorded playback timing", () => {
     expect(
       playbackDuration(answerBeat({ question: { ...question, type: "number" }, value: "123" })),
     ).toBe(662);
+  });
+
+  it("reserves a full press and approach between each dense saved choice", () => {
+    for (const count of [4, 6, 12]) {
+      const duration = playbackDuration(
+        answerBeat({
+          question: { ...question, type: "multiple" },
+          value: Array.from({ length: count }, (_, index) => `choice-${index}`),
+        }),
+      );
+      expect((duration * 0.52) / (count - 1)).toBeGreaterThanOrEqual(240 - 0.000001);
+    }
   });
 
   it.each([

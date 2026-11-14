@@ -74,11 +74,21 @@
   scrollbar-width: thin;
 }
 .replay-question-item {
+  position: relative;
   padding: 0 4px;
 }
-.replay-question-item.is-current {
-  border-left: 3px solid var(--vermilion, #a43b2c);
-  padding-left: 10px;
+.replay-question-item::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--vermilion, #a43b2c);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity calc(120ms / var(--playback-speed, 1)) ease-out;
+}
+.replay-question-item.is-current::before {
+  opacity: 1;
 }
 :is(.replay-question-scene, .replay-handoff-strip) .gi-question {
   margin-bottom: 6px;
@@ -99,14 +109,11 @@
     border-color calc(120ms / var(--playback-speed, 1)) ease-out,
     background-color calc(120ms / var(--playback-speed, 1)) ease-out;
 }
-:is(.replay-question-scene, .replay-handoff-strip)
-  :is(
-    [data-answer-option],
-    [data-answer-state],
-    [data-answer-field],
-    [data-replay-confirm]
-  )[data-replay-pressed="true"] {
+.console-shell
+  :is(.replay-question-scene, .replay-handoff-strip)
+  :is([data-answer-option], [data-answer-state], [data-answer-field], [data-replay-confirm]) {
   transform: translateY(var(--replay-control-press, 0px));
+  transition-property: background-color, color, border-color, box-shadow, outline-offset;
 }
 .console-shell
   :is(.replay-question-scene, .replay-handoff-strip)
@@ -147,11 +154,16 @@
   border-top: 1px solid var(--gi-line);
 }
 .replay-question-footer p {
+  flex: 1 1 6em;
+  min-width: 0;
   color: var(--gi-muted);
   font-size: 11px;
 }
 .replay-question-footer button {
   display: inline-flex;
+  flex: 0 0 auto;
+  max-width: 100%;
+  margin-left: auto;
   align-items: center;
   gap: 6px;
 }
@@ -182,7 +194,7 @@
   fill: var(--paper, white);
   stroke-width: 1.5;
 }
-.replay-question-pointer[data-pressed="true"]::before {
+.replay-question-pointer::before {
   content: "";
   position: absolute;
   left: -8px;
@@ -192,7 +204,7 @@
   border: 1.5px solid var(--vermilion, #a43b2c);
   border-radius: 50%;
   transform: scale(calc(0.8 + var(--replay-press-amount, 0) * 0.2));
-  opacity: calc(0.55 + var(--replay-press-amount, 0) * 0.45);
+  opacity: var(--replay-press-amount, 0);
 }
 .replay-summary-answers {
   margin: 0;
@@ -228,7 +240,8 @@
     transform: none !important;
     will-change: auto;
   }
-  :is(.replay-question-scene, .replay-handoff-strip) .gi-answer-options label {
+  :is(.replay-question-scene, .replay-handoff-strip) .gi-answer-options label,
+  .replay-question-item::before {
     transition: none;
   }
 }

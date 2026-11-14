@@ -514,7 +514,7 @@
   color: var(--gi-muted);
   font-size: 10px;
 }
-.gi-source-preview > div > div {
+.gi-source-preview [data-source-preview-content] {
   padding: 15px;
   margin-top: 10px;
   border: 1px solid var(--gi-line);

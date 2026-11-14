@@ -32,6 +32,7 @@ import { DisclosureMotion } from "./disclosure-motion";
 import { ModelSelector } from "./model-selector";
 import { QuestionInput } from "./question-input";
 import { useIntakeSummary } from "./use-intake-summary";
+import { useListMotion } from "./use-list-motion";
 import { ANSWER_JOURNAL_KEY, answerJournalScope, readAnswerJournal } from "./intake-answer-journal";
 import {
   clearIntakeDraftPointer,
@@ -133,6 +134,9 @@ export function GuidedIntake({
   const [goal, setGoal] = useState("");
   const [modelMode, setModelMode] = useState<ModelMode>(DEFAULT_MODEL_ID);
   const [draft, setDraft] = useState<IntakeDraft | null>(null);
+  const { ref: attachmentRoot, capture: captureAttachments } = useListMotion<HTMLUListElement>(
+    JSON.stringify(draft?.attachments.map((file) => file.id) ?? []),
+  );
   const [answers, setAnswers] = useState<IntakeAnswer[]>([]);
   const [answerSaveState, setAnswerSaveState] = useState<"server" | "local" | "memory" | "syncing">(
     "server",
@@ -895,9 +899,9 @@ export function GuidedIntake({
         </div>
       </DisclosureMotion>
       <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
-        <ul>
+        <ul ref={attachmentRoot}>
           {draft?.attachments.map((file) => (
-            <li key={file.id}>
+            <li key={file.id} data-motion-key={file.id}>
               <div className="gi-file-heading">
                 <FileText size={17} />
                 <strong>{file.name}</strong>
@@ -914,6 +918,7 @@ export function GuidedIntake({
                         "DELETE",
                       );
                       if (epoch === generation.current) {
+                        captureAttachments();
                         apply(next);
                         if (source?.attachmentId === file.id) setSource(null);
                       }
@@ -1405,8 +1410,12 @@ export function GuidedIntake({
               </button>
             ))}
           </div>
-          <DisclosureMotion open={!!source} className="gi-source-preview">
-            <div>
+          <DisclosureMotion
+            open={!!source}
+            className="gi-source-preview"
+            contentKey={source?.id ?? ""}
+          >
+            <div data-source-preview-content>
               <div className="gi-file-heading">
                 <strong>
                   {source?.filename} · {source?.location}

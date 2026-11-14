@@ -14,7 +14,9 @@ import {
   replayHandoffOutside,
   replayPaperTiming,
   replayPointerAt,
+  replayPointerOpacity,
   replayPressAt,
+  replayPressDuration,
   replayPressedAt,
   replayReadingState,
   replayReadingScroll,
@@ -262,15 +264,42 @@ describe("controlled recorded question scenes", () => {
     );
   });
 
-  it("presses each real control by a 1.5px sine pulse and returns to rest after 120ms", () => {
+  it("presses each real control smoothly by 1.5px and returns to rest after 120ms", () => {
     const clicks = [0.45, 0.6];
     expect(replayPressAt(1124, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
     expect(replayPressAt(1125, 2500, clicks)).toEqual({ index: 0, progress: 0, offset: 0 });
     expect(replayPressAt(1185, 2500, clicks)).toEqual({ index: 0, progress: 0.5, offset: 1.5 });
-    expect(replayPressAt(1215, 2500, clicks).offset).toBeCloseTo(Math.sin(Math.PI * 0.75) * 1.5);
+    expect(replayPressAt(1215, 2500, clicks).offset).toBeCloseTo(0.75);
     expect(replayPressAt(1245, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
     expect(replayPressAt(1560, 2500, clicks)).toEqual({ index: 1, progress: 0.5, offset: 1.5 });
     expect(replayPressAt(1620, 2500, clicks)).toEqual({ index: -1, progress: 0, offset: 0 });
+    const delta = 0.001;
+    expect(replayPressAt(1125 + delta, 2500, clicks).offset / delta).toBeLessThan(0.00001);
+    expect(replayPressAt(1245 - delta, 2500, clicks).offset / delta).toBeLessThan(0.00001);
+  });
+
+  it("fades the cursor continuously at entry, exit and paper return", () => {
+    expect(replayPointerOpacity(0, 650, 0)).toBe(0);
+    expect(replayPointerOpacity(60, 650, 0)).toBeCloseTo(0.5);
+    expect(replayPointerOpacity(120, 650, 0)).toBe(1);
+    expect(replayPointerOpacity(590, 650, 0)).toBeCloseTo(0.5);
+    expect(replayPointerOpacity(650, 650, 0)).toBe(0);
+    expect(replayPointerOpacity(300, 950, 0.1)).toBe(1);
+    expect(replayPointerOpacity(300, 950, 0.175)).toBeCloseTo(0.5);
+    expect(replayPointerOpacity(300, 950, 0.25)).toBe(0);
+  });
+
+  it("finishes dense presses before another click without an abrupt target release", () => {
+    const clicks = replayChoiceTimes(12);
+    const duration = 1300;
+    const feedback = replayPressDuration(duration, clicks);
+    const interval = (clicks[1] - clicks[0]) * duration;
+    expect(feedback).toBeLessThan(interval);
+    expect(feedback).toBeGreaterThan(0);
+    for (const at of clicks) {
+      expect(replayPressAt(at * duration, duration, clicks).offset).toBeCloseTo(0);
+      expect(replayPressAt(at * duration + feedback, duration, clicks).offset).toBeCloseTo(0);
+    }
   });
 
   it("requests a temporary handoff ornament only for a measured recipient outside the stage", () => {

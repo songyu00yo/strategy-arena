@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Beat } from "./beats";
 import { createMotionLoop, motionNow } from "./motion-runtime";
+import { PAPER_MOTION } from "./paper-stage";
 
 export interface PlaybackFrame {
   stepId: string;
@@ -69,7 +70,13 @@ export function playbackDuration(beat: Beat | null): number {
   if (action.kind === "answer") {
     const answer = action.answers?.[0];
     if (!answer || answer.state !== "answered") return 450;
-    if (Array.isArray(answer.value)) return Math.min(1300, 650 + answer.value.length * 160);
+    if (Array.isArray(answer.value)) {
+      const compact = Math.min(1300, 650 + answer.value.length * 160);
+      // The saved clicks occupy 52% of the action. Each interval includes a
+      // complete press and release before the cursor approaches the next choice.
+      const clickIntervals = Math.max(0, answer.value.length - 1);
+      return Math.max(compact, (clickIntervals * PAPER_MOTION.feedback * 2) / 0.52);
+    }
     if (answer.question.type === "text" || answer.question.type === "number")
       return Math.min(1100, 650 + Array.from(String(answer.value)).length * 4);
     return 650;

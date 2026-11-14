@@ -102,12 +102,31 @@ export function replayChoiceTimes(count: number) {
   return Array.from({ length: count }, (_, index) => 0.22 + (index * 0.52) / (count - 1));
 }
 
-export function replayPressAt(elapsed: number, duration: number, clickTimes: number[]) {
+export function replayPressDuration(duration: number, clickTimes: number[]) {
+  const gaps = clickTimes.slice(1).map((at, index) => (at - clickTimes[index]) * duration);
+  return Math.max(1, Math.min(PAPER_MOTION.feedback, ...gaps.map((gap) => gap * 0.6)));
+}
+
+export function replayPressAt(
+  elapsed: number,
+  duration: number,
+  clickTimes: number[],
+  feedback = replayPressDuration(duration, clickTimes),
+) {
   const index = clickTimes.findLastIndex(
-    (at) => elapsed >= at * duration && elapsed < at * duration + PAPER_MOTION.feedback,
+    (at) => elapsed >= at * duration && elapsed < at * duration + feedback,
   );
-  const progress = index < 0 ? 0 : (elapsed - clickTimes[index] * duration) / PAPER_MOTION.feedback;
-  return { index, progress, offset: index < 0 ? 0 : Math.sin(progress * Math.PI) * 1.5 };
+  const progress = index < 0 ? 0 : (elapsed - clickTimes[index] * duration) / feedback;
+  return { index, progress, offset: index < 0 ? 0 : Math.sin(progress * Math.PI) ** 2 * 1.5 };
+}
+
+/** The cursor enters and leaves continuously on the same active clock as its paper. */
+export function replayPointerOpacity(elapsed: number, duration: number, fold: number) {
+  return (
+    smooth(elapsed / PAPER_MOTION.feedback) *
+    smooth((duration - elapsed) / PAPER_MOTION.feedback) *
+    (1 - smooth((fold - 0.1) / 0.15))
+  );
 }
 
 export function replayPressedAt(elapsed: number, duration: number, clickTimes: number[]) {
@@ -295,6 +314,7 @@ export function ReplayQuestionScene({
   const followed = useRef({ id: "", playing: false, seeking: false, speed });
   const followScroll = useRef<(() => void) | null>(null);
   const playbackRate = useRef(speed);
+  const preferenceAction = useRef({ stepId: activeStepId, reduced: false });
   useLayoutEffect(() => {
     playbackRate.current = speed;
   }, [speed]);
@@ -307,7 +327,11 @@ export function ReplayQuestionScene({
     if (!element || !viewport || !cursor || !stage) return;
     const opening = action.kind === "questions" || action.kind === "summary_submit";
     const closing = returnsToStage ?? ["round_confirm", "handoff"].includes(action.kind);
-    const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
+    if (preferenceAction.current.stepId !== activeStepId)
+      preferenceAction.current = { stepId: activeStepId, reduced: false };
+    preferenceAction.current.reduced ||= motionPreference.matches;
+    let reducedMotion = preferenceAction.current.reduced;
     // Latch the selected rate per action, preserving the return pose if speed changes mid-flight.
     const returnRate = playbackRate.current;
     const board = stage.querySelector<HTMLElement>(
@@ -368,6 +392,7 @@ export function ReplayQuestionScene({
       element.dataset.stripOwner = "local";
     };
     const clickTimes = userConfirmation ? [0.4] : replayChoiceTimes(choices.length);
+    const pressDuration = replayPressDuration(duration, clickTimes);
 
     const localSignature = (frame: PlaybackFrame) => {
       if (action.kind === "questions") return activeStepId;
@@ -428,22 +453,23 @@ export function ReplayQuestionScene({
       }
       const destination = cache.destination;
       const source = cache.source;
-      const returning = destination
-        ? replayReturnPose(
-            fold,
-            destination,
-            handoff && source
-              ? { x: source.x, y: source.y, scale: Math.min(0.85, source.scaleX * 0.8) }
-              : undefined,
-          )
-        : null;
+      const returning =
+        destination && !reducedMotion
+          ? replayReturnPose(
+              fold,
+              destination,
+              handoff && source
+                ? { x: source.x, y: source.y, scale: Math.min(0.85, source.scaleX * 0.8) }
+                : undefined,
+            )
+          : null;
       const x = (source?.x ?? 0) * (1 - open) + (returning?.x ?? 0);
       const y = (source?.y ?? 0) * (1 - open) + (returning?.y ?? 0);
       const scaleX = (1 + ((source?.scaleX ?? 1) - 1) * (1 - open)) * (returning?.scale ?? 1);
       const scaleY = (1 + ((source?.scaleY ?? 1) - 1) * (1 - open)) * (returning?.scale ?? 1);
       let scroll = cache.scroll;
       let scrollPhase: ReplayScrollPhase = frame.running ? "reading" : "paused";
-      if (frame.running && action.kind === "questions" && returnRate < 1) {
+      if (!reducedMotion && frame.running && action.kind === "questions" && returnRate < 1) {
         const reading = replayReadingState(frame.progress, cache.stops, cache.range);
         scroll = reading.top;
         scrollPhase = reading.phase;
@@ -451,10 +477,7 @@ export function ReplayQuestionScene({
       const clickIndex = choices.length
         ? Math.min(
             choices.length - 1,
-            clickTimes.filter(
-              (at) =>
-                frame.elapsed >= at * frame.duration + Math.min(30, PAPER_MOTION.feedback / 4),
-            ).length,
+            clickTimes.filter((at) => frame.elapsed >= at * frame.duration + pressDuration).length,
           )
         : 0;
       const target = cache.targets[clickIndex];
@@ -463,12 +486,18 @@ export function ReplayQuestionScene({
         userConfirmation || clickIndex === 0
           ? (userConfirmation ? 0.08 : choices.length > 1 ? 0.03 : 0.15) * frame.duration
           : Math.min(
-              clickTimes[clickIndex - 1] * frame.duration + Math.min(30, PAPER_MOTION.feedback / 4),
+              clickTimes[clickIndex - 1] * frame.duration + pressDuration,
               clickTimes[clickIndex] * frame.duration,
             );
       const moveEnd = (userConfirmation ? 0.34 : clickTimes[clickIndex]) * frame.duration;
       const movement = bounded((frame.elapsed - moveStart) / Math.max(1, moveEnd - moveStart));
-      if (target && frame.running && !userConfirmation && action.kind === "answer") {
+      if (
+        !reducedMotion &&
+        target &&
+        frame.running &&
+        !userConfirmation &&
+        action.kind === "answer"
+      ) {
         const desired = Math.max(
           0,
           Math.min(cache.range, target.y - cache.bodyTop - cache.bodyHeight * 0.35),
@@ -487,6 +516,7 @@ export function ReplayQuestionScene({
         x: point.x,
         y: point.y - (userConfirmation ? 0 : scroll),
       });
+      const press = replayPressAt(frame.elapsed, frame.duration, clickTimes, pressDuration);
       const position = target
         ? replayPointerAt(
             previousTarget ? toVisible(previousTarget) : (origin ?? cache.heading),
@@ -494,8 +524,10 @@ export function ReplayQuestionScene({
             reducedMotion ? 1 : movement,
           )
         : null;
-      const press = replayPressAt(frame.elapsed, frame.duration, clickTimes);
-      const pressed = !!(currentAnswer || userConfirmation) && press.index >= 0;
+      // Keep the tip attached while the pressed target moves, and finish its
+      // release before beginning the next multi-choice approach.
+      if (position && press.index === clickIndex) position.y += reducedMotion ? 0 : press.offset;
+      const pressed = !reducedMotion && !!(currentAnswer || userConfirmation) && press.index >= 0;
       const control = pressed ? (cache.controls[press.index] ?? null) : null;
       const carry = cache.transferOutside && replayHandoffActive(frame, fold, true);
 
@@ -544,8 +576,9 @@ export function ReplayQuestionScene({
       }
       cursor.dataset.pressed = String(pressed);
       cursor.style.setProperty("--replay-press-amount", String(pressed ? press.offset / 1.5 : 0));
-      cursor.style.opacity =
-        frame.progress >= 0.15 && frame.progress < 0.96 && fold < 0.25 ? "1" : "0";
+      cursor.style.opacity = String(
+        reducedMotion ? 0 : replayPointerOpacity(frame.elapsed, frame.duration, fold),
+      );
       cursor.style.visibility = position ? "visible" : "hidden";
       if (position) {
         pointerPosition.current = position;
@@ -664,7 +697,7 @@ export function ReplayQuestionScene({
         shadow: element.querySelector<HTMLElement>(":scope > .replay-paper-shadow"),
       };
       // Prepare the final handoff before movement starts. Its geometry stays out of frame writes.
-      if (closing && cache.transferOutside) {
+      if (closing && cache.transferOutside && !reducedMotion) {
         if (!transfer) {
           const scope = createMotionScope();
           const context = scope.own(document.createElement("div"));
@@ -835,6 +868,21 @@ export function ReplayQuestionScene({
     const unsubscribePause = subscribeMotionPause(() => {
       paint(frameRef.current);
     });
+    const settleForPreference = () => {
+      if (disposed || reducedMotion || !motionPreference.matches) return;
+      // Once this action is settled, changing the preference back cannot replay
+      // its old entrance or return. The next recorded action reads it afresh.
+      reducedMotion = true;
+      preferenceAction.current.reduced = true;
+      nativeReturn?.scope.dispose();
+      nativeReturn = null;
+      clearTransfer();
+      resetControl();
+      followScroll.current?.();
+      followScroll.current = null;
+      paint(frameRef.current);
+    };
+    motionPreference.addEventListener("change", settleForPreference);
     const initial = timeline?.read();
     if (initial?.stepId === activeStepId) frameRef.current = initial;
     else
@@ -854,6 +902,7 @@ export function ReplayQuestionScene({
       observer.disconnect();
       unsubscribe?.();
       unsubscribePause();
+      motionPreference.removeEventListener("change", settleForPreference);
       nativeReturn?.scope.dispose();
       clearTransfer();
       resetControl();
@@ -904,7 +953,10 @@ export function ReplayQuestionScene({
       (activePlaying && previous.speed !== speed);
     followed.current = { id: action.id, playing: activePlaying, seeking, speed };
     if (!shouldFollow) return;
-    if (action.kind === "handoff") {
+    if (
+      action.kind === "handoff" ||
+      (preferenceAction.current.stepId === activeStepId && preferenceAction.current.reduced)
+    ) {
       followScroll.current?.();
       followScroll.current = null;
       return;
@@ -927,7 +979,7 @@ export function ReplayQuestionScene({
       followScroll.current?.();
       followScroll.current = null;
     }
-  }, [action.id, action.kind, playing, seeking, speed]);
+  }, [action.id, action.kind, activeStepId, playing, seeking, speed]);
   useLayoutEffect(() => () => followScroll.current?.(), []);
 
   const rows = questions.length

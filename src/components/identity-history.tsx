@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Download, History, KeyRound, RefreshCw } from "lucide-react";
 import type {
   ArenaHistoryItem,
@@ -12,6 +12,7 @@ import type {
 import type { OverlayMotionHandle } from "./overlay-motion";
 import { Modal } from "./modal";
 import { bootstrapIdentity } from "./identity-bootstrap";
+import { useListMotion } from "./use-list-motion";
 import "./identity-history.css";
 
 const IDENTITY_CHANGE_KEY = "strategy-arena:identity-changed";
@@ -87,15 +88,41 @@ export function IdentityHistory({
   const motion = useRef<OverlayMotionHandle>(null);
   const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
   const codeId = useId();
+  const { ref: historyRoot, capture: captureHistory } = useListMotion<HTMLDivElement>(
+    JSON.stringify([
+      open,
+      arenas,
+      intakes,
+      busy,
+      error,
+      notice,
+      identity?.identityTag,
+      recoveryCode,
+      codePending,
+      confirmSwitch,
+      confirmRotation,
+    ]),
+  );
+  const moreFocus = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const key = moreFocus.current;
+    if (!key) return;
+    moreFocus.current = null;
+    historyRoot.current
+      ?.querySelector<HTMLElement>(`[data-motion-key="${CSS.escape(key)}"] button`)
+      ?.focus({ preventScroll: true });
+  }, [arenas, intakes, historyRoot]);
   const hasHistory = arenas.items.length > 0 || intakes.items.length > 0;
   const refresh = useCallback(async () => {
     const current = ++epoch.current;
+    captureHistory();
     setBusy(true);
     setError("");
     try {
       const next = await bootstrapIdentity();
       if (current !== epoch.current) return;
       if (identityTag.current && identityTag.current !== next.identityTag) {
+        captureHistory();
         setRecoveryCode("");
         setCodePending(false);
         setConfirmRotation(false);
@@ -110,6 +137,7 @@ export function IdentityHistory({
         if (current !== epoch.current) return;
       }
       identityTag.current = next.identityTag;
+      captureHistory();
       setIdentity(next);
       const [arenaPage, intakePage] = await Promise.all([
         identityRequest<HistoryPage<ArenaHistoryItem>>(historyUrl("/api/arenas", next.identityTag)),
@@ -118,15 +146,21 @@ export function IdentityHistory({
         ),
       ]);
       if (current !== epoch.current) return;
+      captureHistory();
       setArenas(arenaPage);
       setIntakes(intakePage);
     } catch (failure) {
-      if (current === epoch.current)
+      if (current === epoch.current) {
+        captureHistory();
         setError(failure instanceof Error ? failure.message : "历史读取未完成，请重试。");
+      }
     } finally {
-      if (current === epoch.current) setBusy(false);
+      if (current === epoch.current) {
+        captureHistory();
+        setBusy(false);
+      }
     }
-  }, [onIdentityChanged]);
+  }, [onIdentityChanged, captureHistory]);
   useEffect(() => {
     const lifecycle = epoch;
     return () => {
@@ -136,6 +170,7 @@ export function IdentityHistory({
   useEffect(() => {
     const changed = () => {
       epoch.current++;
+      captureHistory();
       identityTag.current = null;
       setIdentity(null);
       setArenas({ items: [], nextCursor: null });
@@ -150,7 +185,10 @@ export function IdentityHistory({
         .then(() => {
           if (open) return refresh();
         })
-        .catch(() => setError("身份已更新，请刷新页面重新读取。"));
+        .catch(() => {
+          captureHistory();
+          setError("身份已更新，请刷新页面重新读取。");
+        });
     };
     const storageChanged = (event: StorageEvent) => {
       if (event.key === IDENTITY_CHANGE_KEY) changed();
@@ -165,10 +203,11 @@ export function IdentityHistory({
       channel?.close();
       changeChannel.current = null;
     };
-  }, [onIdentityChanged, open, refresh]);
+  }, [onIdentityChanged, open, refresh, captureHistory]);
 
   const identityChanged = async (next: IdentityState) => {
     epoch.current++;
+    captureHistory();
     identityTag.current = next.identityTag;
     setIdentity(next);
     setArenas({ items: [], nextCursor: null });
@@ -185,11 +224,13 @@ export function IdentityHistory({
     const checkEpoch = epoch.current;
     await pending;
     if (checkEpoch !== epoch.current) return;
+    captureHistory();
     setError(message);
     setNotice("请核对下方历史。需要时可使用已保存的恢复码再次恢复。");
   };
   const rotate = async () => {
     if (!identity || busy) return;
+    captureHistory();
     setBusy(true);
     setError("");
     setNotice("");
@@ -201,19 +242,24 @@ export function IdentityHistory({
         expectedIdentityTag: identity.identityTag,
       });
       if (current !== epoch.current) return;
+      captureHistory();
       setRecoveryCode(result.recoveryCode);
       setCodePending(true);
       setConfirmRotation(false);
       setNotice("新恢复码等待启用。请先下载或复制保存，再确认启用，15 分钟内有效。");
     } catch (failure) {
-      if (current === epoch.current)
+      if (current === epoch.current) {
+        captureHistory();
         setError(failure instanceof Error ? failure.message : "恢复码生成未完成，请重试。");
+      }
     } finally {
+      captureHistory();
       setBusy(false);
     }
   };
   const activate = async () => {
     if (!identity || busy || !codePending || !confirmRotation) return;
+    captureHistory();
     setBusy(true);
     setError("");
     const current = epoch.current;
@@ -223,6 +269,7 @@ export function IdentityHistory({
         code: recoveryCode,
       });
       if (current !== epoch.current) return;
+      captureHistory();
       setCodePending(false);
       setConfirmRotation(false);
       setNotice("新恢复码已启用。旧恢复码与其他设备的访问已失效。");
@@ -234,11 +281,13 @@ export function IdentityHistory({
         );
       }
     } finally {
+      captureHistory();
       setBusy(false);
     }
   };
   const recover = async () => {
     if (busy || !enteredCode.trim() || (hasHistory && !confirmSwitch)) return;
+    captureHistory();
     setBusy(true);
     setError("");
     setNotice("");
@@ -249,6 +298,7 @@ export function IdentityHistory({
         expectedIdentityTag: identity?.identityTag ?? null,
       });
       if (current !== epoch.current) return;
+      captureHistory();
       setEnteredCode("");
       setRecoveryCode("");
       setCodePending(false);
@@ -261,6 +311,7 @@ export function IdentityHistory({
           failure instanceof Error ? failure.message : "恢复结果待确认，请核对历史。",
         );
     } finally {
+      captureHistory();
       setBusy(false);
     }
   };
@@ -268,6 +319,13 @@ export function IdentityHistory({
     if (!identity || busy) return;
     const cursor = kind === "arena" ? arenas.nextCursor : intakes.nextCursor;
     if (!cursor) return;
+    const moreKey = `${kind}-more`;
+    const ownedFocus = document.activeElement?.getAttribute("data-motion-key") === moreKey;
+    const canRestoreFocus = () =>
+      ownedFocus &&
+      (document.activeElement === document.body ||
+        document.activeElement?.getAttribute("data-motion-key") === moreKey);
+    captureHistory();
     setBusy(true);
     setError("");
     const current = epoch.current;
@@ -276,20 +334,33 @@ export function IdentityHistory({
         const page = await identityRequest<HistoryPage<ArenaHistoryItem>>(
           historyUrl("/api/arenas", identity.identityTag, cursor),
         );
-        if (current === epoch.current)
+        if (current === epoch.current) {
+          captureHistory();
+          if (!page.nextCursor && canRestoreFocus())
+            moreFocus.current = `arena:${page.items.find((item) => !arenas.items.some((old) => old.id === item.id))?.id ?? page.items.at(-1)?.id ?? ""}`;
           setArenas((previous) => ({ ...page, items: mergeItems(previous.items, page.items) }));
+        }
       } else {
         const page = await identityRequest<HistoryPage<IntakeHistoryItem>>(
           historyUrl("/api/intakes", identity.identityTag, cursor),
         );
-        if (current === epoch.current)
+        if (current === epoch.current) {
+          captureHistory();
+          if (!page.nextCursor && canRestoreFocus())
+            moreFocus.current = `intake:${page.items.find((item) => !intakes.items.some((old) => old.id === item.id))?.id ?? page.items.at(-1)?.id ?? ""}`;
           setIntakes((previous) => ({ ...page, items: mergeItems(previous.items, page.items) }));
+        }
       }
     } catch (failure) {
-      if (current === epoch.current)
+      if (current === epoch.current) {
+        captureHistory();
         setError(failure instanceof Error ? failure.message : "读取下一页失败，请重试。");
+      }
     } finally {
-      if (current === epoch.current) setBusy(false);
+      if (current === epoch.current) {
+        captureHistory();
+        setBusy(false);
+      }
     }
   };
   const downloadCode = () => {
@@ -307,6 +378,7 @@ export function IdentityHistory({
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const openItem = async (kind: "arena" | "intake", id: string) => {
+    captureHistory();
     setBusy(true);
     setError("");
     try {
@@ -319,8 +391,10 @@ export function IdentityHistory({
       };
       if (!motion.current?.close(finish)) finish();
     } catch (failure) {
+      captureHistory();
       setError(failure instanceof Error ? failure.message : "打开未完成，请重试。");
     } finally {
+      captureHistory();
       setBusy(false);
     }
   };
@@ -355,7 +429,7 @@ export function IdentityHistory({
           }}
           wide
         >
-          <div className="identity-history" aria-busy={busy}>
+          <div className="identity-history" aria-busy={busy} ref={historyRoot}>
             <p className="identity-history-intro">
               此浏览器会记住你的身份。保存恢复码后，可在清除浏览器数据或更换设备时找回历史。
             </p>
@@ -387,7 +461,7 @@ export function IdentityHistory({
             )}
             <ul className="identity-history-list">
               {arenas.items.map((item) => (
-                <li key={item.id}>
+                <li key={item.id} data-motion-key={`arena:${item.id}`}>
                   <button
                     type="button"
                     disabled={busy}
@@ -406,6 +480,7 @@ export function IdentityHistory({
               <button
                 type="button"
                 className="text-button"
+                data-motion-key="arena-more"
                 disabled={busy}
                 onClick={() => void more("arena")}
               >
@@ -420,7 +495,7 @@ export function IdentityHistory({
             )}
             <ul className="identity-history-list">
               {intakes.items.map((item) => (
-                <li key={item.id}>
+                <li key={item.id} data-motion-key={`intake:${item.id}`}>
                   <button
                     type="button"
                     disabled={busy}
@@ -438,13 +513,18 @@ export function IdentityHistory({
               <button
                 type="button"
                 className="text-button"
+                data-motion-key="intake-more"
                 disabled={busy}
                 onClick={() => void more("intake")}
               >
                 更多草稿
               </button>
             )}
-            <section className="identity-history-recovery" aria-label="保存恢复码">
+            <section
+              className="identity-history-recovery"
+              aria-label="保存恢复码"
+              data-motion-key="recovery-save"
+            >
               <h3>
                 <KeyRound size={16} aria-hidden="true" /> 保存当前身份
               </h3>
@@ -498,6 +578,7 @@ export function IdentityHistory({
             </section>
             <form
               className="identity-history-recovery"
+              data-motion-key="recovery-restore"
               onSubmit={(event) => {
                 event.preventDefault();
                 void recover();

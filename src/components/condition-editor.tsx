@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, ChevronDown, Plus, X } from "lucide-react";
 import { ChallengeSchema, type Challenge, type ModelMode, type ModelOption } from "@/lib/contracts";
 import { challengeChanges, changeReason } from "@/lib/challenge-changes";
@@ -8,6 +8,7 @@ import { MODEL_CATALOG } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
 import { DisclosureMotion } from "./disclosure-motion";
 import { ModelSelector } from "./model-selector";
+import { useListMotion } from "./use-list-motion";
 import "./condition-editor.css";
 
 const domains = [
@@ -53,6 +54,12 @@ export function ConditionEditor({
     options: [...initial.options],
   }));
   const [modelMode, setModelMode] = useState(initialModelMode);
+  const [optionIds, setOptionIds] = useState(() =>
+    initial.options.map((_, index) => `${id}-${index}`),
+  );
+  const nextOptionId = useRef(initial.options.length);
+  const optionFocus = useRef<string | null>(null);
+  const { ref: optionRoot, capture: captureOptions } = useListMotion<HTMLDivElement>(optionIds);
   const [complete, setComplete] = useState(false);
   const [field, setField] = useState(initialFocus);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -60,6 +67,16 @@ export function ConditionEditor({
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const form = useRef<HTMLFormElement>(null);
+  useLayoutEffect(() => {
+    const target = optionFocus.current;
+    if (!target) return;
+    optionFocus.current = null;
+    const selector =
+      target === "add"
+        ? '[data-motion-key="option-add"]'
+        : `[data-motion-key="${CSS.escape(target)}"] input`;
+    optionRoot.current?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+  }, [optionIds, optionRoot]);
   useEffect(() => {
     form.current
       ?.querySelector<HTMLElement>("[data-overlay-autofocus]")
@@ -88,6 +105,25 @@ export function ConditionEditor({
     setError("");
   };
   const fieldFocus = { "data-overlay-autofocus": true, "data-disclosure-autofocus": true };
+  const removeOption = (index: number) => {
+    if (busy) return;
+    captureOptions();
+    const remaining = optionIds.filter((_, at) => at !== index);
+    optionFocus.current = remaining[Math.min(index, remaining.length - 1)] ?? "add";
+    setOptionIds(remaining);
+    set(
+      "options",
+      value.options.filter((_, at) => at !== index),
+    );
+  };
+  const addOption = () => {
+    if (busy || value.options.length >= 3) return;
+    captureOptions();
+    const key = `${id}-${nextOptionId.current++}`;
+    optionFocus.current = key;
+    setOptionIds([...optionIds, key]);
+    set("options", [...value.options, ""]);
+  };
   const summary = [
     ...changes.map((change) => `${change.label}：${change.detail}`),
     ...(modelChanged ? ["本轮模型已修改"] : []),
@@ -209,7 +245,7 @@ export function ConditionEditor({
             <ChevronDown size={16} className={complete ? "is-open" : ""} aria-hidden="true" />
           </button>
           <DisclosureMotion open={complete} id={`${id}-complete`}>
-            <div className="condition-editor-complete">
+            <div className="condition-editor-complete" ref={optionRoot}>
               <label className="field">
                 <span>目标</span>
                 <textarea
@@ -225,7 +261,11 @@ export function ConditionEditor({
                   已有备选方案 <small>最多 3 个</small>
                 </span>
                 {value.options.map((option, index) => (
-                  <div className="option-row" key={index}>
+                  <div
+                    className="option-row"
+                    key={optionIds[index]}
+                    data-motion-key={optionIds[index]}
+                  >
                     <span className="option-index">{String(index + 1).padStart(2, "0")}</span>
                     <input
                       aria-label={`备选方案 ${index + 1}`}
@@ -244,12 +284,7 @@ export function ConditionEditor({
                       type="button"
                       className="icon-button"
                       aria-label={`删除备选方案 ${index + 1}`}
-                      onClick={() =>
-                        set(
-                          "options",
-                          value.options.filter((_, at) => at !== index),
-                        )
-                      }
+                      onClick={() => removeOption(index)}
                     >
                       <X size={15} />
                     </button>
@@ -259,7 +294,8 @@ export function ConditionEditor({
                   <button
                     type="button"
                     className="text-button"
-                    onClick={() => set("options", [...value.options, ""])}
+                    data-motion-key="option-add"
+                    onClick={addOption}
                   >
                     <Plus size={14} />
                     添加一个选项

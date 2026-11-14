@@ -307,3 +307,8 @@
     display: none;
   }
 }
+
+/* The temporary retiring paper is inert and shares its live button's dimensions. */
+.trigger[data-model-label-motion="true"] {
+  transition-property: background-color, color, border-color, box-shadow, outline-offset;
+}

@@ -983,9 +983,16 @@ for (const boundary of ["first-start-paused", "paused-resize", "playing-resize"]
 
     let held = initialHeld;
     if (boundary === "paused-resize") {
-      await page.setViewportSize({ width: 344, height: 844 });
-      held = await snapshot();
       const previousHeight = initial.effects.find((effect) => effect.kind === "height")!;
+      await page.setViewportSize({ width: 344, height: 844 });
+      await page.waitForFunction(
+        (previousId) =>
+          (window as ContentClockWindow)
+            .__contentClock!.read()
+            .effects.some((effect) => effect.kind === "height" && effect.id !== previousId),
+        previousHeight.id,
+      );
+      held = await snapshot();
       const nextHeight = held.effects.find((effect) => effect.kind === "height")!;
       expect(nextHeight.id).not.toBe(previousHeight.id);
       expect(nextHeight.state).toBe("paused");

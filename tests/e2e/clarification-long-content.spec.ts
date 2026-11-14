@@ -7,6 +7,7 @@ import type {
   DecisionItem,
 } from "../../src/lib/clarification-contracts";
 import type { IntakeQuestion, RecordedAnswer } from "../../src/lib/intake-contracts";
+import { buildClarificationReplay, projectReplay } from "../../src/lib/replay";
 import { configureFixtureModels } from "./intake.fixture";
 import { fixtureSnapshot } from "./ui.fixture";
 
@@ -17,6 +18,12 @@ const executionPrompt = `【测试替身】长执行提示词\n${"按本人已�
 function longSnapshot() {
   const snapshot = configureFixtureModels(fixtureSnapshot());
   const version = snapshot.versions[0];
+  const challenge = {
+    ...version.challenge,
+    goal: `【测试替身】长标题${"UnbrokenGoal".repeat(100)}`,
+    constraints: `【测试替身】${"UnbrokenConstraint".repeat(140)}`,
+    preferences: "【测试替身】" + "优先保持报告完整和三张角色卡片可见。".repeat(40),
+  };
   const questions: IntakeQuestion[] = [1, 2, 3].map((round) => ({
     id: `scope_${round}`,
     decisionId: `scope_${round}`,
@@ -46,6 +53,7 @@ function longSnapshot() {
     confirmedAt: date,
     confirmedRevision: 3,
   }));
+  const roundQuestions = [[questions[0]], questions.slice(1), []];
   const runs: ClarificationRun[] = [1, 2, 3].flatMap((round) =>
     (["A", "B", "C"] as const).map((role) => ({
       id: `synthetic-${round}-${role}`,
@@ -61,7 +69,10 @@ function longSnapshot() {
           : role === "B"
             ? {
                 summary: "【测试替身】补问",
-                questions: [{ ...questions[round - 1], decisionId: questions[round - 1].id }],
+                questions: roundQuestions[round - 1].map((question) => ({
+                  ...question,
+                  decisionId: question.id,
+                })),
                 conflicts: [],
               }
             : {
@@ -80,18 +91,33 @@ function longSnapshot() {
     items,
     retiredIds: [],
     runs,
-    rounds: questions.map((question, index) => ({
+    rounds: roundQuestions.map((questions, index) => ({
       round: index + 1,
       revision: index,
-      questions: [{ ...question, decisionId: question.id }],
-      answers: [answers[index]],
+      questions: questions.map((question) => ({ ...question, decisionId: question.id })),
+      answers: index === 0 ? [] : index === 1 ? [answers[0]] : answers,
       changes: { added: [], retired: [], changed: [], triggerAnswerIds: [] },
       runIds: runs.filter((run) => run.round === index + 1).map((run) => run.id),
       createdAt: date,
     })),
     suggestions: ["【测试替身】建议仍待确认。"],
     conflicts: [],
-    review: null,
+    review: {
+      summary: "【测试替身】三轮回答与摘要已确认，可以交接。",
+      ready: true,
+      coverage: [
+        {
+          topic: "scope",
+          applicable: true,
+          reason: "预设确认记录完整。",
+          decisionIds: items.map((item) => item.id),
+        },
+      ],
+      gaps: [],
+      conflicts: [],
+      fingerprint: "synthetic-long-report-fingerprint",
+      basedOnRevision: 2,
+    },
     next: "completed",
     draftOnly: false,
     specification,
@@ -102,19 +128,19 @@ function longSnapshot() {
     status: "completed",
     stage: "judge",
     clarification,
-    challenge: {
-      ...version.challenge,
-      goal: `【测试替身】长标题${"UnbrokenGoal".repeat(100)}`,
-      constraints: `【测试替身】${"UnbrokenConstraint".repeat(140)}`,
-      preferences: "【测试替身】" + "优先保持报告完整和三张角色卡片可见。".repeat(40),
-    },
+    challenge,
     intake: {
       id: "synthetic-long-intake",
-      originalGoal: version.challenge.goal,
+      originalGoal: challenge.goal,
       answers,
       assumptions: [],
       usedSources: [],
       usage: [],
+      confirmation: {
+        summary: { revision: 3, confirmedAt: date, challenge: structuredClone(challenge) },
+        pendingSummaryFields: [],
+        history: [],
+      },
     },
     requirements: {
       confirmed: answers.map((answer) => String(answer.value)),
@@ -129,6 +155,10 @@ function longSnapshot() {
 
 async function restoreLongReport(page: Page) {
   const snapshot = longSnapshot();
+  const version = snapshot.versions[0];
+  const replay = buildClarificationReplay(version);
+  expect(replay.at(-1)?.replayAction?.kind).toBe("handoff");
+  expect(projectReplay(version, replay, replay.length - 1).handoffComplete).toBe(true);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.route("**/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;

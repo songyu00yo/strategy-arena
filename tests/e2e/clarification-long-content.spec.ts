@@ -230,6 +230,36 @@ for (const height of [900, 720]) {
       .toBe(true);
     await region.focus();
     await expect(region).toBeFocused();
+    const selectedStep = page.locator('.c-time [aria-current="step"]');
+    const originalStep = await selectedStep.getAttribute("aria-label");
+    for (const readingRegion of [region, page.locator(".c-conditions")]) {
+      await expect
+        .poll(() =>
+          readingRegion.evaluate((element) => element.scrollHeight > element.clientHeight),
+        )
+        .toBe(true);
+      await readingRegion.focus();
+      await expect(readingRegion).toBeFocused();
+      for (const key of ["Home", "End", "Home", "Space"]) {
+        await page.keyboard.press(key);
+        await expect(page.locator(".c-root")).toHaveClass(/at-result/);
+        await expect(selectedStep).toHaveAttribute("aria-label", originalStep!);
+        if (key === "Home")
+          await expect.poll(() => readingRegion.evaluate((element) => element.scrollTop)).toBe(0);
+        else if (key === "End")
+          await expect
+            .poll(() =>
+              readingRegion.evaluate((element) =>
+                Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
+              ),
+            )
+            .toBeLessThanOrEqual(1);
+        else
+          await expect
+            .poll(() => readingRegion.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
+      }
+    }
     const bottom = (await page.locator(".c-bottom").boundingBox())!;
     expect(bottom.height).toBeGreaterThan(100);
     expect(bottom.y + bottom.height).toBeLessThanOrEqual(height);

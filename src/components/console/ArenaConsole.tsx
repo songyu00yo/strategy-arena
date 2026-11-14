@@ -476,7 +476,12 @@ export function ArenaConsole({
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
-      if (target?.closest?.("input, textarea, select, dialog, .evidence-drawer")) return;
+      if (
+        target?.closest?.(
+          "input, textarea, select, dialog, .evidence-drawer, .c-result-region, .c-conditions",
+        )
+      )
+        return;
       if (e.key === "ArrowRight") {
         e.preventDefault();
         goTo(index + 1);

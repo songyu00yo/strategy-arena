@@ -87,6 +87,7 @@ function result(value: unknown) {
 beforeEach(() => {
   closeDb();
   vi.resetAllMocks();
+  vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", undefined);
   for (const [key, value] of Object.entries({
     ARENA_DATABASE_PATH: ":memory:",
     OPENAI_API_KEY: "synthetic",
@@ -1217,6 +1218,41 @@ describe("explicit confirmation and linked follow-up with synthetic model output
 
 describe("lazy retention at every existing-draft read entry", () => {
   const expiredAt = () => Date.now() - 24 * 60 * 60 * 1000 - 1000;
+  it.each(["draft GET", "attachment GET", "new clarification cleanup"] as const)(
+    "retains an expired legacy draft and its attachment with expiry disabled through %s",
+    async (entry) => {
+      vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", "false");
+      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+      const bytes = Buffer.from("synthetic retained legacy material");
+      draft = await addIntakeAttachment(draft.id, "alice", bytes, "retained-legacy.txt");
+      db().prepare("UPDATE intake_drafts SET updated_at=? WHERE id=?").run(expiredAt(), draft.id);
+      const stored = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id);
+      expect(() => getIntake(draft.id, "bob")).toThrow("无权访问");
+      expect(() => getIntakeAttachment(draft.id, "bob", draft.attachments[0].id)).toThrow(
+        "无权访问",
+      );
+      if (entry === "draft GET") expect(getIntake(draft.id, "alice").id).toBe(draft.id);
+      else if (entry === "attachment GET")
+        expect(
+          getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
+        ).toBe(true);
+      else
+        expect(
+          createIntake("bob", { goal, modelMode: "gpt-6.1-terra", workflow: "clarification" })
+            .workflow,
+        ).toBe("clarification");
+      expect(getIntake(draft.id, "alice")).toEqual(draft);
+      expect(db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id)).toEqual(
+        stored,
+      );
+      expect(
+        getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
+      ).toBe(true);
+      expect(() => getIntake(draft.id, "bob")).toThrow("无权访问");
+      expect(fixture.generate).not.toHaveBeenCalled();
+      expect(fixture.hold).not.toHaveBeenCalled();
+    },
+  );
   it("rejects and deletes an expired unsubmitted draft and its attachments on GET", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     draft = await addIntakeAttachment(
@@ -1259,9 +1295,15 @@ describe("lazy retention at every existing-draft read entry", () => {
     ).toBeUndefined();
     expect(fixture.hold).not.toHaveBeenCalled();
   });
-  it.each(["draft GET", "attachment GET", "new draft cleanup"] as const)(
-    "recovers a dispatched call after a 25h restart before %s can expire its audit",
-    async (entry) => {
+  it.each(
+    (["draft GET", "attachment GET", "new draft cleanup"] as const).flatMap((entry) => [
+      { entry, expiry: "default", setting: undefined },
+      { entry, expiry: "disabled", setting: "false" },
+    ]),
+  )(
+    "recovers a dispatched call after a 25h restart through $entry with expiry $expiry",
+    async ({ entry, setting }) => {
+      vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", setting);
       const directory = mkdtempSync(join(tmpdir(), "arena-intake-restart-"));
       closeDb();
       vi.stubEnv("ARENA_DATABASE_PATH", join(directory, "intakes.sqlite"));

@@ -209,8 +209,21 @@ for (const height of [900, 720]) {
     // The shorter viewport reaches the plan's inclusive 180px minimum.
     if (height === 720) await expect.poll(stageHeight).toBeGreaterThanOrEqual(180);
     else await expect.poll(stageHeight).toBeGreaterThan(180);
-    for (const board of await page.locator(".c-board").all())
-      expect((await board.boundingBox())!.height).toBeGreaterThan(100);
+    for (const board of await page.locator(".c-board").all()) {
+      if (height === 900) expect((await board.boundingBox())!.height).toBeGreaterThan(100);
+      const content = await board.evaluate((element) => {
+        const body = element.querySelector<HTMLElement>(".c-board-body")!;
+        const header = element.querySelector("header")!.getBoundingClientRect();
+        const card = element.getBoundingClientRect();
+        return {
+          headerVisible: header.top >= card.top && header.bottom <= card.bottom,
+          bodyHeight: body.clientHeight,
+          lineHeight: parseFloat(getComputedStyle(body).lineHeight),
+        };
+      });
+      expect(content.headerVisible).toBe(true);
+      expect(content.bodyHeight).toBeGreaterThanOrEqual(content.lineHeight);
+    }
     const region = page.locator(".c-result-region");
     await expect
       .poll(() => region.evaluate((element) => element.scrollHeight > element.clientHeight))

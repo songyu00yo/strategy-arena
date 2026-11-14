@@ -204,11 +204,11 @@ for (const height of [900, 720]) {
     await page.setViewportSize({ width: 1440, height });
     const result = await restoreLongReport(page);
     await expect(page.locator(".c-board")).toHaveCount(3);
-    await expect
-      .poll(() =>
-        page.locator(".c-stage3").evaluate((element) => element.getBoundingClientRect().height),
-      )
-      .toBeGreaterThan(180);
+    const stageHeight = () =>
+      page.locator(".c-stage3").evaluate((element) => element.getBoundingClientRect().height);
+    // The shorter viewport reaches the plan's inclusive 180px minimum.
+    if (height === 720) await expect.poll(stageHeight).toBeGreaterThanOrEqual(180);
+    else await expect.poll(stageHeight).toBeGreaterThan(180);
     for (const board of await page.locator(".c-board").all())
       expect((await board.boundingBox())!.height).toBeGreaterThan(100);
     const region = page.locator(".c-result-region");

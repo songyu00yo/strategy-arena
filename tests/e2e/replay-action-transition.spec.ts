@@ -751,29 +751,48 @@ test("normal action pause: closing step details preserves the paused native cros
   await page.getByRole("button", { name: "继续放映", exact: true }).click();
   await page.waitForTimeout(40);
   // Native finish, DOM cleanup and logical progress can occupy separate sampled frames.
-  // Keep running or incorrectly paused effects visible to the original assertions.
-  const resumedSample = await page.waitForFunction((after) => {
-    const samples = ((window as SamplerWindow).__actionFrames ?? []).filter(
-      (frame) => frame.at > after,
-    );
-    const current = samples.at(-1);
-    if (!current) return false;
-    const motion = (frame: ActionFrame) =>
-      frame.nativeEffects.filter(
-        (effect) =>
-          (effect.directPart || effect.retiring) &&
-          effect.properties.some((property) => property === "opacity" || property === "transform"),
+  // Inspect the first native time advancement without selecting an expected play state.
+  const resumedSample = await page.waitForFunction(
+    ({ after, held }) => {
+      const samples = ((window as SamplerWindow).__actionFrames ?? []).filter(
+        (frame) => frame.at > after,
       );
-    const effects = motion(current);
-    if (effects.length)
-      return effects.every((effect) => effect.state === "finished") ? false : current;
-    if (!samples.some((frame) => motion(frame).some((effect) => effect.state === "finished")))
+      const motion = (frame: ActionFrame) =>
+        frame.nativeEffects.filter(
+          (effect) =>
+            (effect.directPart || effect.retiring) &&
+            effect.properties.some(
+              (property) => property === "opacity" || property === "transform",
+            ),
+        );
+      const firstAdvance = samples.find((frame) =>
+        motion(frame).some((effect) => {
+          const previous = held.find((entry) => entry.id === effect.id);
+          return (
+            previous &&
+            previous.time !== null &&
+            effect.time !== null &&
+            effect.time > previous.time
+          );
+        }),
+      );
+      if (firstAdvance && !motion(firstAdvance).every((effect) => effect.state === "finished"))
+        return firstAdvance;
+      const current = samples.at(-1);
+      if (!current) return false;
+      const effects = motion(current);
+      if (effects.length)
+        return effects.every((effect) => effect.state === "finished") ? false : current;
+      if (!samples.some((frame) => motion(frame).some((effect) => effect.state === "finished")))
+        return current;
+      const previous = samples.at(-2);
+      if (!previous || motion(previous).length || previous.copies.length || current.copies.length)
+        return false;
       return current;
-    const previous = samples.at(-2);
-    if (!previous || motion(previous).length || previous.copies.length || current.copies.length)
-      return false;
-    return current;
-  }, returned.at);
+    },
+    { after: returned.at, held: returnedMotion },
+    { timeout: 5000 },
+  );
   const resumed = (await resumedSample.jsonValue()) as ActionFrame;
   await resumedSample.dispose();
   const resumedMotion = crossfade(resumed);

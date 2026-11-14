@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_ANSWER_LENGTH } from "./answer-options";
 import {
   ChallengeSchema,
   ExecutionModeSchema,
@@ -30,7 +31,14 @@ export type IntakeQuestion = z.infer<typeof QuestionSchema>;
 export const AnswerSchema = z.object({
   questionId: z.string().min(1).max(40),
   state: z.enum(["answered", "unknown", "skipped"]),
-  value: z.union([z.string().max(3000), z.array(z.string().max(100)).max(6)]),
+  value: z
+    .union([z.string().max(MAX_ANSWER_LENGTH), z.array(z.string().max(MAX_ANSWER_LENGTH)).max(6)])
+    .refine(
+      (value) =>
+        (Array.isArray(value) ? value.reduce((sum, item) => sum + item.length, 0) : value.length) <=
+        MAX_ANSWER_LENGTH,
+      "答案总长度不能超过 3000 字符。",
+    ),
 });
 export type IntakeAnswer = z.infer<typeof AnswerSchema>;
 export type RecordedAnswer = IntakeAnswer & {

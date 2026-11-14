@@ -286,6 +286,7 @@ export interface ArenaVersion {
     originalGoal: string;
     answers: import("./intake-contracts").RecordedAnswer[];
     assumptions: string[];
+    rejectedAssumptions?: string[];
     usedSources: import("./intake-contracts").MaterialSource[];
     usage: ModelUsage[];
     confirmation?: import("./intake-contracts").IntakeConfirmation;

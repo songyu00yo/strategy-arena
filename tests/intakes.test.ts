@@ -231,7 +231,7 @@ describe("guided task preparation with synthetic model output", () => {
         revision: draft.revision,
         answers: [{ questionId: "budget", state: "answered", value: "999元" }],
       }),
-    ).toThrow("答案格式");
+    ).toThrow("请选择有效选项");
     draft = updateIntake(draft.id, "alice", {
       revision: draft.revision,
       goal: "使用现有设备修复无法开机的电脑",
@@ -342,12 +342,24 @@ describe("guided task preparation with synthetic model output", () => {
     const call = fixture.generate.mock.calls.at(-1)![0];
     expect(call.input).toMatchObject({
       mustSummarize: true,
-      answeredQuestionIds: ["headcount", "permission"],
+      answeredQuestionIds: [],
       summaryEdits: {
         provenance: "user-edited-draft",
         fields: { constraints: "只有两名成员，不得增人" },
       },
     });
+    expect(call.input.answers).toEqual([
+      expect.objectContaining({
+        questionId: "headcount",
+        state: "unknown",
+        needsReconfirmation: true,
+      }),
+      expect.objectContaining({
+        questionId: "permission",
+        state: "skipped",
+        needsReconfirmation: true,
+      }),
+    ]);
     expect(call.config.id).toBe("gpt-6.1-sol");
     expect(call.input.materials).toContain("当前硬限制：只有两名成员，不得增人");
     draft = updateIntake(draft.id, "alice", {
@@ -1463,4 +1475,242 @@ describe("lazy retention at every existing-draft read entry", () => {
       .run(Date.now() - 241000, operationId);
     expect(() => getIntakeAttachment(draft.id, "alice", draft.attachments[0].id)).toThrow("未找到");
   });
+});
+
+describe("choice persistence and rejected suggestions with SQLite test doubles", () => {
+  async function choiceDraft(type: "single" | "multiple", label = "其他（请补充）") {
+    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+    fixture.generate.mockResolvedValueOnce(
+      result(
+        analysis({
+          ready: false,
+          questions: [{ ...question("choice"), type, options: ["方案 A", "方案 B", label] }],
+        }),
+      ),
+    );
+    draft = await analyzeIntake(draft.id, "alice", operation(draft));
+    return draft;
+  }
+  function privateBody(draftId: string) {
+    return JSON.parse(
+      (db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draftId) as { body: string })
+        .body,
+    ) as IntakeDraft & {
+      summaryEdits?: { assumptions: string[]; rejectedAssumptions?: string[] };
+    };
+  }
+
+  it.each(["其他（请补充）", "其他，下一步由我描述", "Other (please describe)"])(
+    "persists an incomplete multiple-choice draft and requires details on completion for %s",
+    async (label) => {
+      let draft = await choiceDraft("multiple", label);
+      const initial = ["方案 A", "方案 B", label];
+      draft = updateIntake(draft.id, "alice", {
+        revision: draft.revision,
+        answerMode: "draft",
+        answers: [{ questionId: "choice", state: "answered", value: initial }],
+      });
+      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
+        value: initial,
+        confirmation: "pending",
+      });
+      for (const answerMode of [undefined, "complete"] as const) {
+        for (const detail of [label, `${label}：   `]) {
+          expect(() =>
+            updateIntake(draft.id, "alice", {
+              revision: draft.revision,
+              answerMode,
+              answers: [
+                { questionId: "choice", state: "answered", value: ["方案 A", "方案 B", detail] },
+              ],
+            }),
+          ).toThrow("填写完整");
+          expect(getIntake(draft.id, "alice").revision).toBe(draft.revision);
+          expect(getIntake(draft.id, "alice").answers[0].value).toEqual(initial);
+        }
+      }
+      const complete = ["方案 A", "方案 B", `${label}：${"局域网同步".repeat(40)}`];
+      draft = updateIntake(draft.id, "alice", {
+        revision: draft.revision,
+        answerMode: "complete",
+        answers: [{ questionId: "choice", state: "answered", value: complete }],
+      });
+      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
+        value: complete,
+        confirmation: "confirmed",
+      });
+      draft = updateIntake(draft.id, "alice", {
+        revision: draft.revision,
+        answerMode: "draft",
+        answers: [
+          { questionId: "choice", state: "answered", value: ["方案 A", "方案 B", `${label}：`] },
+        ],
+      });
+      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
+        value: ["方案 A", "方案 B", `${label}：`],
+        confirmation: "pending",
+        needsReconfirmation: true,
+      });
+    },
+  );
+
+  it.each(["其他（请补充）", "其他，下一步由我描述"])(
+    "rejects bare single Other on complete or default updates for %s",
+    async (label) => {
+      let draft = await choiceDraft("single", label);
+      draft = updateIntake(draft.id, "alice", {
+        revision: draft.revision,
+        answerMode: "draft",
+        answers: [{ questionId: "choice", state: "answered", value: label }],
+      });
+      for (const answerMode of [undefined, "complete"] as const) {
+        expect(() =>
+          updateIntake(draft.id, "alice", {
+            revision: draft.revision,
+            answerMode,
+            answers: [{ questionId: "choice", state: "answered", value: label }],
+          }),
+        ).toThrow("填写完整");
+        expect(getIntake(draft.id, "alice").revision).toBe(draft.revision);
+      }
+      const value = `${label}:兼容历史ASCII冒号的局域网同步`;
+      draft = updateIntake(draft.id, "alice", {
+        revision: draft.revision,
+        answerMode: "complete",
+        answers: [{ questionId: "choice", state: "answered", value }],
+      });
+      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
+        value,
+        confirmation: "confirmed",
+      });
+    },
+  );
+
+  it("demotes a legacy confirmed bare Other when the same value is saved as a draft", async () => {
+    let draft = await choiceDraft("single");
+    const body = privateBody(draft.id);
+    body.answers = [
+      {
+        questionId: "choice",
+        question: body.questions[0],
+        state: "answered",
+        value: "其他（请补充）",
+        confirmation: "confirmed",
+        confirmedAt: "2026-11-01T00:00:00.000Z",
+        confirmedRevision: 0,
+      },
+    ];
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(body), draft.id);
+    draft = updateIntake(draft.id, "alice", {
+      revision: draft.revision,
+      answerMode: "draft",
+      answers: [{ questionId: "choice", state: "answered", value: "其他（请补充）" }],
+    });
+    expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
+      value: "其他（请补充）",
+      confirmation: "pending",
+      needsReconfirmation: true,
+    });
+    expect(draft.answers[0].confirmedAt).toBeUndefined();
+    expect(draft.confirmation?.history.at(-1)?.answers[0].confirmation).toBe("confirmed");
+  });
+
+  it("rejects forged normal-option prefixes and duplicate decoded Other selections atomically", async () => {
+    const draft = await choiceDraft("multiple");
+    for (const value of [["方案 A：伪造补充"], ["其他（请补充）：甲", "其他（请补充）:乙"]]) {
+      expect(() =>
+        updateIntake(draft.id, "alice", {
+          revision: draft.revision,
+          answerMode: "draft",
+          answers: [{ questionId: "choice", state: "answered", value }],
+        }),
+      ).toThrow("请选择当前问题");
+      expect(getIntake(draft.id, "alice")).toMatchObject({ revision: draft.revision, answers: [] });
+    }
+  });
+
+  it.each(["goal", "model", "attachment"] as const)(
+    "retains rejection metadata through %s edits",
+    async (change) => {
+      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+      fixture.generate.mockResolvedValueOnce(
+        result(analysis({ assumptions: ["建议 X", "建议 Y"] })),
+      );
+      draft = await analyzeIntake(draft.id, "alice", operation(draft));
+      draft = updateIntake(draft.id, "alice", {
+        revision: draft.revision,
+        summary: { challenge: draft.challenge!, assumptions: ["建议 Y"] },
+      });
+      if (change === "goal")
+        draft = updateIntake(draft.id, "alice", {
+          revision: draft.revision,
+          goal: "改为组织一场线下课程分享活动",
+        });
+      if (change === "model")
+        draft = updateIntake(draft.id, "alice", {
+          revision: draft.revision,
+          modelMode: "gpt-6.1-sol",
+        });
+      if (change === "attachment")
+        draft = await addIntakeAttachment(
+          draft.id,
+          "alice",
+          Buffer.from("实际材料内容"),
+          "范围.txt",
+        );
+      expect(privateBody(draft.id).summaryEdits?.rejectedAssumptions).toEqual(["建议 X"]);
+      expect(privateBody(draft.id).summaryEdits?.assumptions).toEqual(
+        change === "goal" ? [] : ["建议 Y"],
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "inherits formal-version rejection metadata with unavailable source draft, legacy=%s",
+    async (legacy) => {
+      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+      fixture.generate.mockResolvedValueOnce(
+        result(analysis({ assumptions: ["建议 X", "建议 Y"] })),
+      );
+      draft = await analyzeIntake(draft.id, "alice", operation(draft));
+      draft = updateIntake(draft.id, "alice", {
+        revision: draft.revision,
+        summary: { challenge: draft.challenge!, assumptions: ["建议 Y"] },
+      });
+      const arena = submitIntake(draft.id, "alice", {
+        revision: draft.revision,
+        challenge: draft.challenge!,
+        assumptions: draft.assumptions,
+      });
+      const original = structuredClone(arena.versions[0]);
+      expect(original.intake?.rejectedAssumptions).toEqual(["建议 X"]);
+      db().prepare("DELETE FROM intake_drafts WHERE id=?").run(draft.id);
+      const source = structuredClone(original);
+      if (legacy) delete source.intake!.rejectedAssumptions;
+      let linked = atomic(() =>
+        createFollowUpIntake(arena.id, source, "alice", ["还需要哪些验收细节？"]),
+      )!;
+      expect(privateBody(linked.id).summaryEdits?.rejectedAssumptions).toEqual(
+        legacy ? [] : ["建议 X"],
+      );
+      expect(linked.assumptions).toEqual(["建议 Y"]);
+      linked = updateIntake(linked.id, "alice", {
+        revision: linked.revision,
+        answerMode: "complete",
+        answers: linked.questions.map((entry) => ({
+          questionId: entry.id,
+          state: "answered",
+          value: "保留人工验收记录",
+        })),
+      });
+      linked = await analyzeIntake(linked.id, "alice", operation(linked));
+      linked = updateIntake(linked.id, "alice", {
+        revision: linked.revision,
+        summary: { challenge: linked.challenge!, assumptions: ["建议 Y", "建议 X"] },
+      });
+      expect(privateBody(linked.id).summaryEdits?.rejectedAssumptions).toEqual([]);
+      expect(original.intake?.rejectedAssumptions).toEqual(["建议 X"]);
+      expect(arena.versions[0]).toEqual(original);
+    },
+  );
 });

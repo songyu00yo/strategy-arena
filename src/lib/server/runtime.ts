@@ -42,7 +42,12 @@ import {
 } from "./agent";
 import { draftWriter } from "./model-drafts";
 import { CostPlanValidationError } from "./resource-totals";
-import { allSources, createFollowUpIntake } from "./intakes";
+import {
+  allSources,
+  createFollowUpIntake,
+  invalidateDependents,
+  summaryFieldsForAnswer,
+} from "./intakes";
 import type { IntakeDraft, SubmitIntakeSchema } from "@/lib/intake-contracts";
 import { freezeCorpus } from "./retrieval";
 import { clarificationFingerprint, clarificationProtocolHash } from "./clarification";
@@ -271,11 +276,16 @@ function confirmedIntake(
   const confirmation = structuredClone(draft.confirmation ?? { history: [] });
   confirmation.summary = { revision, confirmedAt: now(), challenge: structuredClone(challenge) };
   confirmation.pendingSummaryFields = [];
+  const privateDraft = draft as IntakeDraft & {
+    summaryEdits?: { rejectedAssumptions?: string[] };
+  };
+  const rejectedAssumptions = [...new Set(privateDraft.summaryEdits?.rejectedAssumptions ?? [])];
   return {
     id: draft.id,
     originalGoal: draft.goal ?? challenge.goal,
     answers: structuredClone(draft.answers ?? []),
     assumptions: [...(draft.assumptions ?? [])],
+    rejectedAssumptions,
     usedSources: structuredClone(draft.sources ?? []),
     usage: structuredClone(draft.usage ?? []),
     attachments: structuredClone(draft.attachments ?? []),
@@ -671,14 +681,21 @@ export function newVersion(
       version.intake.confirmation.pendingSummaryFields = [
         ...new Set([...(version.intake.confirmation.pendingSummaryFields ?? []), ...fields]),
       ];
-      for (const answer of version.intake.answers) {
-        const affected = answer.question.affects ?? ["constraints", "preferences", "options"];
-        if (!affected.some((field) => fields.includes(field))) continue;
-        answer.confirmation = "pending";
-        answer.needsReconfirmation = true;
-        delete answer.confirmedAt;
-        delete answer.confirmedRevision;
-      }
+      const draft = {
+        answers: version.intake.answers,
+        confirmation: version.intake.confirmation,
+        clarification: version.clarification,
+      };
+      const affectedIds = new Set(
+        draft.answers
+          .filter((answer) =>
+            summaryFieldsForAnswer(draft, answer).some((field) => fields.includes(field)),
+          )
+          .map((answer) => answer.questionId),
+      );
+      invalidateDependents(draft, affectedIds);
+      version.intake.answers = draft.answers;
+      version.intake.confirmation = draft.confirmation;
       // Editing through the original condition editor produces a draft until explicitly reconfirmed.
       refreshRequirements(version);
     }

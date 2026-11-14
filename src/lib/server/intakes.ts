@@ -4,9 +4,11 @@ import {
   clarificationProtocolHash,
   emptyClarification,
   runClarification,
+  SUMMARY_FIELDS_BY_TOPIC,
 } from "./clarification";
 import path from "node:path";
 import type { z } from "zod";
+import { hasCompleteChoiceAnswer, validateChoiceAnswer } from "../answer-options";
 import {
   ChallengeSchema,
   type Challenge,
@@ -45,6 +47,7 @@ import {
 type SummaryEdits = {
   fields: Partial<Omit<Challenge, "materials">>;
   assumptions: string[];
+  rejectedAssumptions?: string[];
   provenance: "user-edited-draft" | "user-confirmed-summary";
   updatedAt: string;
   revision: number;
@@ -288,7 +291,37 @@ function rememberConfirmation(draft: PrivateDraft) {
     ...(draft.confirmation.summary ? { summary: structuredClone(draft.confirmation.summary) } : {}),
   });
 }
-function invalidateDependents(draft: PrivateDraft, changedIds: Set<string>) {
+function rejectedAssumptionsFor(draft: PrivateDraft, assumptions: readonly string[]) {
+  const previous = draft.summaryEdits?.assumptions ?? draft.assumptions;
+  const removed = previous.filter((entry) => !assumptions.includes(entry));
+  const explicitlyReadded = assumptions.filter((entry) => !previous.includes(entry));
+  return [...new Set([...(draft.summaryEdits?.rejectedAssumptions ?? []), ...removed])].filter(
+    (entry) => !explicitlyReadded.includes(entry),
+  );
+}
+export function summaryFieldsForAnswer(
+  draft: Pick<IntakeDraft, "clarification">,
+  answer: RecordedAnswer,
+): readonly (keyof Challenge)[] {
+  if (answer.question.affects !== undefined) return answer.question.affects;
+  const decisionId = answer.question.decisionId ?? answer.questionId;
+  const item = draft.clarification?.items.find((candidate) => candidate.id === decisionId);
+  if (item) return SUMMARY_FIELDS_BY_TOPIC[item.topic];
+  return [
+    "goal",
+    "constraints",
+    "preferences",
+    "options",
+    "domain",
+    "budget",
+    "timeHours",
+    "materials",
+  ];
+}
+export function invalidateDependents(
+  draft: Pick<IntakeDraft, "answers" | "confirmation" | "clarification">,
+  changedIds: Set<string>,
+) {
   const affected = new Set(changedIds);
   for (let pass = 0; pass < draft.answers.length; pass++) {
     let changed = false;
@@ -306,9 +339,7 @@ function invalidateDependents(draft: PrivateDraft, changedIds: Set<string>) {
   const fields = new Set(draft.confirmation?.pendingSummaryFields ?? []);
   draft.answers = draft.answers.map((answer) => {
     if (!affected.has(answer.questionId)) return answer;
-    for (const field of answer.question.affects ??
-      (["constraints", "preferences", "options"] as const))
-      fields.add(field);
+    for (const field of summaryFieldsForAnswer(draft, answer)) fields.add(field);
     const { confirmedAt: omittedAt, confirmedRevision: omittedRevision, ...pending } = answer;
     void omittedAt;
     void omittedRevision;
@@ -667,6 +698,7 @@ export function createFollowUpIntake(
       Object.entries(version.challenge).filter(([key]) => key !== "materials"),
     ),
     assumptions: draft.assumptions,
+    rejectedAssumptions: [...new Set(version.intake?.rejectedAssumptions ?? [])],
     provenance: "user-edited-draft",
     updatedAt: now(),
     revision: 0,
@@ -726,6 +758,7 @@ export function updateIntake(
       const changedFields: (keyof Challenge)[] = [];
       const changedAssumptions =
         JSON.stringify(input.summary.assumptions) !== JSON.stringify(draft.assumptions);
+      const rejectedAssumptions = rejectedAssumptionsFor(draft, input.summary.assumptions);
       for (const key of Object.keys(input.summary.challenge) as (keyof Challenge)[]) {
         if (
           key !== "materials" &&
@@ -743,7 +776,7 @@ export function updateIntake(
         const affectedIds = new Set(
           draft.answers
             .filter((answer) =>
-              answer.question.affects?.some((field) => changedFields.includes(field)),
+              summaryFieldsForAnswer(draft, answer).some((field) => changedFields.includes(field)),
             )
             .map((answer) => answer.questionId),
         );
@@ -754,6 +787,7 @@ export function updateIntake(
       draft.summaryEdits = {
         fields,
         assumptions: input.summary.assumptions,
+        rejectedAssumptions,
         provenance: "user-edited-draft",
         updatedAt: now(),
         revision: draft.revision + 1,
@@ -789,24 +823,28 @@ export function updateIntake(
           throw new ArenaError("问题已更新或答案重复，请刷新后重试。", 409, "STALE_QUESTIONS");
         ids.add(answer.questionId);
         if (answer.state === "answered") {
-          const values = Array.isArray(answer.value) ? answer.value : [answer.value];
-          if (!values.length || values.some((value) => !value.trim()))
-            throw new ArenaError("请填写答案，或选择“不知道”或“跳过”。", 400, "INVALID_ANSWER");
-          if (question.type === "multiple") {
+          const allowIncomplete = input.answerMode === "draft";
+          if (question.type === "single" || question.type === "multiple") {
             if (
-              !Array.isArray(answer.value) ||
-              new Set(values).size !== values.length ||
-              values.some((value) => !question.options.includes(value))
+              !validateChoiceAnswer(question.type, question.options, answer.value, allowIncomplete)
             )
-              throw new ArenaError("请选择当前问题给出的选项。", 400, "INVALID_ANSWER");
-          } else if (
-            Array.isArray(answer.value) ||
-            (question.type === "single" && !question.options.includes(answer.value)) ||
-            (question.type === "number" &&
+              throw new ArenaError(
+                allowIncomplete
+                  ? "请选择当前问题的选项；如果选择其他，可以先保存草稿，再补充具体内容。"
+                  : "请选择有效选项，并填写完整的其他内容后再确认。",
+                400,
+                "INVALID_ANSWER",
+              );
+          } else {
+            if (Array.isArray(answer.value) || !answer.value.trim())
+              throw new ArenaError("请填写答案，或选择“不知道”或“跳过”。", 400, "INVALID_ANSWER");
+            if (
+              question.type === "number" &&
               (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(answer.value.trim()) ||
-                !Number.isFinite(Number(answer.value))))
-          )
-            throw new ArenaError("答案格式与问题不一致。", 400, "INVALID_ANSWER");
+                !Number.isFinite(Number(answer.value)))
+            )
+              throw new ArenaError("请输入有效数字。", 400, "INVALID_ANSWER");
+          }
         }
         return { ...answer, question };
       });
@@ -816,8 +854,17 @@ export function updateIntake(
             const old = draft.answers.find((recorded) => recorded.questionId === answer.questionId);
             return (
               old &&
-              JSON.stringify([old.state, old.value]) !==
-                JSON.stringify([answer.state, answer.value])
+              (JSON.stringify([old.state, old.value]) !==
+                JSON.stringify([answer.state, answer.value]) ||
+                (input.answerMode === "draft" &&
+                  old.confirmation === "confirmed" &&
+                  answer.state === "answered" &&
+                  (answer.question.type === "single" || answer.question.type === "multiple") &&
+                  !hasCompleteChoiceAnswer(
+                    answer.question.type,
+                    answer.question.options,
+                    answer.value,
+                  )))
             );
           })
           .map((answer) => answer.questionId),
@@ -854,10 +901,10 @@ export function updateIntake(
       if (draft.confirmation?.summary && recorded.length) {
         const fields = new Set(draft.confirmation.pendingSummaryFields ?? []);
         for (const answer of recorded) {
-          for (const field of answer.question.affects ??
-            (["constraints", "preferences", "options"] as const)) {
+          for (const field of summaryFieldsForAnswer(draft, answer)) {
             fields.add(field);
-            if (draft.summaryEdits) delete draft.summaryEdits.fields[field];
+            if (draft.summaryEdits && field !== "materials")
+              delete draft.summaryEdits.fields[field];
           }
         }
         draft.confirmation.pendingSummaryFields = [...fields];
@@ -893,7 +940,17 @@ export function updateIntake(
           draft.confirmation.summary.challenge,
         ) as (keyof Challenge)[];
       draft.goal = input.goal!;
-      delete draft.summaryEdits;
+      const rejected = [...new Set(draft.summaryEdits?.rejectedAssumptions ?? [])];
+      if (rejected.length) {
+        draft.summaryEdits = {
+          fields: {},
+          assumptions: [],
+          rejectedAssumptions: [...rejected],
+          provenance: "user-edited-draft",
+          updatedAt: now(),
+          revision: draft.revision + 1,
+        };
+      } else delete draft.summaryEdits;
       invalidate(draft, true);
     }
     if (changedModel) {
@@ -1140,6 +1197,7 @@ async function executeClarification(
     submit: submission,
     editedFields: draft.summaryEdits?.fields,
     editedAssumptions: draft.summaryEdits?.assumptions,
+    rejectedAssumptions: draft.summaryEdits?.rejectedAssumptions ?? [],
     call: (role, request) => billed(draft.id, owner, operationId, `clarification_${role}`, request),
     record: (state) =>
       atomic(() => {
@@ -1254,6 +1312,19 @@ export async function submitClarificationIntake(
     if (draft.status !== "summary" || !draft.challenge)
       throw new ArenaError("请先整理并核对当前需求摘要。", 409, "SUMMARY_REQUIRED");
     const config = frozenConfiguration(draft);
+    if (JSON.stringify(input.assumptions) !== JSON.stringify(draft.assumptions)) {
+      rememberConfirmation(draft);
+      draft.summaryEdits = {
+        fields: { ...draft.summaryEdits?.fields },
+        assumptions: [...input.assumptions],
+        rejectedAssumptions: rejectedAssumptionsFor(draft, input.assumptions),
+        provenance: "user-confirmed-summary",
+        updatedAt: now(),
+        revision: draft.revision + 1,
+      };
+      draft.assumptions = [...input.assumptions];
+      invalidateClarificationReport(draft);
+    }
     draft.status = "analyzing";
     draft.revision++;
     db()

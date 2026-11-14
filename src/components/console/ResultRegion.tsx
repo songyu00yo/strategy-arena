@@ -51,8 +51,12 @@ export function ResultRegion({
       card.style.transform = transform;
     };
     const resize = () => {
+      const maximumHeight = parseFloat(getComputedStyle(host).maxHeight);
+      const naturalHeight = card.getBoundingClientRect().height + 5;
       const next = open
-        ? card.getBoundingClientRect().height + 5
+        ? Number.isFinite(maximumHeight)
+          ? Math.min(naturalHeight, maximumHeight)
+          : naturalHeight
         : retaining
           ? host.getBoundingClientRect().height
           : 0;
@@ -119,7 +123,14 @@ export function ResultRegion({
     };
   }, [open, expanded, reducePreference, theater, retaining]);
   return (
-    <div ref={ref} className="c-result-region" inert={!open} aria-hidden={!open}>
+    <div
+      ref={ref}
+      className="c-result-region"
+      tabIndex={open ? 0 : -1}
+      aria-label="完整需求报告滚动区域"
+      inert={!open}
+      aria-hidden={!open}
+    >
       {children}
     </div>
   );

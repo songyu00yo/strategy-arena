@@ -861,7 +861,9 @@ export function ArenaConsole({
             </section>
           </ResultRegion>
         )}
-        <div className="c-conditions">{conditions}</div>
+        <div className="c-conditions" tabIndex={0} aria-label="当前条件；内容较长时可独立滚动">
+          {conditions}
+        </div>
         {agent && <div className="c-agent">{agent}</div>}
         <div className="c-notices">{notices}</div>
         <div className="c-track">

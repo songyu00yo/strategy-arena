@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ChallengeSchema, type Challenge } from "../contracts";
+import { hasCompleteChoiceAnswer } from "../answer-options";
 import type { IntakeDraft, IntakeQuestion, RecordedAnswer } from "../intake-contracts";
 import {
   DecompositionSchema,
@@ -27,6 +28,7 @@ export interface ClarificationContext {
   submit?: { challenge: Challenge; assumptions: string[] };
   editedFields?: Partial<Omit<Challenge, "materials">>;
   editedAssumptions?: string[];
+  rejectedAssumptions?: string[];
   call: <T>(role: "A" | "B" | "C", request: StructuredRequest<T>) => Promise<T>;
   record: (state: ClarificationState) => void;
 }
@@ -107,15 +109,17 @@ export function decisionAnswer(draft: IntakeDraft, item: DecisionItem): Recorded
   );
 }
 function confirmed(answer: RecordedAnswer | undefined) {
-  const value = answer && (Array.isArray(answer.value) ? answer.value.join("、") : answer.value);
-  return (
-    !!answer &&
-    answer.state === "answered" &&
-    answer.confirmation === "confirmed" &&
-    !answer.needsReconfirmation &&
-    !!value?.trim() &&
-    !/^(?:其他.*(?:描述|补充)|other(?:\b|[ ,]))/i.test(value)
-  );
+  if (
+    !answer ||
+    answer.state !== "answered" ||
+    answer.confirmation !== "confirmed" ||
+    answer.needsReconfirmation
+  )
+    return false;
+  if (answer.question.type === "single" || answer.question.type === "multiple")
+    return hasCompleteChoiceAnswer(answer.question.type, answer.question.options, answer.value);
+  const value = Array.isArray(answer.value) ? answer.value.join("、") : answer.value;
+  return !!value.trim();
 }
 function deferred(answer: RecordedAnswer | undefined) {
   return (
@@ -125,7 +129,7 @@ function deferred(answer: RecordedAnswer | undefined) {
       !(Array.isArray(answer.value) ? answer.value.length : answer.value.trim()))
   );
 }
-const SUMMARY_FIELDS_BY_TOPIC: Record<DecisionItem["topic"], (keyof Challenge)[]> = {
+export const SUMMARY_FIELDS_BY_TOPIC: Record<DecisionItem["topic"], (keyof Challenge)[]> = {
   scope: ["goal", "constraints", "options", "budget", "timeHours", "domain"],
   function: ["constraints", "budget", "timeHours", "domain"],
   content: ["constraints", "domain"],
@@ -157,7 +161,9 @@ function resolved(
   item: DecisionItem,
   submission?: ClarificationContext["submit"],
 ) {
-  if (confirmed(decisionAnswer(draft, item))) return true;
+  const existingAnswer = decisionAnswer(draft, item);
+  if (existingAnswer?.needsReconfirmation) return false;
+  if (confirmed(existingAnswer)) return true;
   if (!item.provided) return false;
   if (!item.provided.sourceRef.trim() || !concreteProvidedQuote(item.provided.quote)) return false;
   if (
@@ -206,6 +212,8 @@ export function formatClarification(
   draft: IntakeDraft,
   state: ClarificationState,
   challenge: Challenge,
+  assumptionsWereUserEdited = false,
+  rejectedAssumptions: readonly string[] = [],
 ) {
   // Preserve the existing call signature while sourcing facts only from stored confirmations.
   void challenge;
@@ -230,20 +238,33 @@ export function formatClarification(
     { field: "options", label: "备选方案", value: summary?.options },
     { field: "domain", label: "成果领域", value: summary ? domains[summary.domain] : undefined },
   ];
-  const summaryLines = summaryFields
-    .filter(
-      ({ field, value }) => !pendingFields.has(field) && value !== null && value !== undefined,
-    )
-    .map(({ label, value }) => ({
-      label,
-      text: Array.isArray(value) ? value.join("、") : String(value),
-    }))
-    .filter(({ text }) => text.length > 0)
-    .map(({ label, text }) => `${label} — ${text}`);
   const formal = draft.answers.filter(
     (answer) =>
       confirmed(answer) &&
       !state.retiredIds.includes(answer.question.decisionId ?? answer.questionId),
+  );
+  const formalAnswerLines = new Set(formal.map((answer) => formatAnswer(answer).trim()));
+  const summaryRequirementLines = summaryFields
+    .filter(
+      ({ field, value }) =>
+        ["constraints", "preferences", "options"].includes(field) &&
+        !pendingFields.has(field) &&
+        value !== null &&
+        value !== undefined,
+    )
+    .map(({ label, value }) => ({
+      label,
+      text: (Array.isArray(value) ? value.join("、") : String(value))
+        .split("\n")
+        .filter((line) => !formalAnswerLines.has(line.trim()))
+        .join("\n")
+        .trim(),
+    }))
+    .filter(({ text }) => text.length > 0)
+    .map(({ label, text }) => `${label} — ${text}`);
+  const ungroupedAnswers = formal.filter(
+    (answer) =>
+      !state.items.some((item) => item.id === (answer.question.decisionId ?? answer.questionId)),
   );
   const unresolved = activeItems(state).filter((item) => !resolved(draft, item));
   const headings = {
@@ -256,56 +277,56 @@ export function formatClarification(
     materials: "材料",
     authorization: "授权",
   } as const;
+  const projectOverview = [
+    ...(state.review?.summary
+      ? [`- **AI 项目归纳（基于当前确认记录，非新增需求）**：${state.review.summary}`]
+      : ["- AI 项目归纳：尚无 C 角色总结；以下仅列已确认事实。"]),
+    ...(!pendingFields.has("budget") && summary?.budget != null
+      ? [`- **预算上限**：¥${summary.budget}（用户确认）`]
+      : ["- **预算上限**：未知（未授权支出）"]),
+    ...(!pendingFields.has("timeHours") && summary?.timeHours != null
+      ? [`- **可投入时间**：${summary.timeHours} 小时（用户确认）`]
+      : ["- **可投入时间**：未知（不承诺工期）"]),
+    ...(summary && !pendingFields.has("domain")
+      ? [`- **成果领域**：${domains[summary.domain]}（用户确认）`]
+      : []),
+  ];
   const lines = [
     `# ${state.draftOnly || !draft.confirmation?.summary ? "需求草稿 / 预览" : "已确认需求说明"}`,
+    "",
+    "## 项目概述",
+    ...projectOverview,
     "",
     "## 原始输入目标（未自动视为确认）",
     draft.goal,
     "",
+    "## 已确认需求（正式依据）",
+    ...(summary && !pendingFields.has("goal") && summary.goal.trim() !== draft.goal.trim()
+      ? [`- 用户确认后的目标表述 — ${summary.goal}`]
+      : []),
+    ...summaryRequirementLines.map((line) => `- 用户确认字段：${line}`),
+    ...(formal.length || summary ? [] : ["- 尚无正式确认摘要或已确认回答。"]),
   ];
-  if (summary) {
-    lines.push("## 用户确认的摘要");
-    if (!pendingFields.has("goal")) lines.push(`目标 — ${summary.goal}`);
-    lines.push(...summaryLines);
-    lines.push("");
-  }
   for (const [topic, heading] of Object.entries(headings)) {
     const answers = formal.filter(
       (answer) =>
         state.items.find((item) => item.id === (answer.question.decisionId ?? answer.questionId))
           ?.topic === topic,
     );
-    const provided = activeItems(state)
-      .filter(
-        (item) =>
-          item.topic === topic &&
-          item.provided &&
-          !confirmed(decisionAnswer(draft, item)) &&
-          resolved(draft, item),
-      )
-      .map((item) => item.provided!.quote);
-    if (answers.length || provided.length)
-      lines.push(
-        `## ${heading}`,
-        ...answers.map((answer) => `- ${formatAnswer(answer)}`),
-        ...provided.map((quote) => `- ${quote}`),
-        "",
-      );
+    if (answers.length)
+      lines.push(`### ${heading}`, ...answers.map((answer) => `- ${formatAnswer(answer)}`), "");
   }
+  if (ungroupedAnswers.length)
+    lines.push(
+      "### 其他已确认回答",
+      ...ungroupedAnswers.map((answer) => `- ${formatAnswer(answer)}`),
+      "",
+    );
   const missing = draft.attachments
     .filter((attachment) => attachment.state !== "ready")
     .map((attachment) => `${attachment.name} — ${attachment.error || "需要补充或完整读取"}`);
   const active = activeItems(state);
   const confirmedSummary = draft.confirmation?.summary?.challenge;
-  const confirmedFacts = [
-    ...(confirmedSummary
-      ? [
-          ...(!pendingFields.has("goal") ? [`- 用户确认的目标：${confirmedSummary.goal}`] : []),
-          ...summaryLines.map((line) => `- 用户确认的摘要字段：${line}`),
-        ]
-      : []),
-    ...formal.map((answer) => `- 用户确认的回答：${formatAnswer(answer)}`),
-  ];
   const topicLabels: Record<DecisionItem["topic"], string> = {
     scope: "目标与范围",
     function: "功能",
@@ -384,21 +405,13 @@ export function formatClarification(
     ...(!timeKnown ? ["可投入时间未知"] : []),
     ...(!state.review ? ["尚无 C 角色查漏结论"] : []),
   ];
-  const projectDecisions = active.map((item) => {
-    const answer = decisionAnswer(draft, item);
-    const confirmedByUser = confirmed(answer);
-    const provided = item.provided && resolved(draft, item) ? item.provided.quote : null;
-    const decision = confirmedByUser
-      ? formatAnswer(answer!)
-      : provided
-        ? `来源提取：${provided}（非逐项确认）`
-        : "待决定";
-    return `- **${topicLabels[item.topic]}｜${item.title}**：${decision}。${item.description}${item.acceptance.length ? `；建议验收：${item.acceptance.join("；")}` : ""}`;
-  });
-  const implementationTasks = active.map((item, index) => {
-    const answer = decisionAnswer(draft, item);
-    return `${index + 1}. ${item.title}：${confirmed(answer) ? "按已确认要求实现" : "未确认事项先向用户确认；用户已明确授权自定的事项，按授权范围处理并记录依据"}；验收：${item.acceptance.join("；") || "补充可观察验收条件"}。`;
-  });
+  const projectDecisions = active
+    .filter((item) => !confirmed(decisionAnswer(draft, item)))
+    .map((item) => {
+      const provided = item.provided && resolved(draft, item) ? item.provided.quote : null;
+      const decision = provided ? `来源提取：${provided}（非逐项确认）` : "待决定";
+      return `- **${topicLabels[item.topic]}｜${item.title}**：${decision}。${item.description}${item.acceptance.length ? `；建议验收：${item.acceptance.join("；")}` : ""}`;
+    });
   const evidenceLines = draft.sources.map((source) => {
     const origin = source.interpretation ? "model_interpretation" : (source.origin ?? "unknown");
     const status =
@@ -477,21 +490,12 @@ export function formatClarification(
       ? aiFeasibilityLines
       : ["- C 角色未提供结构化技术评估；须补充证据并进行工程验证。"]),
     "",
-    "## 已确认需求（正式依据）",
-    ...(confirmedFacts.length ? confirmedFacts : ["- 尚无正式确认摘要或已确认回答。"]),
+    "## 尚未正式确认的结构化事项",
+    ...projectDecisions.map((entry) => `- ${entry.replace(/^- /, "待确认/材料推断：")}`),
     "",
-    "## 项目需求拆解（标明来源状态）",
-    ...(projectDecisions.length ? projectDecisions : ["- 当前尚无结构化需求事项。"]),
-    "",
-    "## 产品与实施规划",
-    "### 功能、内容、流程与体验",
-    ...(projectDecisions.length ? projectDecisions : ["- 先完成需求拆解。"]),
-    "### C 角色项目阶段计划（AI 分析，估算须验证）",
+    "## 产品与实施规划（AI 分析；不扩大用户授权）",
+    "以下阶段计划来自 C 角色分析；每阶段包含任务、依赖、交付物、验收和估算依据。缺少的内容不得由执行者自行补成已确认要求。",
     ...(aiPlanLines.length ? aiPlanLines : planStages),
-    "### 可执行任务",
-    ...(implementationTasks.length
-      ? implementationTasks
-      : ["1. 完成需求拆解和技术调研，再拆分实施任务。"]),
     "",
     "## 技术路线与方案取舍（AI 分析，非用户确认）",
     "- 当前材料可确定业务需求与约束；具体技术栈、部署拓扑、数据模型和第三方依赖须结合现有代码与环境验证，不凭空指定。",
@@ -502,9 +506,23 @@ export function formatClarification(
     "",
     "## 风险、假设与待核实",
     ...(riskLines.length ? riskLines : []),
+    "### 当前轮 AI 建议（来源：A 角色，未获用户确认）",
     ...(state.suggestions.length
-      ? state.suggestions.map((entry) => `- AI 建议/假设（待确认或验证）：${entry}`)
-      : ["- 暂无额外 AI 建议。"]),
+      ? state.suggestions.map((entry) => `- [AI 建议 / 待核实] ${entry}`)
+      : ["- 当前轮没有新的 AI 建议。"]),
+    "### 用户保留的暂定假设",
+    ...(draft.assumptions.length
+      ? draft.assumptions.map(
+          (entry) =>
+            `- [${assumptionsWereUserEdited ? "用户主动保留 / 尚未证实" : "AI 初始建议 / 尚未由用户编辑"}] ${entry}`,
+        )
+      : ["- 当前未主动保留暂定假设。"]),
+    ...(rejectedAssumptions.length
+      ? [
+          "### 用户明确删除的建议",
+          ...rejectedAssumptions.map((entry) => `- [用户明确拒绝，不得自动恢复] ${entry}`),
+        ]
+      : []),
     ...(state.conflicts.length
       ? state.conflicts.map((entry) => `- 冲突（待解决）：${entry}`)
       : ["- 当前未记录模型识别出的冲突。"]),
@@ -527,16 +545,10 @@ export function formatClarification(
     ),
     ...state.conflicts.map((conflict) => `- 冲突 — ${conflict}`),
     "",
-    "## 材料与来源",
-    ...(draft.sources.length
-      ? draft.sources.map((source) => `- ${source.filename} ${source.location} [${source.id}]`)
-      : ["尚未提供可引用的附件材料。"]),
-    ...missing.map((text) => `- 待提供 — ${text}`),
-    "",
-    "## AI 建议（待确认）",
-    ...(state.suggestions.length
-      ? state.suggestions.map((suggestion) => `- ${suggestion}`)
-      : ["无额外建议。"]),
+    "## 材料处理状态",
+    ...(missing.length
+      ? missing.map((text) => `- 待处理：${text}`)
+      : ["当前附件均已完成读取，或未提供附件。"]),
     "",
     "## 执行反馈",
     "尚无执行反馈。",
@@ -548,15 +560,34 @@ export function formatClarification(
     `原始目标（原始输入，不自动视为确认）：${draft.goal}`,
     ...(confirmedSummary
       ? [
-          ...(!pendingFields.has("goal") ? [`用户确认摘要：${confirmedSummary.goal}`] : []),
-          ...summaryLines.map((line) => `用户确认字段：${line}`),
+          ...(!pendingFields.has("goal") && confirmedSummary.goal.trim() !== draft.goal.trim()
+            ? [`用户确认后的目标表述：${confirmedSummary.goal}`]
+            : []),
+          ...summaryRequirementLines.map((line) => `用户确认字段：${line}`),
+          ...summaryFields
+            .filter(
+              ({ field, value }) =>
+                ["budget", "timeHours", "domain"].includes(field) &&
+                !pendingFields.has(field) &&
+                value !== null &&
+                value !== undefined,
+            )
+            .map(
+              ({ label, value }) =>
+                `用户确认字段：${label} — ${Array.isArray(value) ? value.join("、") : String(value)}`,
+            ),
         ]
       : ["用户尚未确认正式摘要。"]),
-    ...formal.map((answer) => `用户确认回答：${formatAnswer(answer)}`),
     ...active.map((item) => {
       const answer = decisionAnswer(draft, item);
-      return `${item.topic}/${item.title}：${confirmed(answer) ? `用户确认：${formatAnswer(answer!)}` : item.provided && resolved(draft, item) ? `- ${item.provided.quote}（材料或目标推断，未逐项确认）` : "未决，不得擅自决定"}`;
+      const value = answer
+        ? Array.isArray(answer.value)
+          ? answer.value.join("、")
+          : answer.value
+        : "";
+      return `${item.topic}/${item.title}：${confirmed(answer) ? `用户确认：${value}${answer?.question.authorization ? `（单项授权范围为${answer.question.authorization}，仅明确同意时生效）` : ""}` : item.provided && resolved(draft, item) ? `材料/目标提取（未逐项确认）：${item.provided.quote}` : "未决，不得擅自决定"}`;
     }),
+    ...ungroupedAnswers.map((answer) => `用户确认回答：${formatAnswer(answer)}`),
     "附件原文、模型转录和模型解读必须分别标注；模型解读不得作为事实。",
     "执行前先做技术可行性验证；需求确认不代表技术可行，也不代表预算、工期或外部操作已获授权。",
     ...(aiFeasibilityLines.length
@@ -565,6 +596,21 @@ export function formatClarification(
     ...(aiPlanLines.length ? ["C 角色 AI 实施计划（估算与任务均需核验）：", ...aiPlanLines] : []),
     ...(tradeoffLines.length ? ["AI 方案取舍（不是用户确认）：", ...tradeoffLines] : []),
     ...(riskLines.length ? ["AI 风险分析：", ...riskLines] : []),
+    ...(state.suggestions.length
+      ? [
+          "当前轮 AI 建议（A 角色生成，未确认，仅供评估）：",
+          ...state.suggestions.map((entry) => `- ${entry}`),
+        ]
+      : []),
+    ...(assumptionsWereUserEdited && draft.assumptions.length
+      ? [
+          "用户主动保留的暂定假设（仍未证实，不是事实或授权）：",
+          ...draft.assumptions.map((entry) => `- ${entry}`),
+        ]
+      : []),
+    ...(rejectedAssumptions.length
+      ? ["用户明确拒绝的建议，不得自动恢复：", ...rejectedAssumptions.map((entry) => `- ${entry}`)]
+      : []),
     "未经明确同意不得产生费用、发布内容、联系第三方、处理真实个人数据或执行不可逆操作。",
     ...(state.draftOnly ? ["当前为草稿/预览，禁止直接执行；先列出阻塞项并请求用户确认。"] : []),
     ...(reportGaps.length ? ["尚待处理：", ...reportGaps.map((entry) => `- ${entry}`)] : []),
@@ -601,6 +647,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
     };
   const state = structuredClone(draft.clarification ?? emptyClarification());
   const retainedAssumptions = context.submit?.assumptions ?? context.editedAssumptions;
+  const rejectedAssumptions = [...new Set(context.rejectedAssumptions ?? [])];
   const priorReview = state.runs.findLast(
     (run) => run.role === "C" && run.status === "completed",
   )?.output;
@@ -620,6 +667,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
     editedFields: context.editedFields,
     assumptions: retainedAssumptions ?? draft.assumptions,
     editedAssumptions: retainedAssumptions,
+    rejectedSuggestions: rejectedAssumptions,
     pendingSummaryFields: [...pendingFields],
     sources: draft.sources,
     previousItems: activeItems(state),
@@ -728,12 +776,13 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       throw new ArenaError("事项排除缺少对应的用户确认依据。", 502, "CLARIFICATION_RETIREMENT");
     state.retiredIds = [...new Set([...state.retiredIds, retired.id])];
   }
-  // Original A suggestions remain in runs. User-edited tentative assumptions take precedence.
-  state.suggestions =
-    retainedAssumptions !== undefined
-      ? [...retainedAssumptions]
-      : [...new Set([...state.suggestions, ...decomposition.suggestions])];
+  // Suggestions are a current-round projection. Older A outputs remain immutable in runs.
+  // User-retained/edited assumptions live separately in summaryEdits.assumptions / draft.assumptions.
+  state.suggestions = [...new Set(decomposition.suggestions)]
+    .filter((suggestion) => !rejectedAssumptions.includes(suggestion))
+    .slice(0, 12);
   function knownForQuestions(item: DecisionItem) {
+    if (decisionAnswer(draft, item)?.needsReconfirmation) return false;
     if (resolved(draft, item, context.submit)) return true;
     const summary = draft.confirmation?.summary?.challenge;
     const currentGoal = context.editedFields?.goal ?? draft.challenge?.goal;
@@ -928,7 +977,15 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       { ...draft, challenge, clarification: state },
       context.submit,
     );
-  formatClarification(draft, state, challenge);
+  draft.assumptions =
+    retainedAssumptions !== undefined ? [...retainedAssumptions] : state.suggestions.slice(0, 6);
+  formatClarification(
+    draft,
+    state,
+    challenge,
+    retainedAssumptions !== undefined,
+    rejectedAssumptions,
+  );
   return {
     state,
     questions: questions as IntakeQuestion[],

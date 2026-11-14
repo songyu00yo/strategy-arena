@@ -469,6 +469,53 @@
 }
 
 /* ---------- Lower panels ---------- */
+/* Long requirement text must not consume the triptych's flex space.
+   Each reading surface scrolls independently; the stage keeps a real minimum height. */
+.console-shell .c-hud > .c-conditions {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: clamp(68px, 10vh, 92px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.console-shell .c-hud > .c-result-region {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(30vh, 270px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.console-shell .c-hud > .c-main {
+  flex: 1 1 0;
+  min-height: clamp(180px, 22vh, 230px);
+}
+.console-shell .c-hud > .c-bottom {
+  flex: 0 0 clamp(118px, 15vh, 150px);
+  height: clamp(118px, 15vh, 150px);
+  min-height: 0;
+}
+.console-shell .c-hud > .c-conditions:focus-visible,
+.console-shell .c-hud > .c-result-region:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: -2px;
+}
+.console-shell .c-result-region > .c-result,
+.console-shell .c-result-region .c-result p,
+.console-shell .c-result-region .c-result strong,
+.console-shell .c-result-region .c-result dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.console-shell .c-result-region > .c-result.whole {
+  max-height: none;
+  overflow: visible;
+}
+
 .console-shell .c-root .c-verdict,
 .console-shell .c-root .c-list,
 .console-shell .c-trace {
@@ -818,4 +865,32 @@
 .console-shell .recorded-back,
 .console-shell .recorded-replay-badge {
   font-family: var(--serif-cn);
+}
+
+/* At phone widths the page becomes a document: no nested report scroll trap. */
+@media (max-width: 1100px) {
+  .console-shell .c-hud > .c-conditions {
+    max-height: none;
+    overflow: visible;
+  }
+  .console-shell .c-hud > .c-result-region {
+    max-height: none;
+    /* ResultRegion measures the full card and owns its opening/closing height. */
+    overflow: hidden;
+  }
+  .console-shell .c-result-region > .c-result {
+    max-height: none;
+    overflow: visible;
+  }
+  .console-shell .c-slate h1 {
+    overflow-wrap: anywhere;
+  }
+  .console-shell .c-hud > .c-main {
+    min-height: 0;
+  }
+  .console-shell .c-hud > .c-bottom {
+    height: auto;
+    min-height: 0;
+    flex: none;
+  }
 }

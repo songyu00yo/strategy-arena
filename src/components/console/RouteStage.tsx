@@ -1565,30 +1565,28 @@ export function RouteStage({
         backgroundHeld={foreground}
         onEvidence={onEvidence}
       />
-      {current?.replayAction &&
-        current.replayAction.kind !== "summary_confirm" &&
-        (current.replayAction.kind !== "handoff" || replayProgress < 1) && (
-          <ReplayQuestionScene
-            key={
-              ["summary_submit", "summary_confirm", "handoff"].includes(current.replayAction.kind)
-                ? `summary-${current.replayAction.round}`
-                : (current.replayAction.sourceRunId ?? `round-${current.replayAction.round}`)
-            }
-            action={current.replayAction}
-            previousAnswers={replayAnswersBefore}
-            progress={replayProgress}
-            playing={playing}
-            speed={speed}
-            seeking={seeking}
-            timeline={timeline}
-            stepId={current.id}
-            duration={playbackDuration(current)}
-            nextRole={nextRole}
-            returnsToStage={
-              current.replayAction.kind === "handoff" || !!beats[index + 1]?.clarificationRun
-            }
-          />
-        )}
+      {current?.replayAction && (current.replayAction.kind !== "handoff" || replayProgress < 1) && (
+        <ReplayQuestionScene
+          key={
+            ["summary_submit", "summary_confirm", "handoff"].includes(current.replayAction.kind)
+              ? `summary-${current.replayAction.round}`
+              : (current.replayAction.sourceRunId ?? `round-${current.replayAction.round}`)
+          }
+          action={current.replayAction}
+          previousAnswers={replayAnswersBefore}
+          progress={replayProgress}
+          playing={playing}
+          speed={speed}
+          seeking={seeking}
+          timeline={timeline}
+          stepId={current.id}
+          duration={playbackDuration(current)}
+          nextRole={nextRole}
+          returnsToStage={
+            current.replayAction.kind === "handoff" || !!beats[index + 1]?.clarificationRun
+          }
+        />
+      )}
     </div>
   );
 }

@@ -25,6 +25,15 @@
 .c-hud > .c-bottom {
   animation-delay: 80ms;
 }
+.console-shell .c-root[data-shell-entered="true"],
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > *,
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > .c-main > .c-rail,
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > .c-slate h1::after {
+  animation: none !important;
+}
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > .c-slate h1::after {
+  opacity: 0 !important;
+}
 @keyframes c-hud-enter {
   from {
     opacity: 0;

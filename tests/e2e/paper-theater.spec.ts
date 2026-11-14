@@ -323,7 +323,7 @@ for (const width of [1440, 390]) {
       expect(sample.portalCreatedAt.every((fold) => fold === 0)).toBe(true);
       if (kind === "handoff") {
         expect(sample.portalCreatedAt).toHaveLength(1);
-        expect(sample.frames.every((frame) => frame.flipOrigin === "board-c")).toBe(true);
+        expect(sample.frames.every((frame) => frame.flipOrigin === "continuing-paper")).toBe(true);
         expect(
           Math.max(...sample.frames.map((frame) => frame.scrollY)) -
             Math.min(...sample.frames.map((frame) => frame.scrollY)),
@@ -634,7 +634,7 @@ test("explicit artificial 180ms main-thread load: native handoff clock and post-
   expect(blocked).toEqual([]);
 });
 
-test("paper theater: final summary acknowledgment does not reopen the question paper before handoff", async ({
+test("paper theater: final summary receipt stays visible and hands its existing paper onward", async ({
   page,
 }, testInfo) => {
   const blocked = await openReplay(page);
@@ -642,16 +642,64 @@ test("paper theater: final summary acknowledgment does not reopen the question p
   await page.getByRole("button", { name: `第 ${summary} 步`, exact: true }).click();
   const sampling = page.evaluate(
     () =>
-      new Promise<Array<{ kind: string; paper: boolean; fold: number }>>((resolve) => {
-        const frames: Array<{ kind: string; paper: boolean; fold: number }> = [];
+      new Promise<
+        Array<{
+          kind: string;
+          step: number;
+          paper: boolean;
+          paperId: number | null;
+          fold: number;
+          acknowledgement: string;
+          acknowledgementOpacity: number;
+          confirmationButtons: number;
+          pointerOpacity: number;
+        }>
+      >((resolve) => {
+        const frames: Array<{
+          kind: string;
+          step: number;
+          paper: boolean;
+          paperId: number | null;
+          fold: number;
+          acknowledgement: string;
+          acknowledgementOpacity: number;
+          confirmationButtons: number;
+          pointerOpacity: number;
+        }> = [];
+        const identities = new WeakMap<HTMLElement, number>();
+        let identity = 0;
         const began = performance.now();
         const tick = () => {
           const root = document.querySelector<HTMLElement>(".c-root");
           const paper = root?.querySelector<HTMLElement>(".replay-question-scene");
+          if (paper && !identities.has(paper)) identities.set(paper, ++identity);
+          const footer = paper?.querySelector<HTMLElement>(":scope > .replay-question-footer");
+          const heading = paper?.querySelector<HTMLElement>(":scope > .replay-question-heading h3");
+          const pointer = paper?.querySelector<HTMLElement>(":scope > .replay-question-pointer");
+          const opacity = (node: HTMLElement | null | undefined) => {
+            let value = node ? 1 : 0;
+            for (let element = node; element; element = element.parentElement) {
+              const style = getComputedStyle(element);
+              if (style.display === "none" || style.visibility === "hidden") return 0;
+              value *= Number(style.opacity);
+            }
+            return value;
+          };
           frames.push({
             kind: root?.dataset.replayKind ?? "",
+            step: Number(
+              document
+                .querySelector('.c-time [aria-current="step"]')
+                ?.getAttribute("aria-label")
+                ?.match(/\d+/)?.[0] ?? 0,
+            ),
             paper: !!paper,
+            paperId: paper ? identities.get(paper)! : null,
             fold: Number(paper?.dataset.replayFold ?? 0),
+            acknowledgement: heading?.textContent?.trim() ?? "",
+            acknowledgementOpacity: opacity(heading),
+            confirmationButtons: footer?.querySelectorAll("[data-replay-confirm]").length ?? 0,
+            pointerOpacity: opacity(pointer),
           });
           if (!root?.classList.contains("at-result") && performance.now() - began < 12000)
             requestAnimationFrame(tick);
@@ -672,7 +720,30 @@ test("paper theater: final summary acknowledgment does not reopen the question p
   expect(submitFrames.slice(firstReturn).every((frame) => frame.fold > 0)).toBe(true);
   const acknowledged = frames.filter((frame) => frame.kind === "summary_confirm");
   expect(acknowledged.length).toBeGreaterThan(0);
-  expect(acknowledged.every((frame) => !frame.paper)).toBe(true);
+  expect(acknowledged.every((frame) => frame.paper && frame.confirmationButtons === 0)).toBe(true);
+  expect(
+    acknowledged.some(
+      (frame) =>
+        frame.acknowledgement.includes("摘要确认已接受") && frame.acknowledgementOpacity > 0.9,
+    ),
+  ).toBe(true);
+  expect(acknowledged.every((frame) => frame.pointerOpacity <= 0.02)).toBe(true);
+  const acceptedIndex = steps.findIndex((step) => step.replayAction?.kind === "summary_confirm");
+  const intervening = steps
+    .slice(summary + 1, acceptedIndex)
+    .flatMap((step, offset) =>
+      step.clarificationRun
+        ? [{ role: step.clarificationRun.role, step: summary + offset + 2 }]
+        : [],
+    );
+  expect(intervening.map((step) => step.role)).toEqual(["A", "B", "C"]);
+  expect(
+    intervening.every((step) =>
+      frames.some((frame) => frame.step === step.step && frame.kind === "model"),
+    ),
+  ).toBe(true);
+  const handoff = frames.find((frame) => frame.kind === "handoff" && frame.paper);
+  expect(handoff?.paperId).toBe(acknowledged.at(-1)?.paperId);
   expect(frames.some((frame) => frame.kind === "handoff" && frame.fold > 0)).toBe(true);
   await expect(page.locator(".c-root")).toHaveClass(/at-result/);
   expect(blocked).toEqual([]);

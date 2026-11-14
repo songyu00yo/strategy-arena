@@ -177,6 +177,59 @@ export function ArenaConsole({
   const nowPanel = useRef<HTMLElement>(null);
   const resultPanel = useRef<HTMLElement>(null);
   const consoleRoot = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = consoleRoot.current;
+    if (!root || root.dataset.shellEntered === "true") return;
+    const hud = root.querySelector(":scope > .c-hud");
+    const rail = root.querySelector(":scope > .c-hud > .c-main > .c-rail");
+    const title = root.querySelector(":scope > .c-hud > .c-slate h1");
+    const preference = matchMedia("(prefers-reduced-motion: reduce)");
+    const entranceNames = new Set([
+      "c-console-enter",
+      "c-hud-enter",
+      "c-drop",
+      "band-in",
+      "band-up",
+    ]);
+    const isShellEntrance = (name: string, target: EventTarget | null, pseudo: string | null) => {
+      if (name === "band-side") return target === rail && !pseudo;
+      if (name === "rule-draw") return target === title && pseudo === "::after";
+      return (
+        entranceNames.has(name) &&
+        !pseudo &&
+        (target === root || (target instanceof Element && target.parentElement === hud))
+      );
+    };
+    const settleEntrance = () => {
+      const active = root.getAnimations({ subtree: true }).some((animation) => {
+        if (!(animation instanceof CSSAnimation)) return false;
+        const effect = animation.effect instanceof KeyframeEffect ? animation.effect : null;
+        return (
+          isShellEntrance(
+            animation.animationName,
+            effect?.target ?? null,
+            effect?.pseudoElement ?? null,
+          ) &&
+          (animation.pending ||
+            animation.playState === "running" ||
+            animation.playState === "paused")
+        );
+      });
+      if (preference.matches || !active) root.dataset.shellEntered = "true";
+    };
+    const onEntranceEnd = (event: AnimationEvent) => {
+      if (isShellEntrance(event.animationName, event.target, event.pseudoElement)) settleEntrance();
+    };
+    root.addEventListener("animationend", onEntranceEnd);
+    root.addEventListener("animationcancel", onEntranceEnd);
+    preference.addEventListener("change", settleEntrance);
+    settleEntrance();
+    return () => {
+      root.removeEventListener("animationend", onEntranceEnd);
+      root.removeEventListener("animationcancel", onEntranceEnd);
+      preference.removeEventListener("change", settleEntrance);
+    };
+  }, []);
   const index = cursor === null ? last : Math.min(cursor, last);
   const current = index >= 0 ? beats[index] : null;
   const shown = useMemo(() => beats.slice(0, index + 1), [beats, index]);

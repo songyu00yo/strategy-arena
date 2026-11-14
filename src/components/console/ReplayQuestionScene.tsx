@@ -4,7 +4,9 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { MousePointer2 } from "lucide-react";
 import type { IntakeAnswer, IntakeQuestion, RecordedAnswer } from "@/lib/intake-contracts";
 import type { ReplayAction } from "@/lib/replay-contracts";
+import { capturePaperContents } from "../disclosure-motion";
 import { moveScroll } from "../motion-scroll";
+import { corners, overlayPath, type Quad } from "../overlay-geometry";
 import { QuestionInput } from "../question-input";
 import { createMotionScope, motionPaused, subscribeMotionPause } from "./motion-runtime";
 import { PAPER_MOTION } from "./paper-stage";
@@ -39,6 +41,123 @@ const smooth = (amount: number) => {
   return value * value * (3 - 2 * value);
 };
 type Point = { x: number; y: number };
+type ReturnBox = { left: number; top: number; width: number; height: number };
+
+type ContentPaper = {
+  stepId: string;
+  height: number;
+  parts: Array<{
+    source: HTMLElement;
+    retiring: boolean;
+    signature: string;
+    captured: ReturnType<typeof capturePaperContents>;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    display: string;
+    opacity: string;
+    clipPath: string;
+  }>;
+};
+
+function replayTextSignature(node: HTMLElement) {
+  const style = getComputedStyle(node);
+  return JSON.stringify([node.textContent, style.font, style.color]);
+}
+
+/** Capture only a semantic boundary, retaining the composed old text and field values. */
+function captureReplayContents(
+  element: HTMLElement,
+  stepId: string,
+  statusOnly = false,
+): ContentPaper {
+  const base = layoutPoint(element);
+  const selector = statusOnly
+    ? ':scope > header h3, :scope > .replay-question-body .replay-answer-status, :scope > footer > p, :scope > [data-replay-content-retiring] [data-replay-content-slot="status"]'
+    : ":scope > header, :scope > .replay-question-body, :scope > footer, :scope > [data-replay-content-retiring] > [data-replay-content-slot]";
+  return {
+    stepId,
+    height: element.offsetHeight,
+    parts: [...element.querySelectorAll<HTMLElement>(selector)]
+      .filter(
+        (node) => node.getClientRects().length && getComputedStyle(node).visibility !== "hidden",
+      )
+      .map((node) => {
+        const point = layoutPoint(node);
+        for (
+          let parent = node.parentElement;
+          parent && parent !== element;
+          parent = parent.parentElement
+        ) {
+          point.x -= parent.scrollLeft;
+          point.y -= parent.scrollTop;
+        }
+        const style = getComputedStyle(node);
+        const retiring = !!node.closest("[data-replay-content-retiring]");
+        let opacity = Number(style.opacity);
+        for (
+          let parent = node.parentElement;
+          parent && parent !== element;
+          parent = parent.parentElement
+        )
+          opacity *= Number(getComputedStyle(parent).opacity);
+        let clipPath = style.clipPath;
+        const viewport =
+          statusOnly && !retiring ? node.closest<HTMLElement>(".replay-question-body") : null;
+        if (viewport) {
+          const clip = layoutPoint(viewport);
+          const top = Math.max(0, clip.y - point.y);
+          const right = Math.max(0, point.x + node.offsetWidth - clip.x - viewport.clientWidth);
+          const bottom = Math.max(0, point.y + node.offsetHeight - clip.y - viewport.clientHeight);
+          const left = Math.max(0, clip.x - point.x);
+          clipPath = `inset(${top}px ${right}px ${bottom}px ${left}px)`;
+        }
+        const captured = capturePaperContents(node);
+        for (const property of [
+          "padding",
+          "font",
+          "color",
+          "gap",
+          "align-items",
+          "justify-content",
+          "flex-wrap",
+        ])
+          captured.copy.style.setProperty(property, style.getPropertyValue(property));
+        if (node.matches("header")) {
+          const originals = [...node.querySelectorAll<HTMLElement>("div, span, h3, p")];
+          captured.copy
+            .querySelectorAll<HTMLElement>("div, span, h3, p")
+            .forEach((child, index) => {
+              const appearance = getComputedStyle(originals[index]);
+              for (const property of ["display", "font", "color", "margin", "padding"])
+                child.style.setProperty(property, appearance.getPropertyValue(property));
+            });
+        }
+        return {
+          source: node,
+          retiring,
+          signature: replayTextSignature(node),
+          captured,
+          x: point.x - base.x,
+          y: point.y - base.y,
+          width: node.offsetWidth,
+          height: node.offsetHeight,
+          display: style.display,
+          opacity: String(opacity),
+          clipPath,
+        };
+      }),
+  };
+}
+
+type ContentMotion = {
+  stepId: string;
+  geometry: boolean;
+  paint: (frame: PlaybackFrame) => void;
+  resize: () => void;
+  finish: () => void;
+};
 
 /** These durations use the shared clock's active elapsed time, including playback speed. */
 export function replayPaperTiming(
@@ -79,6 +198,50 @@ export function replayReturnPose(
     opacity: 1 - smooth((progress - 0.62) / 0.38),
     contentOpacity: 1 - smooth((progress - 0.15) / 0.55),
   };
+}
+
+/** Return paths use document coordinates so a common page scroll never changes their geometry. */
+export function replayReturnQuad(
+  box: ReturnBox,
+  pose: Point & { scaleX: number; scaleY: number },
+): Quad {
+  const x = box.left + box.width / 2 + pose.x;
+  const y = box.top + box.height / 2 + pose.y;
+  const halfWidth = (box.width * pose.scaleX) / 2;
+  const halfHeight = (box.height * pose.scaleY) / 2;
+  return [
+    { x: x - halfWidth, y: y - halfHeight },
+    { x: x + halfWidth, y: y - halfHeight },
+    { x: x + halfWidth, y: y + halfHeight },
+    { x: x - halfWidth, y: y + halfHeight },
+  ];
+}
+
+/** A resized paper can preserve its visible rectangle with independent width/height scales. */
+export function replayReturnTransform(quad: Quad, box: ReturnBox) {
+  return {
+    x: (quad[0].x + quad[2].x) / 2 - box.left - box.width / 2,
+    y: (quad[0].y + quad[2].y) / 2 - box.top - box.height / 2,
+    scaleX: (quad[1].x - quad[0].x) / box.width,
+    scaleY: (quad[3].y - quad[0].y) / box.height,
+  };
+}
+
+/** Remove layout reflow from an actual sampled compositor pose before replacing its animation. */
+export function replayReturnRebase(
+  quad: Quad,
+  measured: ReturnBox,
+  previous: ReturnBox,
+  translation: Point,
+): Quad {
+  const currentX = measured.left + measured.width / 2 + translation.x;
+  const currentY = measured.top + measured.height / 2 + translation.y;
+  const oldX = previous.left + previous.width / 2 + translation.x;
+  const oldY = previous.top + previous.height / 2 + translation.y;
+  return quad.map((point) => ({
+    x: oldX + ((point.x - currentX) * previous.width) / measured.width,
+    y: oldY + ((point.y - currentY) * previous.height) / measured.height,
+  })) as Quad;
 }
 
 /** A curved approach starts and finishes at rest on the actual control. */
@@ -290,6 +453,7 @@ export function ReplayQuestionScene({
   const questions = action.questions ?? [];
   const currentAnswer = action.kind === "answer" ? action.answers?.[0] : undefined;
   const confirmed = amount >= 0.8;
+  const written = amount >= 0.75;
   const confirming = ["round_confirm", "summary_submit", "summary_confirm", "handoff"].includes(
     action.kind,
   );
@@ -315,9 +479,230 @@ export function ReplayQuestionScene({
   const followScroll = useRef<(() => void) | null>(null);
   const playbackRate = useRef(speed);
   const preferenceAction = useRef({ stepId: activeStepId, reduced: false });
+  const completedContents = useRef<ContentPaper | null>(null);
+  const pendingStatus = useRef<ContentPaper | null>(null);
+  const contentMotion = useRef<ContentMotion | null>(null);
+  const continuingReceipt = useRef("");
+  const statusKey = useRef("");
   useLayoutEffect(() => {
     playbackRate.current = speed;
   }, [speed]);
+
+  useLayoutEffect(() => {
+    const element = root.current;
+    const button = element?.querySelector<HTMLButtonElement>(":scope > footer > button");
+    if (!element || !button) return;
+    const previous = button.style.minWidth;
+    const reserve = () => {
+      const probe = button.cloneNode(false) as HTMLButtonElement;
+      probe.inert = true;
+      probe.setAttribute("aria-hidden", "true");
+      Object.assign(probe.style, {
+        position: "absolute",
+        visibility: "hidden",
+        width: "max-content",
+        minWidth: "0",
+        maxWidth: "none",
+        transition: "none",
+        animation: "none",
+      });
+      button.parentElement!.appendChild(probe);
+      const width = Math.max(
+        ...Object.values(BUTTONS).map((label) => {
+          probe.textContent = label;
+          return parseFloat(getComputedStyle(probe).width);
+        }),
+      );
+      probe.remove();
+      button.style.minWidth = `${Math.min(width, button.parentElement!.clientWidth)}px`;
+    };
+    reserve();
+    addEventListener("resize", reserve);
+    return () => {
+      removeEventListener("resize", reserve);
+      button.style.minWidth = previous;
+    };
+  }, [activeStepId]);
+
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const boundary = completedContents.current;
+    const actionChanged = !!boundary && boundary.stepId !== activeStepId;
+    const capture = actionChanged ? boundary : pendingStatus.current;
+    completedContents.current = null;
+    pendingStatus.current = null;
+    if (actionChanged && action.kind === "handoff") continuingReceipt.current = activeStepId;
+    if (!capture || seeking || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      contentMotion.current?.finish();
+      return;
+    }
+    const start = (old: ContentPaper, full: boolean) => {
+      const parts = full
+        ? old.parts
+        : old.parts.filter(
+            (part) => part.retiring || part.signature !== replayTextSignature(part.source),
+          );
+      if (!full && !parts.some((part) => !part.retiring)) return;
+      contentMotion.current?.finish();
+      // The shared playback timeline owns pause, rate and elapsed time. This
+      // scope only owns effects/nodes and must not independently resume on hold release.
+      const scope = createMotionScope("interaction");
+      const copy = scope.own(document.createElement("div"));
+      copy.dataset.replayContentRetiring = "true";
+      copy.inert = true;
+      copy.setAttribute("aria-hidden", "true");
+      Object.assign(copy.style, {
+        position: "absolute",
+        inset: "0",
+        pointerEvents: "none",
+        zIndex: "1",
+      });
+      element.appendChild(copy);
+      for (const part of parts) {
+        const node = part.captured.copy;
+        node.dataset.replayContentSlot = full ? "paper" : "status";
+        Object.assign(node.style, {
+          position: "absolute",
+          left: `${part.x}px`,
+          top: `${part.y}px`,
+          width: `${part.width}px`,
+          height: `${part.height}px`,
+          boxSizing: "border-box",
+          minHeight: "0",
+          maxHeight: "none",
+          margin: "0",
+          display: part.display,
+          opacity: part.opacity,
+          clipPath: part.clipPath,
+        });
+        copy.appendChild(node);
+        part.captured.restoreScroll();
+      }
+      const nodes = full
+        ? [
+            ...element.querySelectorAll<HTMLElement>(
+              ":scope > header, :scope > .replay-question-body, :scope > footer",
+            ),
+          ]
+        : parts.filter((part) => !part.retiring).map((part) => part.source);
+      const targetHeight = element.offsetHeight;
+      const originalHeight = element.style.height;
+      const geometry = full && Math.abs(old.height - targetHeight) > 0.5;
+      const span = full ? 220 : 140;
+      const frame = timeline?.read();
+      const began = frame?.stepId === activeStepId ? frame.elapsed : 0;
+      const timing: KeyframeAnimationOptions = {
+        duration: span,
+        easing: "cubic-bezier(.22,1,.3,1)",
+        fill: "both",
+      };
+      const animations = [
+        scope.prepare(copy, [{ opacity: 1 }, { opacity: 0 }], timing),
+        ...nodes.map((node) => scope.prepare(node, [{ opacity: 0 }, { opacity: 1 }], timing)),
+      ];
+      const animationStarts = new Map<Animation, number>();
+      let heightAnimation: Animation | null = null;
+      if (geometry) {
+        element.style.height = `${old.height}px`;
+        heightAnimation = scope.prepare(
+          element,
+          [{ height: `${old.height}px` }, { height: `${targetHeight}px` }],
+          timing,
+        );
+        animations.push(heightAnimation);
+      }
+      for (const part of animations) {
+        animationStarts.set(part, began);
+        part.pause();
+        part.currentTime = 0;
+      }
+      let disposed = false;
+      let running = false;
+      let rate = playbackRate.current;
+      const finish = () => {
+        if (disposed) return;
+        disposed = true;
+        scope.dispose();
+        nodes.forEach((node) => {
+          node.style.opacity = "1";
+        });
+        element.style.height = originalHeight;
+        if (contentMotion.current?.finish === finish) {
+          contentMotion.current = null;
+          delete element.dataset.replayContentMotion;
+        }
+        refresh.current();
+      };
+      const paint = (next: PlaybackFrame) => {
+        if (disposed || next.stepId !== activeStepId) return;
+        if (next.settled || next.elapsed - began >= span) return finish();
+        const playing = next.running && !motionPaused();
+        if (rate !== playbackRate.current) {
+          rate = playbackRate.current;
+          animations.forEach((part) => part.updatePlaybackRate(rate));
+        }
+        if (!playing || !running) {
+          for (const part of animations) {
+            if (!playing) part.pause();
+            else {
+              part.playbackRate = rate;
+              part.currentTime = Math.max(0, next.elapsed - (animationStarts.get(part) ?? began));
+              part.play();
+            }
+          }
+        }
+        running = playing;
+      };
+      const resize = () => {
+        if (disposed || !heightAnimation) return refresh.current();
+        const current = element.offsetHeight;
+        const index = animations.indexOf(heightAnimation);
+        animationStarts.delete(heightAnimation);
+        heightAnimation.cancel();
+        element.style.height = originalHeight;
+        const target = element.offsetHeight;
+        element.style.height = `${current}px`;
+        const next = timeline?.read();
+        const remaining = Math.max(1, span - ((next?.elapsed ?? began) - began));
+        heightAnimation = scope.prepare(
+          element,
+          [{ height: `${current}px` }, { height: `${target}px` }],
+          { ...timing, duration: remaining },
+        );
+        animations[index] = heightAnimation;
+        animationStarts.set(heightAnimation, next?.elapsed ?? began);
+        heightAnimation.pause();
+        heightAnimation.currentTime = 0;
+        heightAnimation.playbackRate = playbackRate.current;
+        if (running) heightAnimation.play();
+        refresh.current();
+      };
+      contentMotion.current = { stepId: activeStepId, geometry, paint, resize, finish };
+      element.dataset.replayContentMotion = "true";
+    };
+    start(capture, actionChanged);
+    const resize = () => contentMotion.current?.resize();
+    addEventListener("resize", resize);
+    return () => {
+      removeEventListener("resize", resize);
+    };
+  }, [activeStepId, action.kind, confirmed, written, seeking, timeline]);
+
+  useLayoutEffect(() => {
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const settle = () => {
+      if (!media.matches) return;
+      completedContents.current = null;
+      pendingStatus.current = null;
+      contentMotion.current?.finish();
+    };
+    media.addEventListener("change", settle);
+    return () => {
+      media.removeEventListener("change", settle);
+      contentMotion.current?.finish();
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const element = root.current;
@@ -325,7 +710,10 @@ export function ReplayQuestionScene({
     const cursor = pointer.current;
     const stage = element?.closest<HTMLElement>(".c-stage3");
     if (!element || !viewport || !cursor || !stage) return;
-    const opening = action.kind === "questions" || action.kind === "summary_submit";
+    const opening =
+      action.kind === "questions" ||
+      action.kind === "summary_submit" ||
+      action.kind === "summary_confirm";
     const closing = returnsToStage ?? ["round_confirm", "handoff"].includes(action.kind);
     const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
     if (preferenceAction.current.stepId !== activeStepId)
@@ -335,7 +723,9 @@ export function ReplayQuestionScene({
     // Latch the selected rate per action, preserving the return pose if speed changes mid-flight.
     const returnRate = playbackRate.current;
     const board = stage.querySelector<HTMLElement>(
-      action.kind === "handoff" ? '[data-board="C"]' : '[data-board="B"]',
+      action.kind === "handoff" || action.kind === "summary_confirm"
+        ? '[data-board="C"]'
+        : '[data-board="B"]',
     );
     const receiver = nextRole
       ? stage.querySelector<HTMLElement>('[data-board="' + nextRole + '"]')
@@ -384,6 +774,9 @@ export function ReplayQuestionScene({
       rate: number;
       started: boolean;
       running: boolean;
+      foldStart: number;
+      path: (progress: number) => Quad;
+      geometry: number[];
     } | null = null;
     const clearTransfer = () => {
       transfer?.scope.dispose();
@@ -393,6 +786,10 @@ export function ReplayQuestionScene({
     };
     const clickTimes = userConfirmation ? [0.4] : replayChoiceTimes(choices.length);
     const pressDuration = replayPressDuration(duration, clickTimes);
+    const handoffStart =
+      action.kind === "handoff" && continuingReceipt.current === activeStepId
+        ? Math.min(220, duration * 0.4)
+        : 0;
 
     const localSignature = (frame: PlaybackFrame) => {
       if (action.kind === "questions") return activeStepId;
@@ -404,7 +801,16 @@ export function ReplayQuestionScene({
     };
 
     const paint = (frame: PlaybackFrame) => {
+      contentMotion.current?.paint(frame);
       if (!cache || frame.stepId !== activeStepId) return;
+      if (frame.settled || reducedMotion) {
+        contentMotion.current?.finish();
+        element.style.opacity = "1";
+        for (const node of element.querySelectorAll<HTMLElement>(
+          ":scope > header, :scope > header h3, :scope > .replay-question-body, :scope > .replay-question-body .replay-answer-status, :scope > footer, :scope > footer > p",
+        ))
+          node.style.opacity = "1";
+      }
       const paper = replayPaperTiming(
         frame,
         opening,
@@ -418,11 +824,12 @@ export function ReplayQuestionScene({
         reducedMotion || !cache.destination || frame.settled
           ? 0
           : handoff
-            ? bounded(frame.elapsed / frame.duration)
+            ? bounded((frame.elapsed - handoffStart) / Math.max(1, frame.duration - handoffStart))
             : paper.fold;
       if (frame.settled && nativeReturn) {
         nativeReturn.scope.dispose();
         nativeReturn = null;
+        clearTransfer();
       }
       if (nativeReturn && fold > 0 && !nativeReturn.started && frame.running && !motionPaused()) {
         const offset = Math.max(0, frame.elapsed - nativeReturn.start);
@@ -449,7 +856,10 @@ export function ReplayQuestionScene({
           nativeReturn.running = running;
         }
         const time = nativeReturn.transform.currentTime;
-        if (typeof time === "number") fold = bounded(time / nativeReturn.duration);
+        if (typeof time === "number")
+          fold =
+            nativeReturn.foldStart +
+            (1 - nativeReturn.foldStart) * bounded(time / nativeReturn.duration);
       }
       const destination = cache.destination;
       const source = cache.source;
@@ -458,7 +868,7 @@ export function ReplayQuestionScene({
           ? replayReturnPose(
               fold,
               destination,
-              handoff && source
+              handoff && source && continuingReceipt.current !== activeStepId
                 ? { x: source.x, y: source.y, scale: Math.min(0.85, source.scaleX * 0.8) }
                 : undefined,
             )
@@ -576,10 +986,11 @@ export function ReplayQuestionScene({
       }
       cursor.dataset.pressed = String(pressed);
       cursor.style.setProperty("--replay-press-amount", String(pressed ? press.offset / 1.5 : 0));
+      const receipt = action.kind === "summary_confirm" || handoff;
       cursor.style.opacity = String(
-        reducedMotion ? 0 : replayPointerOpacity(frame.elapsed, frame.duration, fold),
+        reducedMotion || receipt ? 0 : replayPointerOpacity(frame.elapsed, frame.duration, fold),
       );
-      cursor.style.visibility = position ? "visible" : "hidden";
+      cursor.style.visibility = position && !receipt ? "visible" : "hidden";
       if (position) {
         pointerPosition.current = position;
         cursor.style.transform =
@@ -589,7 +1000,7 @@ export function ReplayQuestionScene({
 
     const measure = () => {
       scheduled = 0;
-      if (disposed || nativeReturn?.started) return;
+      if (disposed) return;
       const page = layoutPoint(element);
       const bodyPage = layoutPoint(viewport);
       const width = element.offsetWidth;
@@ -603,6 +1014,76 @@ export function ReplayQuestionScene({
       const sourceBox = board?.getBoundingClientRect();
       const stageBox = stage.getBoundingClientRect();
       const receiverBox = receiver?.getBoundingClientRect();
+      const sheet = { left: page.x, top: page.y, width, height };
+      const geometry = [
+        sheet.left,
+        sheet.top,
+        width,
+        height,
+        (receiverBox?.left ?? 0) + scrollX,
+        (receiverBox?.top ?? 0) + scrollY,
+        receiverBox?.width ?? 0,
+        receiverBox?.height ?? 0,
+      ];
+      const flight = nativeReturn?.started ? nativeReturn : null;
+      // Window resize and recipient ResizeObserver delivery can describe the same layout.
+      // Transform/opacity writes must never restart a flight or feed an observer loop.
+      if (
+        flight &&
+        geometry.every((value, index) => Math.abs(value - flight.geometry[index]) < 0.5)
+      )
+        return;
+      let interrupted: {
+        from: Quad;
+        velocity: Quad;
+        duration: number;
+        foldStart: number;
+        opacity: number;
+        contentOpacity: number[];
+        running: boolean;
+      } | null = null;
+      if (flight && cache) {
+        const time = Math.max(
+          0,
+          Math.min(flight.duration, Number(flight.transform.currentTime) || 0),
+        );
+        if (time >= flight.duration) return;
+        const owner = transfer?.node ?? element;
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(owner).transform);
+        const actual = corners(owner).map((point) => ({
+          x: point.x + scrollX,
+          y: point.y + scrollY,
+        })) as Quad;
+        const measured = transfer
+          ? {
+              left: parseFloat(owner.style.left) + scrollX,
+              top: parseFloat(owner.style.top) + scrollY,
+              width: owner.offsetWidth,
+              height: owner.offsetHeight,
+            }
+          : sheet;
+        // A body-owned strip has retained its old natural box. The local paper
+        // may already have reflowed, so remove only that natural layout change.
+        const from = replayReturnRebase(actual, measured, cache.sheet, {
+          x: matrix.m41,
+          y: matrix.m42,
+        });
+        const interval = Math.min(8, time);
+        const at = flight.path(time / flight.duration);
+        const before = flight.path((time - interval) / flight.duration);
+        interrupted = {
+          from,
+          velocity: at.map((point, index) => ({
+            x: interval ? (point.x - before[index].x) / interval : 0,
+            y: interval ? (point.y - before[index].y) / interval : 0,
+          })) as Quad,
+          duration: flight.duration - time,
+          foldStart: flight.foldStart + (1 - flight.foldStart) * (time / flight.duration),
+          opacity: Number(getComputedStyle(owner).opacity),
+          contentOpacity: cache.content.map((node) => Number(getComputedStyle(node).opacity)),
+          running: flight.running && frameRef.current.running && !motionPaused(),
+        };
+      }
       const sheetStyle = getComputedStyle(element);
       const sheetStyles = [
         "font-family",
@@ -626,10 +1107,13 @@ export function ReplayQuestionScene({
         sourceBox.left < Math.min(innerWidth, stageBox.right) &&
         sourceBox.bottom > Math.max(0, stageBox.top) &&
         sourceBox.top < Math.min(innerHeight, stageBox.bottom);
-      // The final receipt starts at C even when C is outside the current viewport.
-      // Scrolling must not switch its origin between the board and the stage plane.
+      // A newly mounted server receipt unfolds from C. Its following handoff
+      // keeps the current receipt pose instead of restarting at the C card.
       const useBoardSource =
-        visibleSource || (action.kind === "handoff" && !!sourceBox?.width && !!sourceBox.height);
+        visibleSource ||
+        (["summary_confirm", "handoff"].includes(action.kind) &&
+          !!sourceBox?.width &&
+          !!sourceBox.height);
       const source = replayFlipGeometry(
         useBoardSource && sourceBox ? sourceBox : stageBox,
         targetBox,
@@ -685,9 +1169,12 @@ export function ReplayQuestionScene({
         controls: nodes.map((node) => node ?? null),
         heading: headingPoint,
         startScroll: cache?.startScroll ?? viewport.scrollTop,
-        sheet: { left: page.x, top: page.y, width, height },
+        sheet,
         transferOutside:
-          action.kind === "handoff" && !!receiverBox && replayHandoffOutside(receiverBox, stageBox),
+          (!!flight && !!transfer) ||
+          (action.kind === "handoff" &&
+            !!receiverBox &&
+            replayHandoffOutside(receiverBox, stageBox)),
         sheetStyles,
         content: [
           ...element.querySelectorAll<HTMLElement>(
@@ -696,10 +1183,13 @@ export function ReplayQuestionScene({
         ],
         shadow: element.querySelector<HTMLElement>(":scope > .replay-paper-shadow"),
       };
+      // Once a body strip owns a flight it keeps ownership through completion.
+      // Before movement starts, a reflow may safely retire an unneeded proxy.
+      if (transfer && !cache.transferOutside) clearTransfer();
       // Prepare the final handoff before movement starts. Its geometry stays out of frame writes.
       if (closing && cache.transferOutside && !reducedMotion) {
         if (!transfer) {
-          const scope = createMotionScope();
+          const scope = createMotionScope("interaction");
           const context = scope.own(document.createElement("div"));
           context.className = "console-shell";
           context.style.display = "contents";
@@ -709,6 +1199,7 @@ export function ReplayQuestionScene({
           node.className = `replay-handoff-strip guided-intake ${action.kind === "handoff" ? "is-handoff" : ""}`;
           node.dataset.replayHandoffFor = activeStepId;
           node.querySelector(".replay-question-pointer")?.remove();
+          node.querySelectorAll("[data-replay-content-retiring]").forEach((copy) => copy.remove());
           node.querySelectorAll("[id]").forEach((child) => child.removeAttribute("id"));
           context.appendChild(node);
           document.body.appendChild(context);
@@ -741,52 +1232,102 @@ export function ReplayQuestionScene({
       }
       // Prepare idle compositor effects while the sheet is still being read. Once started,
       // the browser owns the entire return, including frames where React is busy.
-      if (closing && destination && !reducedMotion && !frameRef.current.settled) {
+      if (
+        closing &&
+        destination &&
+        !reducedMotion &&
+        !frameRef.current.settled &&
+        (!contentMotion.current?.geometry || interrupted)
+      ) {
         nativeReturn?.scope.dispose();
-        const scope = createMotionScope();
+        // The Scene's timeline alone controls these prepared effects. A generic
+        // story scope would resume a user-paused return when an overlay releases.
+        const scope = createMotionScope("interaction");
         const start =
           action.kind === "handoff"
-            ? 0
+            ? handoffStart
             : Math.max(duration - PAPER_MOTION.fold * Math.max(1, returnRate), duration * 0.4);
-        const span = duration - start;
+        const span = interrupted?.duration ?? duration - start;
+        const foldStart = interrupted?.foldStart ?? 0;
         const returnOrigin =
-          action.kind === "handoff" && source
+          action.kind === "handoff" && source && continuingReceipt.current !== activeStepId
             ? { x: source.x, y: source.y, scale: Math.min(0.85, source.scaleX * 0.8) }
             : undefined;
         const from = replayReturnPose(0, destination, returnOrigin);
         const to = replayReturnPose(1, destination, returnOrigin);
+        const quadAt = (progress: number) => {
+          const pose = replayReturnPose(progress, destination, returnOrigin);
+          return replayReturnQuad(sheet, { ...pose, scaleX: pose.scale, scaleY: pose.scale });
+        };
+        const path = interrupted
+          ? overlayPath(interrupted.from, quadAt(1), span, interrupted.velocity)
+          : quadAt;
         const easing = "cubic-bezier(.3333333333,0,.6666666667,1)";
-        const transformFrames = [from, to].map((pose) => ({
-          transform: `translate3d(${pose.x}px,${pose.y}px,0) scale(${pose.scale})`,
-        }));
+        const samples = Array.from({ length: 41 }, (_, index) => index / 40);
+        const transformFrames = interrupted
+          ? samples.map((progress) => {
+              const pose = replayReturnTransform(path(progress), sheet);
+              return {
+                transform: `translate3d(${pose.x}px,${pose.y}px,0) scale(${pose.scaleX},${pose.scaleY})`,
+              };
+            })
+          : [from, to].map((pose) => ({
+              transform: `translate3d(${pose.x}px,${pose.y}px,0) scale(${pose.scale})`,
+            }));
         const options: KeyframeAnimationOptions = { duration: span, fill: "both" };
         const transform = scope.prepare(transfer?.node ?? element, transformFrames, {
           ...options,
-          easing,
+          easing: interrupted ? "linear" : easing,
         });
         const parts = [transform];
-        if (transfer) parts.push(scope.prepare(element, transformFrames, { ...options, easing }));
+        if (transfer)
+          parts.push(
+            scope.prepare(element, transformFrames, {
+              ...options,
+              easing: interrupted ? "linear" : easing,
+            }),
+          );
+        const remainingOpacity = (value: number, content: boolean) => {
+          const baseline = replayReturnPose(foldStart, destination);
+          const initial = content ? baseline.contentOpacity : baseline.opacity;
+          return samples.map((progress) => {
+            const pose = replayReturnPose(foldStart + (1 - foldStart) * progress, destination);
+            const opacity = content ? pose.contentOpacity : pose.opacity;
+            return { opacity: bounded(opacity + (value - initial) * (1 - progress)) };
+          });
+        };
         parts.push(
           scope.prepare(
             transfer?.node ?? element,
-            [{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.62, easing }, { opacity: 0 }],
+            interrupted
+              ? remainingOpacity(interrupted.opacity, false)
+              : [{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.62, easing }, { opacity: 0 }],
             options,
           ),
         );
-        for (const content of [...cache.content, ...(transfer?.content ?? [])]) {
+        for (const [index, content] of [...cache.content, ...(transfer?.content ?? [])].entries()) {
           parts.push(
             scope.prepare(
               content,
-              [
-                { opacity: 1, offset: 0 },
-                { opacity: 1, offset: 0.15, easing },
-                { opacity: 0, offset: 0.7 },
-                { opacity: 0, offset: 1 },
-              ],
+              interrupted
+                ? remainingOpacity(interrupted.contentOpacity[index % cache.content.length], true)
+                : [
+                    { opacity: 1, offset: 0 },
+                    { opacity: 1, offset: 0.15, easing },
+                    { opacity: 0, offset: 0.7 },
+                    { opacity: 0, offset: 1 },
+                  ],
               options,
             ),
           );
         }
+        if (interrupted)
+          for (const part of parts) {
+            part.pause();
+            part.currentTime = 0;
+            part.playbackRate = playbackRate.current;
+            if (interrupted.running) part.play();
+          }
         nativeReturn = {
           scope,
           transform,
@@ -794,19 +1335,25 @@ export function ReplayQuestionScene({
           duration: span,
           start,
           rate: playbackRate.current,
-          started: false,
-          running: false,
+          started: !!interrupted,
+          running: interrupted?.running ?? false,
+          foldStart,
+          path,
+          geometry,
         };
       }
       origin ??= headingPoint;
       // Attribution is observable in browser evidence, including every fallback.
-      element.dataset.flipOrigin = source
-        ? useBoardSource
-          ? action.kind === "handoff"
-            ? "board-c"
-            : "board-b"
-          : "stage-plane"
-        : "unavailable";
+      element.dataset.flipOrigin =
+        continuingReceipt.current === activeStepId
+          ? "continuing-paper"
+          : source
+            ? useBoardSource
+              ? action.kind === "handoff" || action.kind === "summary_confirm"
+                ? "board-c"
+                : "board-b"
+              : "stage-plane"
+            : "unavailable";
       element.dataset.flipFallback = useBoardSource
         ? ""
         : !board
@@ -827,17 +1374,43 @@ export function ReplayQuestionScene({
       paint(frameRef.current);
     };
     const scheduleMeasure = () => {
-      if (!scheduled && !disposed) scheduled = requestAnimationFrame(measure);
+      if (disposed) return;
+      if (nativeReturn?.started) {
+        if (scheduled) cancelAnimationFrame(scheduled);
+        measure();
+      } else if (!scheduled) scheduled = requestAnimationFrame(measure);
     };
     const receive = (frame: PlaybackFrame) => {
       if (disposed || frame.stepId !== activeStepId) return;
       frameRef.current = frame;
       const key = localSignature(frame);
       if (signature !== key) {
+        const nextStatus = `${activeStepId}:${frame.progress >= 0.75}:${frame.progress >= 0.8}`;
+        if (
+          statusKey.current &&
+          statusKey.current.startsWith(activeStepId + ":") &&
+          statusKey.current !== nextStatus &&
+          !frame.settled &&
+          !reducedMotion
+        )
+          pendingStatus.current = captureReplayContents(element, activeStepId, true);
+        statusKey.current = nextStatus;
         signature = key;
         setSample({ stepId: activeStepId, amount: bounded(frame.progress) });
       }
       paint(frame);
+      // This runs before onComplete mutates the next action's JSX. Layout-effect
+      // cleanup would already be too late to capture the preceding visible text.
+      if (
+        frame.progress === 1 &&
+        frame.running &&
+        !frame.settled &&
+        // A latched reduced action stays settled. If the live preference has
+        // returned to normal, retain its real final DOM for the next action.
+        !motionPreference.matches &&
+        completedContents.current?.stepId !== activeStepId
+      )
+        completedContents.current = captureReplayContents(element, activeStepId);
     };
     const scrollBody = () => {
       if (cache) cache.scroll = viewport.scrollTop;
@@ -876,6 +1449,7 @@ export function ReplayQuestionScene({
       preferenceAction.current.reduced = true;
       nativeReturn?.scope.dispose();
       nativeReturn = null;
+      contentMotion.current?.finish();
       clearTransfer();
       resetControl();
       followScroll.current?.();
@@ -1006,7 +1580,7 @@ export function ReplayQuestionScene({
   return (
     <section
       ref={root}
-      className={`replay-question-scene guided-intake ${action.kind === "handoff" ? "is-handoff" : ""} ${playing ? "is-playing" : ""} ${seeking ? "is-seeking" : ""}`}
+      className={`replay-question-scene guided-intake ${action.kind === "handoff" ? "is-handoff" : ""} ${action.kind === "summary_confirm" ? "is-receipt" : ""} ${playing ? "is-playing" : ""} ${seeking ? "is-seeking" : ""}`}
       aria-label="补问过程回放"
       data-replay-action={action.kind}
       data-replay-phase={phase}
@@ -1017,7 +1591,13 @@ export function ReplayQuestionScene({
           <span>
             第 {action.round} 轮 · 需求修订 {action.revision}
           </span>
-          <h3>{LABELS[action.kind]}</h3>
+          <h3>
+            {action.kind === "summary_confirm"
+              ? confirmed
+                ? "摘要确认已接受"
+                : "正在接收摘要确认结果"
+              : LABELS[action.kind]}
+          </h3>
         </div>
         <p>按保存记录重建，动画节奏为演示编排</p>
       </header>

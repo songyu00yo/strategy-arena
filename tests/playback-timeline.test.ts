@@ -116,9 +116,9 @@ describe("compact recorded playback timing", () => {
     expect(duration * (1 - playbackCommitAt(step))).toBeGreaterThanOrEqual(300);
   });
 
-  it("briefly acknowledges the saved summary confirmation without another paper return", () => {
+  it("leaves time to present the saved confirmation receipt before handoff", () => {
     const step = beat({ kind: "summary_confirm" });
-    expect(playbackDuration(step)).toBe(250);
+    expect(playbackDuration(step)).toBe(500);
     expect(playbackCommitAt(step)).toBe(0.4);
   });
 });

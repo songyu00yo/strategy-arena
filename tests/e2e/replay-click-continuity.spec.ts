@@ -16,6 +16,7 @@ const scenarios = [
   { slug: "event-registration", kind: "multiple", width: 1440, speed: "快速" },
   { slug: "user-guide", kind: "confirm", width: 1440, speed: "慢速" },
   { slug: "event-registration", kind: "confirm", width: 390, speed: "常速" },
+  { slug: "event-registration", kind: "confirm", width: 344, speed: "常速" },
 ] as const;
 
 type Box = { x: number; y: number; width: number; height: number };

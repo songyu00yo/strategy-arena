@@ -886,6 +886,7 @@
     overflow-wrap: anywhere;
   }
   .console-shell .c-hud > .c-main {
+    flex: none;
     min-height: 0;
   }
   .console-shell .c-hud > .c-bottom {

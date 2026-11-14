@@ -255,7 +255,13 @@ test("explicit UI fixture: mobile long report follows document scrolling and wra
   await restoreLongReport(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(844);
-  expect((await page.locator(".c-stage3").boundingBox())!.height).toBeGreaterThan(0);
+  const stage = (await page.locator(".c-stage3").boundingBox())!;
+  const main = (await page.locator(".c-main").boundingBox())!;
+  const bottom = (await page.locator(".c-bottom").boundingBox())!;
+  expect(stage.height).toBeGreaterThan(0);
+  expect(main.height).toBeGreaterThanOrEqual(stage.height);
+  expect(main.y).toBeLessThanOrEqual(stage.y);
+  expect(bottom.y).toBeGreaterThanOrEqual(main.y + main.height);
   for (const selector of [".c-result-region", ".c-result.whole", ".c-conditions"]) {
     const dimensions = await page.locator(selector).evaluate((element) => ({
       client: element.clientHeight,
@@ -274,4 +280,7 @@ test("explicit UI fixture: mobile long report follows document scrolling and wra
   await expect
     .poll(() => closedResult.evaluate((element) => element.getBoundingClientRect().height))
     .toBe(0);
+  await page.getByRole("button", { name: "第 1 步", exact: true }).click();
+  await page.getByRole("button", { name: "查看第 1 步", exact: true }).click();
+  await expect(page.locator(".c-pull")).toBeVisible();
 });

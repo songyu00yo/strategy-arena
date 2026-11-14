@@ -4,10 +4,23 @@ import {
   CreateArenaRequestSchema,
   VersionRequestSchema,
 } from "../src/lib/contracts";
+import { MODEL_CATALOG } from "../src/lib/model-catalog";
 import { routeModel } from "../src/lib/model-routing";
 
 const challenge = ChallengeSchema.parse({ goal: "在一个月内完成一门入门课程" });
 describe("free deterministic model selection", () => {
+  it("routes each exact model ID without changing legacy selection modes", () => {
+    expect(MODEL_CATALOG).toHaveLength(5);
+    for (const model of MODEL_CATALOG) {
+      expect(CreateArenaRequestSchema.parse({ ...challenge, modelMode: model.id }).modelMode).toBe(
+        model.id,
+      );
+      expect(routeModel(challenge, model.id)).toMatchObject({
+        provider: model.provider,
+        modelId: model.id,
+      });
+    }
+  });
   it("prefers DeepSeek for short everyday tasks, with no network or secret dependency", () => {
     expect(routeModel(challenge, "auto")).toMatchObject({ provider: "deepseek" });
   });

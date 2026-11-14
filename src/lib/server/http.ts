@@ -11,7 +11,7 @@ export async function readBody<T>(request: Request, schema: ZodType<T>): Promise
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
     throw new ArenaError("请使用 JSON 格式提交。", 415, "INVALID_CONTENT_TYPE");
   const reader = request.body?.getReader();
-  if (!reader) throw new ArenaError("请填写请求内容。");
+  if (!reader) throw new ArenaError("提交内容为空，请填写后再试。");
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -29,7 +29,7 @@ export async function readBody<T>(request: Request, schema: ZodType<T>): Promise
     try {
       parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     } catch {
-      throw new ArenaError("请求内容不是有效的 JSON。");
+      throw new ArenaError("提交内容不是有效的 JSON。");
     }
     return schema.parse(parsed);
   } finally {
@@ -51,7 +51,7 @@ export function errorResponse(error: unknown) {
     );
   console.error("Arena request failed", error instanceof Error ? error.name : "UnknownError");
   return json(
-    { error: "服务暂时无法完成请求。已有内容已保留，请稍后刷新。", code: "INTERNAL_ERROR" },
+    { error: "暂时无法完成请求，已有内容已保留。请稍后刷新。", code: "INTERNAL_ERROR" },
     500,
   );
 }

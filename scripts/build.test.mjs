@@ -26,6 +26,11 @@ function fixture() {
   writeFileSync(join(root, "source.ts"), "explicit original test source\n");
   mkdirSync(join(root, "migrations"));
   writeFileSync(join(root, "migrations/001_fixture.sql"), "-- explicit test migration\n");
+  writeFileSync(join(root, "migrations/002_intakes.sql"), "-- synthetic intake migration\n");
+  writeFileSync(
+    join(root, "migrations/003_decision_reviews.sql"),
+    "-- synthetic decision review migration\n",
+  );
   git("add", ".");
   git("commit", "--quiet", "-m", "Synthetic temporary fixture only");
   const marker = join(root, ".next/arena-build-info.json");
@@ -213,4 +218,46 @@ test("production compilation disables inherited model credentials and background
   assert.equal(env.ARENA_WORKER_ENABLED, "false");
   assert.equal(env.PATH, "/bin");
   assert.equal(inherited.ARENA_WORKER_ENABLED, "true");
+});
+
+test("packages incremental migrations and excludes private attachment folders", () => {
+  const f = fixture();
+  try {
+    for (const base of ["uploads", "attachments", "public/uploads", "public/attachments"]) {
+      mkdirSync(join(f.root, base), { recursive: true });
+      writeFileSync(join(f.root, base, "synthetic-private.txt"), "synthetic private attachment");
+    }
+    const info = build({
+      directory: f.root,
+      run: (root) => {
+        fakeCompile(root);
+        mkdirSync(join(root, ".next/standalone/attachments"), { recursive: true });
+        writeFileSync(join(root, ".next/standalone/attachments/private.txt"), "synthetic");
+        mkdirSync(join(root, ".next/standalone/.next/server/app/api/intakes/attachments"), {
+          recursive: true,
+        });
+        writeFileSync(
+          join(root, ".next/standalone/.next/server/app/api/intakes/attachments/route.js"),
+          "// synthetic route code",
+        );
+      },
+    });
+    // Private roots are not part of the application source or release input.
+    writeFileSync(join(f.root, "uploads/second-private.txt"), "another synthetic attachment");
+    assert.equal(sourceIdentity(f.root).sourceFingerprint, info.sourceFingerprint);
+    const result = f.packageRun();
+    assert.equal(result.status, 0, result.stderr);
+    const entries = execFileSync("tar", ["-tzf", f.archive], { encoding: "utf8" }).split("\n");
+    assert.ok(entries.includes("./migrations/002_intakes.sql"));
+    assert.ok(entries.includes("./migrations/003_decision_reviews.sql"));
+    assert.ok(entries.includes("./.next/server/app/api/intakes/attachments/route.js"));
+    assert.equal(
+      entries.some(
+        (entry) => entry.includes("synthetic-private") || entry === "./attachments/private.txt",
+      ),
+      false,
+    );
+  } finally {
+    f.cleanup();
+  }
 });

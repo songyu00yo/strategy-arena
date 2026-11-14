@@ -16,9 +16,11 @@ import {
   type TrajectoryResult,
 } from "../scripts/run-evals";
 import { ModelCallError } from "../src/lib/server/model";
+import { proposedClaims } from "../src/lib/server/tools";
 import {
   ChallengeSchema,
   type Attack,
+  type Evidence,
   type ModelUsage,
   type Revision,
   type StageInput,
@@ -170,6 +172,142 @@ async function run(mode: EvaluationMode, dependency = adapter().value, cap = 1.5
   return { result, global, events };
 }
 describe("explicit mock adapter evaluation orchestration", () => {
+  it.each(EVALUATION_MODES)(
+    "keeps proposal evidence and checks final revised resources once before each %s verdict",
+    async (mode) => {
+      const fixture = adapter(),
+        original = fixture.value.generate;
+      fixture.value.generate = async (stage, input, selectedMode) => {
+        const response = await original(stage, input, selectedMode);
+        if (stage === "revise") {
+          const revision = response.value as Revision;
+          revision.strategy = {
+            ...revision.strategy,
+            estimatedCost: input.role === "A" ? 12 : input.role === "B" ? 2 : null,
+            estimatedHours: input.role === "A" ? 11 : input.role === "B" ? 3 : null,
+          };
+        }
+        return response;
+      };
+      const { result, events } = await run(mode, fixture.value);
+      expect(result.status).toBe("completed");
+      expect(fixture.calls).toHaveLength(20);
+      expect(result.accounting).toMatchObject({
+        toolCalls: 6,
+        inputTokens: 200,
+        outputTokens: 100,
+        heldCny: 0,
+        heldTokens: 0,
+      });
+      expect(result.accounting.spentCny).toBeCloseTo(0.2);
+      expect(events.filter((event) => event.type === "call_started")).toHaveLength(20);
+      const finalChecks = events.filter((event) => event.type === "final_constraints_completed");
+      expect(finalChecks).toHaveLength(2);
+      for (const [index, condition] of result.conditions.entries()) {
+        const before = events.find(
+          (event) => event.type === "tools_completed" && event.condition === condition.condition,
+        )!;
+        const initialEvidence = before.evidence as Evidence[],
+          proposals = initialEvidence.filter((evidence) => evidence.estimateScope === "proposal"),
+          final = condition.evidence.filter((evidence) => evidence.estimateScope === "final"),
+          judge = fixture.calls[index * 10 + 9].input;
+        expect(proposals).toHaveLength(6);
+        expect(initialEvidence.some((evidence) => evidence.estimateScope === "final")).toBe(false);
+        expect(condition.evidence.slice(0, initialEvidence.length)).toEqual(initialEvidence);
+        expect(final).toHaveLength(6);
+        expect(new Set(final.map((evidence) => evidence.id)).size).toBe(6);
+        expect(finalChecks[index]).toMatchObject({ toolRequestCount: 0, evidence: final });
+        expect(judge.strategies).toHaveLength(3);
+        expect(judge.revisions).toHaveLength(3);
+        expect(judge.evidence).toEqual(condition.evidence);
+        expect(final.filter((evidence) => evidence.attackId === "constraint-final-A")).toEqual([
+          expect.objectContaining({ expression: `12 - ${condition.challenge.budget}` }),
+          expect.objectContaining({ expression: `11 - ${condition.challenge.timeHours}` }),
+        ]);
+        expect(final.filter((evidence) => evidence.attackId === "constraint-final-B")).toEqual([
+          expect.objectContaining({ expression: `2 - ${condition.challenge.budget}` }),
+          expect.objectContaining({ expression: `3 - ${condition.challenge.timeHours}` }),
+        ]);
+        expect(final.filter((evidence) => evidence.attackId === "constraint-final-C")).toEqual([
+          expect.objectContaining({ status: "unavailable", expression: null }),
+          expect.objectContaining({ status: "unavailable", expression: null }),
+        ]);
+        expect(proposals.filter((evidence) => evidence.attackId === "constraint-A")).toEqual([
+          expect.objectContaining({ expression: `5 - ${condition.challenge.budget}` }),
+          expect.objectContaining({ expression: `4 - ${condition.challenge.timeHours}` }),
+        ]);
+      }
+    },
+  );
+  it("does not append final evidence again when the judge uses its one explicit repair", async () => {
+    const fixture = adapter(),
+      original = fixture.value.generate;
+    let rejected = false;
+    const judgeInputs: StageInput[] = [];
+    fixture.value.generate = async (stage, input, mode) => {
+      if (stage === "judge") {
+        judgeInputs.push(structuredClone(input));
+        if (!rejected) {
+          rejected = true;
+          throw new ModelCallError("synthetic invalid verdict", false, usage, {
+            feedback: "Return the original evidence IDs.",
+            rejectedOutput: "synthetic malformed verdict",
+          });
+        }
+      }
+      return original(stage, input, mode);
+    };
+    const { result, events } = await run("arena", fixture.value);
+    expect(result.status).toBe("completed");
+    expect(result.attempts).toHaveLength(21);
+    expect(result.accounting.spentCny).toBeCloseTo(0.21);
+    expect(result.accounting.toolCalls).toBe(6);
+    expect(judgeInputs[0].evidence).toEqual(judgeInputs[1].evidence);
+    expect(
+      judgeInputs[1].evidence.filter((evidence) => evidence.estimateScope === "final"),
+    ).toHaveLength(6);
+    expect(events.filter((event) => event.type === "final_constraints_completed")).toHaveLength(2);
+  });
+  it.each(["role", "arithmetic"] as const)(
+    "shares proposal normalization and retains rejected raw output for %s errors",
+    async (kind) => {
+      const fixture = adapter(),
+        original = fixture.value.generate;
+      let first = true;
+      fixture.value.generate = async (stage, input, mode) => {
+        const response = await original(stage, input, mode);
+        if (stage === "propose") {
+          const strategy = response.value as Strategy;
+          strategy.claims[0].status = "supported";
+          strategy.claims[0].sourceIds = ["invented-source"];
+          if (first) {
+            first = false;
+            if (kind === "role") strategy.id = "B";
+            else strategy.resources = "工时：2+3=6小时";
+          }
+        }
+        return response;
+      };
+      const { result } = await run("arena", fixture.value);
+      expect(result.status).toBe("completed");
+      expect(result.attempts).toHaveLength(21);
+      const rejected = result.attempts[0];
+      expect(rejected.status).toBe("failed");
+      expect(rejected.rawOutput).toMatchObject(
+        kind === "role" ? { id: "B" } : { resources: "工时：2+3=6小时" },
+      );
+      expect((result.attempts[1].rawOutput as Strategy).claims[0]).toMatchObject({
+        id: "A-raw-id",
+        status: "supported",
+        sourceIds: ["invented-source"],
+      });
+      for (const condition of result.conditions)
+        for (const strategy of condition.strategies) {
+          expect(strategy.claims).toEqual(proposedClaims(strategy, condition.challenge));
+          expect(strategy.claims[0]).toMatchObject({ status: "unknown", sourceIds: [] });
+        }
+    },
+  );
   it.each(EVALUATION_MODES)(
     "keeps fixed stages, real tools and information boundaries for %s",
     async (mode) => {

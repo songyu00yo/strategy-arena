@@ -74,7 +74,8 @@ try {
     const scene = { ...spec.scenes[index] };
     const verified = validateScene(spec, scene, base);
     const source = verified.source;
-    if (source === output) throw new Error("Promo output must not overwrite its original recording");
+    if (source === output)
+      throw new Error("Promo output must not overwrite its original recording");
     scene.footageKind = verified.footageKind;
     scene.label = verified.label;
     scene.provider = verified.providerLabel;

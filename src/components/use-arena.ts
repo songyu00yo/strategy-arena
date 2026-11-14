@@ -1,7 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ArenaSnapshot, Challenge, ModelMode } from "@/lib/contracts";
+import type { ArenaSnapshot, Challenge, ModelMode, FollowUpInput } from "@/lib/contracts";
+import type { IntakeDraft } from "@/lib/intake-contracts";
+import { clearExplicitArenaRequest, examplePickerRequested } from "@/lib/example-navigation";
+import {
+  clearIntakeDraftPointer,
+  readIntakeDraftPointer,
+  saveIntakeDraftPointer,
+} from "./intake-draft-pointer";
+import { clearArenaPointer, readArenaPointer, saveArenaPointer } from "./arena-pointer";
+import { bootstrapIdentity } from "./identity-bootstrap";
 
 export interface Health {
   status: string;
@@ -10,6 +19,7 @@ export interface Health {
   model: ArenaSnapshot["model"];
   requiresAccessCode?: boolean;
   accessGranted?: boolean;
+  identityBootstrap?: boolean;
 }
 class ApiError extends Error {
   code?: string;
@@ -30,12 +40,11 @@ async function api<T>(url: string, body?: unknown, signal?: AbortSignal): Promis
   if (!response.ok) throw new ApiError(data.error ?? "请求未完成，请稍后重试", data.code);
   return data;
 }
-const storageKey = "strategy-arena:last-id";
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 function revisionOf(value: ArenaSnapshot) {
   return {
     version: value.versions.find((v) => v.id === value.activeVersionId)?.number ?? 0,
-    seq: value.events.at(-1)?.seq ?? 0,
+    seq: value.eventCursor ?? value.events.at(-1)?.seq ?? 0,
   };
 }
 /** Reject both pre-mutation responses and snapshots read before a newer server event. */
@@ -69,14 +78,23 @@ export function useArena() {
       controllers.current.delete(controller);
     }
   }, []);
-  const accept = useCallback((value: ArenaSnapshot, expectedGeneration: number) => {
-    if (!mounted.current || expectedGeneration !== generation.current) return false;
-    if (latest.current && snapshotIsOlder(value, latest.current)) return false;
-    latest.current = value;
-    setSnapshot(value);
-    localStorage.setItem(storageKey, value.id);
-    return true;
-  }, []);
+  const accept = useCallback(
+    (value: ArenaSnapshot, expectedGeneration: number, created = false) => {
+      if (!mounted.current || expectedGeneration !== generation.current) return false;
+      if (latest.current && snapshotIsOlder(value, latest.current)) return false;
+      latest.current = value;
+      setSnapshot(value);
+      if (
+        value.versions.find((version) => version.id === value.activeVersionId)?.waitingForIntake ||
+        value.versions.find((version) => version.id === value.activeVersionId)?.workflow ===
+          "clarification"
+      )
+        setAuto(false);
+      saveArenaPointer(value.id, created);
+      return true;
+    },
+    [],
+  );
   const refresh = useCallback(
     async (id: string) => {
       const epoch = generation.current;
@@ -87,23 +105,65 @@ export function useArena() {
     [request, accept],
   );
   const restore = useCallback(async () => {
-    const id = localStorage.getItem(storageKey);
     const epoch = generation.current;
-    if (!id) {
-      setRestoring(false);
-      return;
-    }
+    let id: string | null = null;
+    let restoringPreviousArena = false;
+    let restoringExplicitArena = false;
     try {
+      const parameters = new URL(window.location.href).searchParams;
+      if (parameters.has("arena")) {
+        restoringExplicitArena = true;
+        const requestedId = parameters.get("arena")?.trim();
+        if (!requestedId) throw new ApiError("没有指定要打开的推演。", "INVALID_ARENA");
+        const value = await request<ArenaSnapshot>(
+          `/api/arenas/${encodeURIComponent(requestedId)}`,
+        );
+        accept(value, epoch);
+        return;
+      }
+      if (examplePickerRequested()) return;
+      id = readArenaPointer();
+      const draftId = readIntakeDraftPointer();
+      if (draftId) {
+        let draft: IntakeDraft | null = null;
+        try {
+          draft = await request<IntakeDraft>(`/api/intakes/${encodeURIComponent(draftId)}`);
+        } catch (failure) {
+          if (failure instanceof ApiError && failure.code === "NOT_FOUND")
+            clearIntakeDraftPointer(draftId);
+          else throw failure;
+        }
+        if (draft) {
+          saveIntakeDraftPointer(draft.id);
+          // The server may have committed submit even when the browser lost its response.
+          if (draft.status === "submitted" && draft.arenaId) {
+            const committed = await request<ArenaSnapshot>(`/api/arenas/${draft.arenaId}`);
+            if (accept(committed, epoch)) clearIntakeDraftPointer(draft.id);
+          }
+          // A pending draft takes precedence over an older discussion in this browser.
+          return;
+        }
+      }
+      if (!id) return;
+      restoringPreviousArena = true;
       const value = await request<ArenaSnapshot>(`/api/arenas/${encodeURIComponent(id)}`);
       accept(value, epoch);
     } catch (e) {
       if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
-        if (!(e instanceof ApiError && e.code === "ACCESS_REQUIRED"))
-          localStorage.removeItem(storageKey);
+        if (
+          restoringPreviousArena &&
+          e instanceof ApiError &&
+          ["NOT_FOUND", "FORBIDDEN"].includes(e.code ?? "")
+        )
+          clearArenaPointer(id);
         setError(
-          e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
-            ? "上次的擂台无法在当前浏览器身份下打开。你可以开始新一轮。"
-            : "未能恢复上次的擂台，你可以重新开始。",
+          restoringExplicitArena
+            ? e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
+              ? "当前浏览器无法访问指定的推演。未恢复之前的任务，请检查打开的链接。"
+              : "未能打开指定的推演。未恢复之前的任务，请稍后重试。"
+            : e instanceof ApiError && (e.code === "NOT_FOUND" || e.code === "FORBIDDEN")
+              ? "当前浏览器无法访问上次的擂台，你可以开始新一轮。"
+              : "未能恢复上次的擂台，你可以重新开始。",
         );
       }
     } finally {
@@ -115,9 +175,15 @@ export function useArena() {
     request<Health>("/api/health")
       .then(async (value) => {
         if (!mounted.current) return;
-        setHealth(value);
-        if (!value.requiresAccessCode || value.accessGranted) await restore();
-        else setRestoring(false);
+        if (!value.requiresAccessCode || value.accessGranted) {
+          if (value.identityBootstrap === true) await bootstrapIdentity();
+          if (!mounted.current) return;
+          setHealth(value);
+          await restore();
+        } else {
+          setHealth(value);
+          setRestoring(false);
+        }
       })
       .catch((e) => {
         if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
@@ -137,12 +203,49 @@ export function useArena() {
   useEffect(() => {
     if (!arenaId) return;
     const source = new EventSource(
-      `/api/arenas/${arenaId}/events?afterSeq=${latest.current?.events.at(-1)?.seq ?? 0}`,
+      `/api/arenas/${arenaId}/events?afterSeq=${latest.current?.eventCursor ?? latest.current?.events.at(-1)?.seq ?? 0}`,
     );
     let refreshing = false;
     let queued = false;
     let closed = false;
-    const onEvent = async () => {
+    const onEvent = async (message: MessageEvent) => {
+      let hasStructuralEvent = false;
+      try {
+        const packet = JSON.parse(message.data) as {
+          events: import("@/lib/contracts").ArenaEvent[];
+        };
+        const current = latest.current;
+        if (!current || current.id !== arenaId || closed) return;
+        const newEvents = packet.events.filter(
+          (entry) => entry.seq > (current.eventCursor ?? current.events.at(-1)?.seq ?? 0),
+        );
+        if (!newEvents.length) return;
+        const drafts = new Map((current.drafts ?? []).map((draft) => [draft.stepId, draft]));
+        for (const entry of newEvents) {
+          if (entry.type === "draft_updated" || entry.type === "draft_finished") {
+            const draft = entry.data as import("@/lib/contracts").ModelDraft;
+            const previous = drafts.get(draft.stepId);
+            if (
+              draft.versionId === entry.versionId &&
+              (!previous || draft.revision > previous.revision)
+            )
+              drafts.set(draft.stepId, draft);
+          } else hasStructuralEvent = true;
+        }
+        const value = {
+          ...current,
+          drafts: [...drafts.values()],
+          eventCursor: newEvents.at(-1)!.seq,
+        };
+        latest.current = value;
+        setSnapshot(value);
+      } catch {
+        hasStructuralEvent = true;
+      }
+      if (!hasStructuralEvent) {
+        if (refreshing) queued = true;
+        return;
+      }
       if (refreshing) {
         queued = true;
         return;
@@ -178,6 +281,8 @@ export function useArena() {
           current.id !== arenaId ||
           !active ||
           active.id !== activeId ||
+          active.waitingForIntake ||
+          active.workflow === "clarification" ||
           !["ready", "running"].includes(active.status)
         )
           return;
@@ -209,8 +314,8 @@ export function useArena() {
             setAuto(false);
             setError(
               e instanceof Error
-                ? `${e.message}。为避免重复计费，自动推进已停止；请先刷新状态。`
-                : "请求状态不明，已停止自动推进。请先刷新状态。",
+                ? `${e.message}。为避免重复计费，已停止自动推演，请先刷新状态。`
+                : "请求状态不明，已停止自动推演，请先刷新状态。",
             );
             return;
           }
@@ -231,14 +336,21 @@ export function useArena() {
   }, [arenaId, activeId, auto, driverRevision, request, accept, refresh]);
   const mutate = useCallback(
     async (path: string, body: unknown, keepDriving = true) => {
+      if (mutationBusy.current) return false;
       mutationBusy.current = true;
       const epoch = ++generation.current;
       setBusy(true);
       setError("");
       try {
         const value = await request<ArenaSnapshot>(path, body);
-        accept(value, epoch);
-        setAuto(keepDriving);
+        accept(value, epoch, path === "/api/arenas");
+        setAuto(
+          keepDriving &&
+            value.versions.find((version) => version.id === value.activeVersionId)?.workflow !==
+              "clarification" &&
+            !value.versions.find((version) => version.id === value.activeVersionId)
+              ?.waitingForIntake,
+        );
         setDriverRevision((v) => v + 1);
         return true;
       } catch (e) {
@@ -267,36 +379,97 @@ export function useArena() {
     unlock: async (code: string) => {
       setBusy(true);
       setError("");
+      setRestoring(true);
       try {
         await request("/api/access", { code });
         const next = await request<Health>("/api/health");
+        if (next.identityBootstrap === true) await bootstrapIdentity();
         setHealth(next);
         await restore();
         return true;
       } catch (e) {
         setError(e instanceof Error ? e.message : "访问码验证失败");
+        setRestoring(false);
         return false;
       } finally {
         setBusy(false);
       }
     },
     clearError: () => setError(""),
+    changeIdentity: () => {
+      generation.current++;
+      controllers.current.forEach((controller) => controller.abort());
+      controllers.current.clear();
+      clearArenaPointer(readArenaPointer());
+      clearIntakeDraftPointer(readIntakeDraftPointer());
+      clearExplicitArenaRequest();
+      latest.current = null;
+      setSnapshot(null);
+      setAuto(false);
+      setError("");
+      setRestoring(false);
+    },
+    openArena: async (id: string) => {
+      const epoch = ++generation.current;
+      setAuto(false);
+      clearExplicitArenaRequest();
+      const value = await request<ArenaSnapshot>(`/api/arenas/${encodeURIComponent(id)}`);
+      if (accept(value, epoch, true)) clearIntakeDraftPointer(readIntakeDraftPointer());
+    },
+    openIntake: (id: string) => {
+      generation.current++;
+      clearExplicitArenaRequest();
+      clearArenaPointer(readArenaPointer());
+      saveIntakeDraftPointer(id, true);
+      latest.current = null;
+      setSnapshot(null);
+      setAuto(false);
+      setError("");
+      setRestoring(false);
+    },
+    adopt: (value: ArenaSnapshot) => {
+      const epoch = ++generation.current;
+      setError("");
+      accept(value, epoch, readArenaPointer() !== value.id);
+      setAuto(
+        value.versions.find((version) => version.id === value.activeVersionId)?.workflow !==
+          "clarification" &&
+          !value.versions.find((version) => version.id === value.activeVersionId)?.waitingForIntake,
+      );
+      setDriverRevision((revision) => revision + 1);
+    },
     create: (challenge: Challenge, modelMode: ModelMode = "auto") =>
       mutate("/api/arenas", { ...challenge, modelMode }),
-    rematch: (challenge: Challenge, changeReason: string, modelMode?: ModelMode) =>
+    rematch: (
+      challenge: Challenge,
+      changeReason: string,
+      modelMode?: ModelMode,
+      baseVersionId?: string,
+      followUp?: FollowUpInput,
+    ) =>
       latest.current
         ? mutate(`/api/arenas/${latest.current.id}/versions`, {
             challenge,
             changeReason,
             modelMode,
+            baseVersionId,
+            followUp,
           })
         : Promise.resolve(false),
-    intervene: (targetStrategyId: string, targetClaimId: string, text: string) =>
+    intervene: (
+      targetStrategyId: string,
+      targetClaimId: string,
+      text: string,
+      baseVersionId?: string,
+      quote?: string,
+    ) =>
       latest.current
         ? mutate(`/api/arenas/${latest.current.id}/interventions`, {
             targetStrategyId,
             targetClaimId,
             text,
+            baseVersionId,
+            quote,
           })
         : Promise.resolve(false),
     stop: async () => {
@@ -323,12 +496,14 @@ export function useArena() {
       setDriverRevision((v) => v + 1);
     },
     reset: () => {
+      const ownId = latest.current?.id ?? null;
+      clearExplicitArenaRequest();
       generation.current++;
       latest.current = null;
       setAuto(false);
       setSnapshot(null);
       setError("");
-      localStorage.removeItem(storageKey);
+      clearArenaPointer(ownId);
     },
   };
 }

@@ -1,6 +1,20 @@
+import {
+  readToolCommittedUsdMicros,
+  assertToolBatchModelBudget,
+  ensureToolBudgetBatchOnConnection,
+  configuredToolBatchId,
+} from "./tool-budget";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import {
+  assertLedgerUsagePolicy,
+  BillingError,
+  readLedgerUsagePolicy,
+} from "./billing-usage-policy";
+import { usageLimitsEnabled } from "./usage-policy";
+
+export { BillingError } from "./billing-usage-policy";
 
 // All amounts are integer micro units of their native currency. This fixed,
 // deliberately conservative budget estimate is not a bank exchange rate.
@@ -9,15 +23,6 @@ export const BILLING_HARD_TOTAL_USD_MICROS = 200_000_000;
 export const BILLING_DEVELOPMENT_MAX_USD_MICROS = 120_000_000;
 const MAX_VALUE = 1_000_000_000_000;
 
-export class BillingError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-  ) {
-    super(message);
-    this.name = "BillingError";
-  }
-}
 export interface BillingOptions {
   databasePath: string;
   usdLimit?: number;
@@ -37,6 +42,11 @@ export interface BillingSettlement {
   outputTokens: number;
   cachedInputTokens: number;
   responseId?: string;
+  serviceTier?: string;
+  model?: string;
+  cacheWriteInputTokens?: number;
+  cacheWrite30mInputTokens?: number;
+  cacheWrite12hInputTokens?: number;
 }
 interface Settings {
   usd_limit_micros: number;
@@ -60,6 +70,11 @@ interface AttemptRow {
   output_tokens: number | null;
   cached_input_tokens: number | null;
   response_id: string | null;
+  service_tier: string | null;
+  model: string | null;
+  cache_write_input_tokens: number | null;
+  cache_write_30m_input_tokens: number | null;
+  cache_write_12h_input_tokens: number | null;
 }
 function invalid(message: string): never {
   throw new BillingError(message, "BILLING_INVALID_CONFIG");
@@ -73,6 +88,52 @@ function identifier(value: string, label: string) {
   if (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(value))
     invalid(`Invalid billing ${label}.`);
   return value;
+}
+function validateSettlementMetadata(settlement: BillingSettlement) {
+  if (settlement.serviceTier !== undefined) identifier(settlement.serviceTier, "service tier");
+  if (settlement.model !== undefined) identifier(settlement.model, "model");
+  const total = settlement.cacheWriteInputTokens;
+  const short = settlement.cacheWrite30mInputTokens;
+  const long = settlement.cacheWrite12hInputTokens;
+  for (const [value, label] of [
+    [total, "cache write input tokens"],
+    [short, "30m cache write input tokens"],
+    [long, "12h cache write input tokens"],
+  ] as const)
+    if (value !== undefined) integer(value, label);
+  if (total === undefined) {
+    if (short !== undefined || long !== undefined)
+      invalid("Cache write breakdown requires total cache write input tokens.");
+    return;
+  }
+  if (settlement.cachedInputTokens + total > settlement.inputTokens)
+    invalid("Cached and cache write input tokens exceed input tokens.");
+  const breakdown = (short ?? 0) + (long ?? 0);
+  if (breakdown > total || (short !== undefined && long !== undefined && breakdown !== total))
+    invalid("Cache write breakdown does not match total cache write input tokens.");
+}
+function migrateSettlementMetadata(connection: DatabaseSync) {
+  // ALTER-only migration: old settlement amounts, timestamps, and rowids stay intact.
+  // Called inside the same write transaction as settings validation, so two workers
+  // cannot race the schema change and a rejected open leaves the ledger unchanged.
+  const columns = new Set(
+    (connection.prepare("PRAGMA table_info(billing_attempts)").all() as { name: string }[]).map(
+      (column) => column.name,
+    ),
+  );
+  const addedColumns = [
+    "service_tier",
+    "model",
+    "cache_write_input_tokens",
+    "cache_write_30m_input_tokens",
+    "cache_write_12h_input_tokens",
+  ];
+  const present = addedColumns.filter((column) => columns.has(column)).length;
+  if (present === addedColumns.length) return;
+  if (present !== 0) invalid("Incomplete billing settlement metadata schema.");
+  connection.exec(
+    readFileSync(resolve(process.cwd(), "migrations/billing/003_settlement_metadata.sql"), "utf8"),
+  );
 }
 export function billingUsdMicros(amount: number, currency: "CNY" | "USD") {
   integer(amount, "amount");
@@ -101,6 +162,7 @@ function configuredOptions(): BillingOptions {
  * unresolved attempt merely because its worker crashed before dispatch. */
 export function openBillingLedger(options: BillingOptions) {
   validatePath(options.databasePath);
+  const limitsEnabled = usageLimitsEnabled();
   const { usdMicros, requestLimit, tokenLimit } = validateLimits(options);
   mkdirSync(dirname(options.databasePath), { recursive: true, mode: 0o700 });
   const connection = new DatabaseSync(options.databasePath);
@@ -154,6 +216,10 @@ export function openBillingLedger(options: BillingOptions) {
           "Shared billing settings differ. Existing limits cannot be changed by environment variables.",
           "BILLING_SETTINGS_MISMATCH",
         );
+      migrateSettlementMetadata(connection);
+      assertLedgerUsagePolicy(connection, limitsEnabled);
+      const batchId = configuredToolBatchId();
+      if (batchId) ensureToolBudgetBatchOnConnection(connection, batchId);
     });
   } catch (error) {
     connection.close();
@@ -194,6 +260,7 @@ export function openBillingLedger(options: BillingOptions) {
             "Billing attempt already exists; dispatch refused.",
             "BILLING_DUPLICATE_ATTEMPT",
           );
+        assertLedgerUsagePolicy(connection, limitsEnabled);
         const totals = summary();
         if (
           totals.usdLimitMicros !== usdMicros ||
@@ -205,15 +272,28 @@ export function openBillingLedger(options: BillingOptions) {
             "BILLING_SETTINGS_MISMATCH",
           );
         const stage = totals.activeStage;
+        const toolAmount = readToolCommittedUsdMicros(connection);
+        const stageBoundary = stage
+          ? (connection
+              .prepare("SELECT changed_at FROM billing_limit_audit ORDER BY revision DESC LIMIT 1")
+              .get() as { changed_at: string } | undefined)
+          : undefined;
+        const stageToolAmount = stageBoundary
+          ? readToolCommittedUsdMicros(connection, stageBoundary.changed_at)
+          : 0;
+        assertToolBatchModelBudget(connection, reservedUsdMicros);
         if (
-          (stage &&
+          limitsEnabled &&
+          ((stage &&
             (stage.usage.requests + 1 > stage.requestLimit ||
               stage.usage.tokens + input.maxTokens > stage.tokenLimit ||
-              stage.usage.committedUsdMicros + reservedUsdMicros > stage.usdLimitMicros)) ||
-          totals.requests + 1 > requestLimit ||
-          totals.tokens + input.maxTokens > tokenLimit ||
-          totals.committedUsdMicros + reservedUsdMicros > usdMicros ||
-          totals.committedUsdMicros + reservedUsdMicros > BILLING_HARD_TOTAL_USD_MICROS
+              stage.usage.committedUsdMicros + stageToolAmount + reservedUsdMicros >
+                stage.usdLimitMicros)) ||
+            totals.requests + 1 > requestLimit ||
+            totals.tokens + input.maxTokens > tokenLimit ||
+            totals.committedUsdMicros + toolAmount + reservedUsdMicros > usdMicros ||
+            totals.committedUsdMicros + toolAmount + reservedUsdMicros >
+              BILLING_HARD_TOTAL_USD_MICROS)
         )
           throw new BillingError(
             "Shared paid-request budget is exhausted.",
@@ -246,6 +326,7 @@ export function openBillingLedger(options: BillingOptions) {
       if (settlement.cachedInputTokens > settlement.inputTokens)
         invalid("Cached input tokens exceed input tokens.");
       if (settlement.responseId !== undefined) identifier(settlement.responseId, "response ID");
+      validateSettlementMetadata(settlement);
       return atomic(() => {
         const row = getAttempt(attemptId);
         if (!row) throw new BillingError("Unknown billing attempt.", "BILLING_ATTEMPT_NOT_FOUND");
@@ -255,7 +336,12 @@ export function openBillingLedger(options: BillingOptions) {
             row.input_tokens !== settlement.inputTokens ||
             row.output_tokens !== settlement.outputTokens ||
             row.cached_input_tokens !== settlement.cachedInputTokens ||
-            row.response_id !== (settlement.responseId ?? null)
+            row.response_id !== (settlement.responseId ?? null) ||
+            row.service_tier !== (settlement.serviceTier ?? null) ||
+            row.model !== (settlement.model ?? null) ||
+            row.cache_write_input_tokens !== (settlement.cacheWriteInputTokens ?? null) ||
+            row.cache_write_30m_input_tokens !== (settlement.cacheWrite30mInputTokens ?? null) ||
+            row.cache_write_12h_input_tokens !== (settlement.cacheWrite12hInputTokens ?? null)
           )
             throw new BillingError(
               "Conflicting billing settlement.",
@@ -266,7 +352,9 @@ export function openBillingLedger(options: BillingOptions) {
         connection
           .prepare(
             `UPDATE billing_attempts SET state='settled',amount_micros=?,settled_usd_micros=?,
-            input_tokens=?,output_tokens=?,cached_input_tokens=?,response_id=?,settled_at=? WHERE attempt_id=?`,
+            input_tokens=?,output_tokens=?,cached_input_tokens=?,response_id=?,service_tier=?,model=?,
+            cache_write_input_tokens=?,cache_write_30m_input_tokens=?,cache_write_12h_input_tokens=?,
+            settled_at=? WHERE attempt_id=?`,
           )
           .run(
             settlement.amount,
@@ -275,6 +363,11 @@ export function openBillingLedger(options: BillingOptions) {
             settlement.outputTokens,
             settlement.cachedInputTokens,
             settlement.responseId ?? null,
+            settlement.serviceTier ?? null,
+            settlement.model ?? null,
+            settlement.cacheWriteInputTokens ?? null,
+            settlement.cacheWrite30mInputTokens ?? null,
+            settlement.cacheWrite12hInputTokens ?? null,
             new Date().toISOString(),
             attemptId,
           );
@@ -375,6 +468,7 @@ function readSettings(connection: DatabaseSync) {
 }
 function readStatus(connection: DatabaseSync) {
   const settings = readSettings(connection);
+  const policy = readLedgerUsagePolicy(connection);
   const totals = readTotals(connection);
   const hasAudit = connection
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='billing_limit_audit'")
@@ -386,6 +480,7 @@ function readStatus(connection: DatabaseSync) {
     : [];
   const latest = audit.at(-1);
   return {
+    ...policy,
     ...totals,
     usdLimitMicros: settings.usd_limit_micros,
     requestLimit: settings.request_limit,
@@ -394,7 +489,9 @@ function readStatus(connection: DatabaseSync) {
     developmentMaxUsdMicros: BILLING_DEVELOPMENT_MAX_USD_MICROS,
     finalReserveUsdMicros: 80_000_000,
     cnyPerUsdEstimate: BILLING_CNY_PER_USD,
-    remainingUsdMicros: Math.max(0, settings.usd_limit_micros - totals.committedUsdMicros),
+    remainingUsdMicros: policy.usageLimitsEnabled
+      ? Math.max(0, settings.usd_limit_micros - totals.committedUsdMicros)
+      : null,
     revision: latest?.revision ?? 0,
     activeStage: latest
       ? {
@@ -522,6 +619,117 @@ export function changeBillingLimits(input: BillingLimitChange) {
         "UPDATE billing_settings SET usd_limit_micros=?, request_limit=?, token_limit=? WHERE id=1",
       )
       .run(next.usdMicros, next.requestLimit, next.tokenLimit);
+    const after = readStatus(connection);
+    connection.exec("COMMIT");
+    return after;
+  } catch (error) {
+    if (connection.isTransaction) connection.exec("ROLLBACK");
+    throw error;
+  } finally {
+    connection.close();
+  }
+}
+
+export interface BillingUsagePolicyChange {
+  databasePath: string;
+  operationId: string;
+  expected: BillingLimitChange["expected"] & {
+    usagePolicyRevision: number;
+    usageLimitsEnabled: boolean;
+  };
+  usageLimitsEnabled: boolean;
+  reason: string;
+}
+
+/** Audits a policy switch without changing historical ceilings, baselines or attempts. */
+export function changeBillingUsagePolicy(input: BillingUsagePolicyChange) {
+  identifier(input.operationId, "operation ID");
+  if (
+    !input.expected ||
+    input.expected.usdLimit === undefined ||
+    input.expected.requestLimit === undefined ||
+    input.expected.tokenLimit === undefined
+  )
+    invalid("All administrative billing limits must be explicit.");
+  integer(input.expected.revision, "expected revision");
+  integer(input.expected.usagePolicyRevision, "expected usage policy revision");
+  const expectedLimits = validateLimits(input.expected);
+  if (
+    typeof input.expected.usageLimitsEnabled !== "boolean" ||
+    typeof input.usageLimitsEnabled !== "boolean"
+  )
+    invalid("Usage policy values must be explicit booleans.");
+  if (typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 1000)
+    invalid("Billing usage policy change requires a reason of at most 1000 characters.");
+  const expectedPolicy = {
+    usageLimitsEnabled: input.expected.usageLimitsEnabled,
+    usagePolicyRevision: input.expected.usagePolicyRevision,
+    billingRevision: input.expected.revision,
+    usdLimitMicros: expectedLimits.usdMicros,
+    requestLimit: expectedLimits.requestLimit,
+    tokenLimit: expectedLimits.tokenLimit,
+  };
+  const connection = existingLedger(input.databasePath, false);
+  try {
+    connection.exec("BEGIN IMMEDIATE");
+    const before = readStatus(connection);
+    if (
+      before.revision !== input.expected.revision ||
+      before.usdLimitMicros !== expectedLimits.usdMicros ||
+      before.requestLimit !== expectedLimits.requestLimit ||
+      before.tokenLimit !== expectedLimits.tokenLimit
+    )
+      throw new BillingError(
+        "Stale expected billing settings; inspect status again.",
+        "BILLING_STALE_SETTINGS",
+      );
+    const previous = before.usagePolicyAudit.find(
+      (entry) => entry.operation_id === input.operationId,
+    );
+    if (previous) {
+      if (
+        previous.previous_policy_json !== JSON.stringify(expectedPolicy) ||
+        previous.enabled !== Number(input.usageLimitsEnabled) ||
+        previous.reason !== input.reason.trim() ||
+        before.usagePolicyRevision !== previous.revision ||
+        before.usageLimitsEnabled !== input.usageLimitsEnabled
+      )
+        throw new BillingError(
+          "Usage policy operation conflicts or settings have drifted.",
+          "BILLING_STALE_SETTINGS",
+        );
+      connection.exec("COMMIT");
+      return before;
+    }
+    if (
+      before.usagePolicyRevision !== input.expected.usagePolicyRevision ||
+      before.usageLimitsEnabled !== input.expected.usageLimitsEnabled
+    )
+      throw new BillingError(
+        "Stale expected usage policy; inspect status again.",
+        "BILLING_STALE_SETTINGS",
+      );
+    if (before.usageLimitsEnabled === input.usageLimitsEnabled)
+      invalid("Usage policy change must change the current policy.");
+    connection.exec(
+      readFileSync(resolve(process.cwd(), "migrations/billing/004_usage_policy.sql"), "utf8"),
+    );
+    connection
+      .prepare(
+        `INSERT INTO billing_usage_policy_audit
+      (operation_id,changed_at,reason,previous_enabled,enabled,previous_policy_revision,billing_revision,previous_policy_json)
+      VALUES(?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        input.operationId,
+        new Date().toISOString(),
+        input.reason.trim(),
+        Number(before.usageLimitsEnabled),
+        Number(input.usageLimitsEnabled),
+        before.usagePolicyRevision,
+        before.revision,
+        JSON.stringify(expectedPolicy),
+      );
     const after = readStatus(connection);
     connection.exec("COMMIT");
     return after;

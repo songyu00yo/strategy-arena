@@ -1,101 +1,51 @@
 "use client";
+import { claimLabel, readableClaimText } from "@/components/claim-label";
 import { useLayoutEffect, useRef, type CSSProperties } from "react";
 import { X } from "lucide-react";
 import { attackMeta, decisionMeta, evidenceMeta } from "@/components/status";
-import { STAGE_LABELS, type ArenaVersion, type Attack } from "@/lib/contracts";
+import { type ArenaVersion, type Attack } from "@/lib/contracts";
 import { reducedMotion, ROUTE_COLOR } from "./effects";
 import { acquireMotionHold } from "./motion-runtime";
+import { readMotionOrigin } from "../motion-origin";
+import {
+  acquireOverlayScrollLock,
+  handoffOverlay,
+  deferOverlayHandoffCleanup,
+} from "../overlay-handoff";
+import { corners, project, inverse, multiply, cssMatrix, type Quad } from "../overlay-geometry";
 import "./step-card-motion.css";
-import { nameOf, type Beat } from "./beats";
+import {
+  beatName,
+  clarificationLines,
+  latestShownRevision,
+  nameOf,
+  stageName,
+  type Beat,
+} from "./beats";
+import { replayActionLines, stepContext, type StepContext } from "@/lib/step-context";
+import { projectReplay } from "@/lib/replay";
 
-type Point = { x: number; y: number };
-type Quad = [Point, Point, Point, Point];
-type Matrix = [number, number, number, number, number, number, number, number, number];
-type Flight = { parts: Animation[]; path: (t: number) => Quad; at: number; ms: number };
-const DRAW_MS = 620;
-const LAND_MS = 500;
+type Flight = {
+  parts: Animation[];
+  driver: Animation;
+  path: (t: number) => Quad;
+  ms: number;
+};
+const DRAW_MS = 360;
+const LAND_MS = 240;
 const HANDOFF = 0.7;
-const SAMPLES = 60;
+const SAMPLES = 40;
 
-/** Read the projected border corners, including every ancestor's perspective. */
-function corners(el: HTMLElement): Quad {
-  const points = [
-    [0, 0],
-    [el.offsetWidth, 0],
-    [el.offsetWidth, el.offsetHeight],
-    [0, el.offsetHeight],
-  ].map(([x, y]) => {
-    const marker = document.createElement("i");
-    marker.style.cssText = `position:absolute;left:${x - el.clientLeft}px;top:${y - el.clientTop}px;width:0;height:0;margin:0;padding:0;border:0;pointer-events:none;visibility:hidden`;
-    marker.setAttribute("aria-hidden", "true");
-    el.append(marker);
-    return marker;
-  });
-  const quad = points.map((marker) => {
-    const box = marker.getBoundingClientRect();
-    return { x: box.left, y: box.top };
-  }) as Quad;
-  points.forEach((marker) => marker.remove());
-  return quad;
-}
-
-/** A planar homography maps the whole card, not an estimated tilted bounding box. */
-function project(width: number, height: number, q: Quad): Matrix {
-  const [a, b, c, d] = q;
-  const dx1 = b.x - c.x;
-  const dx2 = d.x - c.x;
-  const dx3 = a.x - b.x + c.x - d.x;
-  const dy1 = b.y - c.y;
-  const dy2 = d.y - c.y;
-  const dy3 = a.y - b.y + c.y - d.y;
-  const det = dx1 * dy2 - dx2 * dy1;
-  const g = Math.abs(det) > 0.0001 ? (dx3 * dy2 - dx2 * dy3) / det : 0;
-  const h = Math.abs(det) > 0.0001 ? (dx1 * dy3 - dx3 * dy1) / det : 0;
-  return [
-    (b.x - a.x + g * b.x) / width,
-    (d.x - a.x + h * d.x) / height,
-    a.x,
-    (b.y - a.y + g * b.y) / width,
-    (d.y - a.y + h * d.y) / height,
-    a.y,
-    g / width,
-    h / height,
-    1,
-  ];
-}
-function inverse(m: Matrix): Matrix {
-  const [a, b, c, d, e, f, g, h, i] = m;
-  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-  return [
-    e * i - f * h,
-    c * h - b * i,
-    b * f - c * e,
-    f * g - d * i,
-    a * i - c * g,
-    c * d - a * f,
-    d * h - e * g,
-    b * g - a * h,
-    a * e - b * d,
-  ].map((n) => n / det) as Matrix;
-}
-function multiply(a: Matrix, b: Matrix): Matrix {
-  return Array.from({ length: 9 }, (_, i) => {
-    const row = Math.floor(i / 3) * 3;
-    const col = i % 3;
-    return a[row] * b[col] + a[row + 1] * b[col + 3] + a[row + 2] * b[col + 6];
-  }) as Matrix;
-}
-function cssMatrix(m: Matrix) {
-  return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
-}
 function progress(t: number) {
-  return (1 - (1 + 8 * t) * Math.exp(-8 * t)) / (1 - 9 * Math.exp(-8));
+  const value = Math.max(0, Math.min(1, t));
+  return value ** 3 * (value * (value * 6 - 15) + 10);
 }
+
 function pathBetween(from: Quad, to: Quad, ms: number, velocity?: Quad) {
   return (t: number): Quad => {
     const settled = progress(t);
     const momentum = t * (1 - t) ** 3 * ms;
-    const lift = -52 * Math.sin(Math.PI * t) ** 2;
+    const lift = -70 * Math.sin(Math.PI * Math.min(1, settled)) ** 2;
     return from.map((point, i) => ({
       x: point.x + (to[i].x - point.x) * settled + (velocity?.[i].x ?? 0) * momentum,
       y: point.y + (to[i].y - point.y) * settled + (velocity?.[i].y ?? 0) * momentum + lift,
@@ -110,56 +60,39 @@ function stopFlight(flight: Flight | null) {
 }
 function velocityOf(flight: Flight | null): Quad | undefined {
   if (!flight) return;
-  const elapsed = Math.min(flight.ms, performance.now() - flight.at);
-  if (elapsed >= flight.ms) return;
+  const elapsed = flight.driver.currentTime;
+  if (typeof elapsed !== "number" || elapsed <= 0 || elapsed >= flight.ms) return;
+  const dt = Math.min(elapsed, 8);
   const now = flight.path(elapsed / flight.ms);
-  const before = flight.path(Math.max(0, elapsed - 8) / flight.ms);
-  const dt = Math.max(1, Math.min(elapsed, 8));
+  const before = flight.path((elapsed - dt) / flight.ms);
   return now.map((p, i) => ({ x: (p.x - before[i].x) / dt, y: (p.y - before[i].y) / dt })) as Quad;
 }
 
-/** Freeze the source's typography so the detail-dialog selectors cannot restyle its copy. */
+/** Preserve the source card's own styling without a computed-style walk through its text. */
 function copyCard(source: HTMLElement) {
   const clone = source.cloneNode(true) as HTMLElement;
-  const originals = [source, ...source.querySelectorAll<HTMLElement>("*")];
-  const copies = [clone, ...clone.querySelectorAll<HTMLElement>("*")];
-  const properties = [
-    "display",
-    "position",
-    "flex-direction",
-    "flex",
-    "align-items",
-    "justify-content",
-    "gap",
-    "padding",
-    "margin",
-    "border",
-    "border-top",
-    "border-radius",
-    "box-sizing",
-    "background",
+  const style = getComputedStyle(source);
+  for (const property of [
     "font-family",
     "font-size",
     "font-weight",
-    "font-style",
     "line-height",
-    "letter-spacing",
-    "text-transform",
-    "text-align",
     "color",
-    "white-space",
-    "overflow",
-    "text-overflow",
-  ];
-  originals.forEach((node, i) => {
-    const style = getComputedStyle(node);
-    properties.forEach((property) =>
-      copies[i].style.setProperty(property, style.getPropertyValue(property)),
-    );
-    copies[i].removeAttribute("id");
-    copies[i].removeAttribute("role");
-    copies[i].removeAttribute("tabindex");
-    copies[i].removeAttribute("data-step-source");
+    "background",
+    "border",
+    "border-top",
+    "box-shadow",
+  ]) {
+    clone.style.setProperty(property, style.getPropertyValue(property));
+  }
+  [
+    clone,
+    ...clone.querySelectorAll<HTMLElement>("[id], [role], [tabindex], [data-step-source]"),
+  ].forEach((node) => {
+    node.removeAttribute("id");
+    node.removeAttribute("role");
+    node.removeAttribute("tabindex");
+    node.removeAttribute("data-step-source");
   });
   clone.classList.remove("pulled", "past-gap");
   clone.setAttribute("aria-hidden", "true");
@@ -185,14 +118,73 @@ function markDeck(pulled: number | null, gap = pulled !== null, ms = 240) {
 type Row = { label: string; text: string; tone?: string };
 
 /** Everything recorded about one step, in the order a reader would question it. */
-function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
-  const clean = (rows: Row[]) => rows.filter((row) => row.text);
+function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[], replayProgress = 1): Row[] {
+  const clean = (rows: Row[]) =>
+    rows
+      .filter((row) => row.text)
+      .map((row) => ({ ...row, text: readableClaimText(version, row.text) }));
+  if (beat.replayAction) {
+    const action = beat.replayAction;
+    const projection = projectReplay(
+      version,
+      known,
+      known.findIndex((step) => step.id === beat.id),
+      [],
+      replayProgress,
+    );
+    return [
+      {
+        label: "保存的操作",
+        text: replayActionLines(action, projection.answers, replayProgress >= 0.8).join("\n"),
+      },
+      {
+        label: "操作依据",
+        text: `第 ${action.round} 轮，依据修订 ${action.revision}${action.createdAt ? `，记录时间 ${action.createdAt}` : ""}`,
+      },
+      {
+        label: "来源记录",
+        text: action.source
+          ? `${action.source.reference}${action.source.sha256 ? `\nSHA-256 ${action.source.sha256}` : ""}`
+          : "本操作没有独立请求来源，按保存状态展示。",
+      },
+      { label: "关联调用", text: action.sourceRunId ?? "未关联模型调用" },
+    ];
+  }
+  if (beat.clarificationRun) {
+    const run = beat.clarificationRun;
+    return [
+      { label: "本次审查", text: run.summary },
+      {
+        label: "完整输出",
+        text: clarificationLines(run, beat.clarificationAnswers).join("\n") || "本次没有新增事项。",
+      },
+      { label: "结构化记录", text: JSON.stringify(run.output, null, 2) },
+      {
+        label: "调用依据",
+        text: `第 ${run.round} 轮，依据修订 ${run.basedOnRevision}，调用 ${run.operationId}，记录 ${run.id}`,
+      },
+      { label: "实际调用记录", text: run.callIds?.join("\n") || "本条角色记录未提供请求编号。" },
+      {
+        label: "调用状态",
+        text: { completed: "已完成", failed: "失败", uncertain: "结果与费用待核对" }[run.status],
+      },
+      {
+        label: "实际用量",
+        text: run.usage
+          .map(
+            (usage) =>
+              `${usage.model}，输入 ${usage.inputTokens} Token，输出 ${usage.outputTokens} Token，${usage.estimatedUsd !== undefined ? `估算 USD ${usage.estimatedUsd}` : `估算人民币 ${usage.estimatedCny} 元`}`,
+          )
+          .join("\n"),
+      },
+    ];
+  }
   if (beat.attack) {
     const a = beat.attack;
     const checked = known.some((b) => b.id === `v:${a.id}`);
-    const reply = known
-      .find((b) => b.id === `r:${a.targetStrategyId}`)
-      ?.revision?.responses.find((r) => r.attackId === a.id);
+    const reply = latestShownRevision(known, a.targetStrategyId)?.revision?.responses.find(
+      (r) => r.attackId === a.id,
+    );
     const evidence = version.evidence
       .filter((e) => e.attackId === a.id)
       .map((e) =>
@@ -231,7 +223,10 @@ function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
     return clean([
       { label: "核心思路", text: s.thesis },
       { label: "预计投入", text: `${s.estimatedHours ?? "?"} 小时，¥${s.estimatedCost ?? "?"}` },
-      { label: "关键判断", text: s.claims.map((c) => `${c.id}：${c.text}`).join("\n") },
+      {
+        label: "关键判断",
+        text: s.claims.map((c) => `${claimLabel(version, s.id, c.id)} · ${c.text}`).join("\n"),
+      },
       { label: "步骤", text: s.steps.map((step, i) => `${i + 1}. ${step}`).join("\n") },
       { label: "第一步", text: s.firstAction },
       { label: "什么情况下放弃", text: s.failureCondition },
@@ -252,7 +247,9 @@ function rowsOf(version: ArenaVersion, beat: Beat, known: Beat[]): Row[] {
       },
       {
         label: "修订后的判断",
-        text: r.strategy.claims.map((c) => `${c.id}：${c.text}`).join("\n"),
+        text: r.strategy.claims
+          .map((c) => `${claimLabel(version, r.strategyId, c.id)} · ${c.text}`)
+          .join("\n"),
       },
     ]);
   }
@@ -284,6 +281,9 @@ export function StepCard({
   onStage,
   onEvidence,
   onClose,
+  onFollowUp,
+  onAdjustConditions,
+  replayProgress = 1,
 }: {
   version: ArenaVersion;
   beats: Beat[];
@@ -295,19 +295,89 @@ export function StepCard({
   onStage: (index: number) => void;
   onEvidence: (attack: Attack) => void;
   onClose: () => void;
+  onFollowUp?: (context: StepContext, trigger: HTMLElement | null) => void;
+  onAdjustConditions?: (trigger: HTMLElement | null) => void;
+  replayProgress?: number;
 }) {
   const beat = beats[index];
   const known = reviewing ? beats : beats.slice(0, last + 1);
   const ref = useRef<HTMLDialogElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  const pageSnapshot = useRef<HTMLElement | null>(null);
+  const previousPage = useRef(index);
+  const pageScroll = useRef(0);
+  const pageLayers = useRef<HTMLElement[]>([]);
+  const pageAnimations = useRef<Animation[]>([]);
+  const pageGeneration = useRef(0);
+  const pendingHeight = useRef<number | null>(null);
   const showing = useRef(index);
   const leaving = useRef(false);
   const first = useRef(true);
   const flight = useRef<Flight | null>(null);
   const proxy = useRef<HTMLElement | null>(null);
-  const paging = useRef<Animation | null>(null);
   const closingAction = useRef<(() => void) | null>(null);
   const gapOrigins = useRef<{ card: HTMLElement; x: number; y: number }[]>([]);
+
+  const measurePage = () => {
+    const page = body.current;
+    const window = viewport.current;
+    const dialog = ref.current;
+    if (!page || !window || !dialog) return 0;
+    // Measure only the live page. Retiring pages are absolute and never change the dialog's size.
+    const height = page.style.height;
+    page.style.height = "auto";
+    const natural = page.scrollHeight;
+    const chrome = dialog.offsetHeight - window.offsetHeight;
+    const limit = Number.parseFloat(getComputedStyle(dialog).maxHeight);
+    page.style.height = height;
+    return Math.max(
+      0,
+      Math.min(natural, (Number.isFinite(limit) ? limit : innerHeight * 0.86) - chrome),
+    );
+  };
+
+  const resizePage = (height: number, animate = true) => {
+    const window = viewport.current;
+    if (!window) return;
+    const from = window.getBoundingClientRect().height;
+    window.style.height = `${height}px`;
+    if (!animate || reducedMotion() || Math.abs(from - height) < 0.5) return;
+    const animation = window.animate([{ height: `${from}px` }, { height: `${height}px` }], {
+      duration: 240,
+      easing: "cubic-bezier(.22,1,.3,1)",
+      fill: "both",
+    });
+    pageAnimations.current.push(animation);
+    animation.onfinish = () => animation.cancel();
+  };
+
+  const stopPaging = (preserve: boolean) => {
+    const window = viewport.current;
+    const nodes = new Set<HTMLElement>();
+    pageAnimations.current.forEach((animation) => {
+      const target = (animation.effect as KeyframeEffect | null)?.target;
+      if (target instanceof HTMLElement) nodes.add(target);
+    });
+    const poses = [...nodes].map((node) => {
+      const style = getComputedStyle(node);
+      return { node, transform: style.transform, opacity: style.opacity, height: style.height };
+    });
+    pageAnimations.current.forEach((animation) => animation.cancel());
+    pageAnimations.current = [];
+    poses.forEach(({ node, transform, opacity, height }) => {
+      if (node === window) node.style.height = height;
+      else {
+        node.style.transform = preserve ? transform : "";
+        node.style.opacity = preserve ? opacity : "";
+      }
+    });
+    window?.classList.remove("is-paging");
+    if (!preserve) {
+      pageLayers.current.forEach((layer) => layer.remove());
+      pageLayers.current = [];
+    }
+  };
 
   const clearFlight = () => {
     stopFlight(flight.current);
@@ -315,6 +385,11 @@ export function StepCard({
     proxy.current?.remove();
     proxy.current = null;
     ref.current?.querySelector(".c-pull-face")?.remove();
+    if (!leaving.current && pendingHeight.current !== null) {
+      const height = pendingHeight.current;
+      pendingHeight.current = null;
+      resizePage(height);
+    }
   };
 
   const fly = (opening: boolean, done: () => void, continuing = false) => {
@@ -458,21 +533,21 @@ export function StepCard({
         ),
       );
     }
-    // Starting every part at this common time prevents one-frame lag between the two card copies.
-    const start = document.timeline.currentTime;
-    if (typeof start === "number")
-      parts.forEach((part) => {
-        part.startTime = start;
-      });
-    flight.current = { parts, path, at: performance.now(), ms };
+    // These pending plays share this task's next ready refresh. Backdating them to
+    // an earlier document tick can advance the flight before its first visible paint.
+    flight.current = { parts, driver, path, ms };
     driver.onfinish = done;
   };
 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const previous = document.activeElement as HTMLElement | null;
+    const origin = readMotionOrigin();
+    const previous = origin?.element.isConnected
+      ? origin.element
+      : (document.activeElement as HTMLElement | null);
     const release = acquireMotionHold();
+    const releaseScroll = acquireOverlayScrollLock();
     // A user can draw a card while a seek is still rearranging the deck. Freeze that exact pose.
     const deckTransitions = [...document.querySelectorAll<HTMLElement>("[data-step-source]")]
       .flatMap((card) => card.getAnimations())
@@ -484,10 +559,15 @@ export function StepCard({
       );
     deckTransitions.forEach((animation) => animation.pause());
     el.showModal();
+    resizePage(measurePage(), false);
     markDeck(index, true, DRAW_MS);
     if (!reducedMotion()) fly(true, clearFlight);
     const onResize = () => {
-      if (!flight.current) return;
+      if (!flight.current) {
+        stopPaging(false);
+        resizePage(measurePage(), false);
+        return;
+      }
       // A changed viewport invalidates the flight. Preserve its current visible pose before fading.
       const closing = closingAction.current;
       if (!closing) {
@@ -522,26 +602,48 @@ export function StepCard({
       });
       flight.current = {
         parts: [fade, backdrop],
+        driver: fade,
         path: () => corners(el),
-        at: performance.now(),
         ms: 160,
       };
       fade.onfinish = closing;
     };
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const settlePreference = () => {
+      if (!media.matches) return;
+      stopPaging(false);
+      pendingHeight.current = null;
+      clearFlight();
+      resizePage(measurePage(), false);
+      el.style.transform = "";
+      el.style.opacity = "";
+      if (closingAction.current) closingAction.current();
+    };
+    media.addEventListener("change", settlePreference);
     addEventListener("resize", onResize);
     return () => {
       removeEventListener("resize", onResize);
-      paging.current?.cancel();
+      media.removeEventListener("change", settlePreference);
+      stopPaging(false);
+      pendingHeight.current = null;
       clearFlight();
-      markDeck(null, false, 0);
-      document
-        .querySelectorAll<HTMLElement>("[data-step-source]")
-        .forEach((card) => card.style.removeProperty("--deck-gap-ms"));
+      const stage = el.closest(".c-root");
+      const settleDeck = () => {
+        if (stage?.isConnected) {
+          markDeck(null, false, 140);
+          stage
+            .querySelectorAll<HTMLElement>("[data-step-source]")
+            .forEach((card) => card.style.removeProperty("--deck-gap-ms"));
+        }
+        deckTransitions.forEach((animation) => {
+          if (!stage?.isConnected) animation.cancel();
+          else if (animation.playState === "paused") animation.play();
+        });
+      };
+      if (!deferOverlayHandoffCleanup(el, settleDeck)) settleDeck();
       el.close();
+      releaseScroll();
       release();
-      deckTransitions.forEach((animation) => {
-        if (animation.playState === "paused") animation.play();
-      });
       queueMicrotask(() => {
         // Evidence may take over in the same commit. Its focus must win that handoff.
         if (previous?.isConnected && !document.querySelector("dialog[open], .evidence-drawer")) {
@@ -558,11 +660,21 @@ export function StepCard({
     if (!leaving.current) markDeck(index);
   });
 
+  const replace = (then: () => void) => {
+    if (leaving.current) return;
+    leaving.current = true;
+    pendingHeight.current = null;
+    stopPaging(true);
+    handoffOverlay(ref.current, then);
+  };
+
   const leave = (then: () => void) => {
     if (leaving.current) return;
     leaving.current = true;
     closingAction.current = then;
-    paging.current?.cancel();
+    // Retain the exact in-flight page composition until the geometric return covers it.
+    pendingHeight.current = null;
+    stopPaging(true);
     gapOrigins.current = [
       ...document.querySelectorAll<HTMLElement>("[data-step-source].past-gap"),
     ].map((card) => {
@@ -575,27 +687,127 @@ export function StepCard({
   };
 
   useLayoutEffect(() => {
+    const page = body.current;
+    const window = viewport.current;
+    if (!page || !window) return;
+    const snapshot = () => {
+      const clone = page.cloneNode(true) as HTMLElement;
+      clone.style.transform = "";
+      clone.style.opacity = "";
+      clone.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node) => {
+        node.style.transform = "";
+        node.style.opacity = "";
+      });
+      pageSnapshot.current = clone;
+    };
     if (first.current) {
       first.current = false;
+      snapshot();
       return;
     }
-    paging.current?.cancel();
-    if (reducedMotion() || leaving.current) return;
-    // If a page changes mid-draw, continue from the current pose instead of snapping fully open.
-    if (flight.current) fly(true, clearFlight, true);
-    paging.current =
-      body.current?.animate(
+    if (leaving.current) return;
+    const generation = ++pageGeneration.current;
+    const direction = index > previousPage.current ? 1 : -1;
+    previousPage.current = index;
+    const pose = getComputedStyle(page);
+    const from = { transform: pose.transform, opacity: pose.opacity };
+    const oldHeight = window.getBoundingClientRect().height;
+    const oldScroll = pageScroll.current;
+    stopPaging(true);
+    page.style.transform = "";
+    page.style.opacity = "";
+    page.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node) => {
+      node.style.transform = "";
+      node.style.opacity = "";
+    });
+    if (reducedMotion()) {
+      stopPaging(false);
+      page.scrollTop = 0;
+      pageScroll.current = 0;
+      resizePage(measurePage(), false);
+      snapshot();
+      return;
+    }
+    const outgoing = pageSnapshot.current;
+    if (outgoing) {
+      outgoing.classList.add("c-step-leaving");
+      outgoing.setAttribute("aria-hidden", "true");
+      outgoing.inert = true;
+      outgoing.style.height = `${oldHeight}px`;
+      outgoing.style.transform = from.transform;
+      outgoing.style.opacity = from.opacity;
+      window.append(outgoing);
+      outgoing.scrollTop = oldScroll;
+      pageLayers.current.push(outgoing);
+    }
+    // Preserve the visible layers when a second click arrives; old text is never replaced in place.
+    while (pageLayers.current.length > 2) pageLayers.current.shift()?.remove();
+    window.classList.add("is-paging");
+    const add = (node: HTMLElement, frames: Keyframe[], options: KeyframeAnimationOptions) => {
+      const animation = node.animate(frames, { fill: "both", ...options });
+      pageAnimations.current.push(animation);
+      return animation;
+    };
+    pageLayers.current.forEach((layer) => {
+      const style = getComputedStyle(layer);
+      const exit = add(
+        layer,
         [
-          { transform: "translateX(12px)", opacity: 0 },
+          { transform: style.transform, opacity: style.opacity },
+          {
+            transform: `translateX(${-direction * 54}px) rotateY(${direction * 3}deg)`,
+            opacity: 0,
+          },
+        ],
+        { duration: 180, easing: "cubic-bezier(.4,0,.2,1)" },
+      );
+      exit.onfinish = () => {
+        layer.remove();
+        pageLayers.current = pageLayers.current.filter((item) => item !== layer);
+        exit.cancel();
+      };
+    });
+    page.scrollTop = 0;
+    pageScroll.current = 0;
+    const targetHeight = measurePage();
+    // The draw keeps its physical card dimensions until it lands. Paging can run inside it meanwhile.
+    if (flight.current) pendingHeight.current = targetHeight;
+    else resizePage(targetHeight);
+    snapshot();
+    const enter = add(
+      page,
+      [
+        { transform: `translateX(${direction * 48}px) rotateY(${-direction * 4}deg)`, opacity: 0 },
+        {
+          transform: `translateX(${-direction * 4}px) rotateY(${direction * 0.25}deg)`,
+          opacity: 1,
+          offset: 0.72,
+        },
+        { transform: "none", opacity: 1 },
+      ],
+      { duration: 260, easing: "cubic-bezier(.16,1,.3,1)" },
+    );
+    page.querySelectorAll<HTMLElement>("h3, dl > div").forEach((node, row) => {
+      const reveal = add(
+        node,
+        [
+          { transform: `translate(${direction * 10}px,8px)`, opacity: 0 },
           { transform: "none", opacity: 1 },
         ],
-        { duration: 240, easing: "cubic-bezier(.2,.8,.3,1)" },
-      ) ?? null;
-    return () => paging.current?.cancel();
-    // Flight inputs are read from refs; only a selected-record change starts paging.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        { duration: 180, delay: 20 + Math.min(row, 4) * 15, easing: "cubic-bezier(.16,1,.3,1)" },
+      );
+      reveal.onfinish = () => reveal.cancel();
+    });
+    enter.onfinish = () => {
+      enter.cancel();
+      if (pageGeneration.current === generation) window.classList.remove("is-paging");
+    };
+    // On the next commit we sample these animations before cancelling, including rapid reversals.
   }, [index]);
 
+  const context = onFollowUp
+    ? stepContext(version, beat.id, beat.replayAction ? [beat.replayAction] : undefined)
+    : null;
   const verified = beat.attack && known.some((b) => b.id === `v:${beat.attack!.id}`);
   return (
     <dialog
@@ -618,10 +830,10 @@ export function StepCard({
       <div className="c-pull-bg" />
       <div className="tb">
         <b id="c-pull-title">
-          第 {index + 1} 步 · {STAGE_LABELS[beat.stage]}
+          第 {index + 1} 步 · {stageName(version, beat.stage)}
         </b>
         <span>
-          {nameOf(beat.agent)}
+          {beatName(beat)}
           {beat.to ? ` → ${nameOf(beat.to)}` : ""}
           {verified ? ` · ${attackMeta[beat.attack!.status].label}` : ""}
         </span>
@@ -629,18 +841,26 @@ export function StepCard({
           <X size={17} />
         </button>
       </div>
-      <div className="c-step" ref={body}>
-        <h3>{beat.title}</h3>
-        <dl>
-          {rowsOf(version, beat, known).map((row) => (
-            <div key={row.label} className={row.tone}>
-              <dt>{row.label}</dt>
-              <dd>{row.text}</dd>
-            </div>
-          ))}
-        </dl>
+      <div className="c-step-window" ref={viewport}>
+        <div
+          className="c-step"
+          ref={body}
+          onScroll={() => {
+            pageScroll.current = body.current?.scrollTop ?? 0;
+          }}
+        >
+          <h3>{beat.title}</h3>
+          <dl>
+            {rowsOf(version, beat, known, replayProgress).map((row) => (
+              <div key={row.label} className={row.tone}>
+                <dt>{row.label}</dt>
+                <dd>{row.text}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       </div>
-      <div className="actions">
+      <div className="actions" style={{ flexWrap: "wrap" }}>
         <button
           type="button"
           className="secondary-button"
@@ -662,6 +882,24 @@ export function StepCard({
           下一步
         </button>
         <span />
+        {context && onFollowUp && (
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => replace(() => onFollowUp(context, sourceOf(index)))}
+          >
+            补充或质疑
+          </button>
+        )}
+        {onAdjustConditions && (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => replace(() => onAdjustConditions(sourceOf(index)))}
+          >
+            调整条件
+          </button>
+        )}
         <button type="button" className="text-button" onClick={() => leave(() => onStage(index))}>
           在舞台上看这一步
         </button>
@@ -669,7 +907,7 @@ export function StepCard({
           <button
             type="button"
             className="primary-button"
-            onClick={() => leave(() => onEvidence(beat.attack!))}
+            onClick={() => replace(() => onEvidence(beat.attack!))}
           >
             看证据
           </button>

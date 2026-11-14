@@ -1,4 +1,5 @@
 "use client";
+import { claimLabel, readableClaimText } from "./claim-label";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { reducedMotion } from "@/components/console/effects";
 import { useOverlayMotion } from "./overlay-motion";
@@ -15,7 +16,7 @@ import {
 import type { ArenaVersion, Attack, Evidence } from "@/lib/contracts";
 import { attackMeta, decisionMeta, evidenceMeta, StatusTag } from "@/components/status";
 
-function EvidenceItem({ item }: { item: Evidence }) {
+function EvidenceItem({ item, version }: { item: Evidence; version: ArenaVersion }) {
   const external = /^https?:\/\//.test(item.source);
   return (
     <article className={`evidence-item evidence-${item.status}`}>
@@ -37,7 +38,7 @@ function EvidenceItem({ item }: { item: Evidence }) {
           {item.assumptions}
         </p>
       )}
-      <p className="evidence-content">{item.content || "此项未返回可用内容。"}</p>
+      <p className="evidence-content">{item.content || "这项核验没有返回可用内容。"}</p>
       <div className="evidence-source">
         <span>来源</span>
         {external ? (
@@ -50,7 +51,17 @@ function EvidenceItem({ item }: { item: Evidence }) {
         )}
       </div>
       {item.sourceIds.length > 0 && (
-        <p className="source-ids">材料定位：{item.sourceIds.join("、")}</p>
+        <p className="source-ids">
+          材料定位：
+          {item.sourceIds
+            .map((id) => {
+              const source = version.intake?.usedSources.find((entry) => entry.id === id);
+              return source
+                ? `${source.filename} · ${source.location}`
+                : "材料片段（来源位置待核对）";
+            })
+            .join("、")}
+        </p>
       )}
     </article>
   );
@@ -60,13 +71,19 @@ export function EvidenceDrawer({
   version,
   onClose,
   onLocate,
+  trigger,
 }: {
   attack: Attack;
   version: ArenaVersion;
   onClose: () => void;
   onLocate: (attack: Attack) => void;
+  trigger?: HTMLElement | null;
 }) {
-  const { panel: dialogRef, backdrop, close } = useOverlayMotion<HTMLElement>("drawer", onClose);
+  const {
+    panel: dialogRef,
+    backdrop,
+    close,
+  } = useOverlayMotion<HTMLElement>("drawer", onClose, undefined, trigger);
   const contentRef = useRef<HTMLDivElement>(null);
   const previousAttack = useRef(attack.id);
   // A different citation changes the content in place; snapshot refreshes do not re-enter it.
@@ -112,7 +129,7 @@ export function EvidenceDrawer({
     return () => document.removeEventListener("keydown", handle);
   }, [close, dialogRef]);
   const evidence = version.evidence.filter((e) => e.attackId === attack.id);
-  const revision = version.revisions.find((r) => r.strategyId === attack.targetStrategyId);
+  const revision = version.revisions.findLast((r) => r.strategyId === attack.targetStrategyId);
   const response = revision?.responses.find((r) => r.attackId === attack.id);
   const borrowed = version.revisions
     .filter((r) => r.strategyId !== attack.targetStrategyId)
@@ -124,7 +141,9 @@ export function EvidenceDrawer({
   const finding = version.verdict?.attackFindings.find((f) => f.attackId === attack.id);
   // Show what a citation points at, never a bare internal evidence ID.
   const citations = (ids: string[]) =>
-    ids.map((id) => version.evidence.find((e) => e.id === id)?.title ?? id).join("、");
+    ids
+      .map((id) => version.evidence.find((e) => e.id === id)?.title ?? "证据记录（待定位）")
+      .join("、");
   return (
     <div className="drawer-backdrop overlay-motion" ref={backdrop} onClick={() => close()}>
       <aside
@@ -166,16 +185,16 @@ export function EvidenceDrawer({
         </div>
         <div className="drawer-scroll" ref={contentRef}>
           <section className="evidence-section">
-            <span className="evidence-step">01 / 被挑战的原话</span>
+            <span className="evidence-step">01 / 被质疑的原话</span>
             <blockquote>{attack.claimQuote}</blockquote>
             <span className="evidence-route">
-              路线 {attack.targetStrategyId} · 判断 {attack.targetClaimId}
+              {claimLabel(version, attack.targetStrategyId, attack.targetClaimId)}
             </span>
           </section>
           <section className="evidence-section">
             <span className="evidence-step red">02 / {attack.from} 提出的质疑</span>
-            <h3>{attack.reason}</h3>
-            <p>{attack.impact}</p>
+            <h3>{readableClaimText(version, attack.reason)}</h3>
+            <p>{readableClaimText(version, attack.impact)}</p>
             <div className="verify-plan">
               <FileSearch size={15} />
               <span>
@@ -187,12 +206,12 @@ export function EvidenceDrawer({
           <section className="evidence-section">
             <span className="evidence-step">03 / 工具返回的证据</span>
             {evidence.length ? (
-              evidence.map((e) => <EvidenceItem key={e.id} item={e} />)
+              evidence.map((e) => <EvidenceItem key={e.id} item={e} version={version} />)
             ) : (
               <div className="evidence-empty">
                 <FileSearch size={24} />
                 <p>尚未获得核验结果</p>
-                <span>这里会展示材料原文、计算过程与来源。没有依据时会明确保留未知。</span>
+                <span>这里会列出材料原文、计算过程和来源。缺少依据的部分会保留为未知。</span>
               </div>
             )}
           </section>
@@ -201,11 +220,11 @@ export function EvidenceDrawer({
             {response ? (
               <div className="revision-response">
                 <StatusTag meta={decisionMeta[response.decision]} />
-                <p>{response.reason}</p>
+                <p>{readableClaimText(version, response.reason)}</p>
                 {response.change && (
                   <div className="response-change">
                     <CornerDownRight size={15} />
-                    <span>{response.change}</span>
+                    <span>{readableClaimText(version, response.change)}</span>
                   </div>
                 )}
                 {response.evidenceIds.length > 0 && (
@@ -213,14 +232,14 @@ export function EvidenceDrawer({
                 )}
               </div>
             ) : (
-              <p className="muted">等待策略修订阶段回应。</p>
+              <p className="muted">等待这条路线在修订时回应。</p>
             )}
           </section>
           {borrowed.length > 0 && (
             <section className="evidence-section">
-              <span className="evidence-step">其他路线借鉴</span>
+              <span className="evidence-step">其他路线如何借鉴</span>
               <p className="borrow-note">
-                以下路线将这条质疑用于检查自身，不代表被质疑路线接受了质疑。
+                以下路线也用这条质疑检查了自己的方案，这不代表原先被质疑的路线接受了质疑。
               </p>
               {borrowed.map(({ revision: other, response: otherResponse }) => (
                 <div className="borrowed-revision" key={other.strategyId}>
@@ -230,21 +249,21 @@ export function EvidenceDrawer({
                   <span className="response-decision">
                     {
                       {
-                        accept: "采纳为自身修订依据",
-                        reject: "未采纳至本路线",
-                        unresolved: "本路线仍需确认",
+                        accept: "采纳，作为本路线的修订依据",
+                        reject: "本路线未采纳",
+                        unresolved: "本路线仍需确认这项质疑",
                       }[otherResponse.decision]
                     }
                   </span>
-                  <p>{otherResponse.reason}</p>
+                  <p>{readableClaimText(version, otherResponse.reason)}</p>
                   {otherResponse.change && (
                     <div className="response-change">
                       <CornerDownRight size={15} />
-                      <span>{otherResponse.change}</span>
+                      <span>{readableClaimText(version, otherResponse.change)}</span>
                     </div>
                   )}
                   <div className="borrowed-action">
-                    <strong>该路线现在的第一步</strong>
+                    <strong>这条路线现在的第一步</strong>
                     <p>{other.strategy.firstAction}</p>
                   </div>
                 </div>
@@ -259,11 +278,11 @@ export function EvidenceDrawer({
                   {
                     supported: "这项质疑成立",
                     refuted: "这项质疑被反驳",
-                    unresolved: "证据不足，仍未决",
+                    unresolved: "证据不足，尚无定论",
                   }[finding.status]
                 }
               </span>
-              <h3>{finding.reason}</h3>
+              <h3>{readableClaimText(version, finding.reason)}</h3>
               {finding.evidenceIds.length > 0 && (
                 <small>裁决引用证据：{citations(finding.evidenceIds)}</small>
               )}
@@ -277,7 +296,7 @@ export function EvidenceDrawer({
           )}
           {revision && (
             <section className="evidence-section next-action-section">
-              <span className="evidence-step">05 / 转化成行动</span>
+              <span className="evidence-step">05 / 接下来怎么做</span>
               <h3>{revision.strategy.firstAction}</h3>
               <p>
                 <strong>留意失效条件：</strong>

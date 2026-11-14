@@ -27,6 +27,15 @@ export default defineConfig({
         channel: process.env.PLAYWRIGHT_CHANNEL === "chrome" ? "chrome" : undefined,
       },
     },
+    ...(process.env.E2E_WEBKIT === "1"
+      ? [
+          {
+            name: "webkit",
+            testMatch: /(?:replay-interaction|paper-theater|paper-entry-seal)\.spec\.ts/,
+            use: { ...devices["Desktop Safari"] },
+          },
+        ]
+      : []),
   ],
   webServer: {
     command: "node scripts/start-e2e-server.mjs",
@@ -37,6 +46,9 @@ export default defineConfig({
       MODEL_API_KEY: "",
       DEEPSEEK_API_KEY: "",
       OPENAI_API_KEY: "",
+      TAVILY_API_KEY: "",
+      ARENA_ACCEPTANCE_BATCH_ID: "",
+      ARENA_TOOL_BATCH_ID: "",
       ARENA_BILLING_DATABASE_PATH: "",
       ARENA_ACCESS_CODE: "e2e-only-access-code",
       ARENA_PUBLIC_DEMO: "false",

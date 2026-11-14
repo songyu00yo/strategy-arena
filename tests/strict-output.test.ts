@@ -1,11 +1,13 @@
 /** HTTP doubles only: these tests do not call DeepSeek or establish model quality. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { AgentPlanSchema } from "../src/lib/agent-contracts";
 import {
   AttackSchema,
   ChallengeSchema,
   RevisionSchema,
   StrategySchema,
+  ToolRequestSchema,
   VerdictSchema,
   type StageInput,
 } from "../src/lib/contracts";
@@ -49,6 +51,10 @@ const strategy = {
   failureCondition: "时间不足",
   estimatedCost: "unknown",
   estimatedHours: 8,
+  costPlan: {
+    complete: false,
+    items: [{ id: "c1", label: "费用范围待确认", amount: null, basis: "unknown", quote: "" }],
+  },
 };
 function response(args = JSON.stringify(strategy), name = "submit_propose") {
   return {
@@ -339,7 +345,7 @@ describe("strict provider schema", () => {
       "strict-output-fixture",
     );
   });
-  it.each([StrategySchema, AttackSchema, RevisionSchema, VerdictSchema])(
+  it.each([StrategySchema, AttackSchema, RevisionSchema, VerdictSchema, AgentPlanSchema])(
     "closes every object, requires defaults and removes unsupported keywords",
     (schema) => {
       const converted = toStrictToolSchema(z.toJSONSchema(schema));
@@ -371,6 +377,20 @@ describe("strict provider schema", () => {
       expect(JSON.stringify(converted)).toContain("pattern");
     },
   );
+  it("omits unsupported URI format from planner and attack tools while retaining URL validation", () => {
+    for (const schema of [AgentPlanSchema, AttackSchema]) {
+      const converted = toStrictToolSchema(z.toJSONSchema(schema));
+      expect(JSON.stringify(converted)).not.toContain('"format":"uri"');
+      expect(JSON.stringify(converted)).toContain('"url":{"type":"string","pattern":');
+    }
+    expect(ToolRequestSchema.safeParse({ tool: "read_web", url: "invalid-url" }).success).toBe(
+      false,
+    );
+    expect(
+      ToolRequestSchema.safeParse({ tool: "read_web", url: "https://nodejs.org/api/sqlite.html" })
+        .success,
+    ).toBe(true);
+  });
   it("converts discriminant constants and restores only known nullable fields recursively", () => {
     expect(
       toStrictToolSchema({
@@ -424,7 +444,7 @@ describe("explicit strict-tool adapter", () => {
       ],
       tool_choice: { type: "function", function: { name: "submit_propose" } },
       thinking: { type: "disabled" },
-      stream: false,
+      stream: true,
     });
     expect(body).not.toHaveProperty("response_format");
     expect(body.messages[0].content).toContain('"unknown"');
@@ -441,7 +461,9 @@ describe("explicit strict-tool adapter", () => {
       nextActions: ["补充材料"],
       exitCondition: "证据不足不执行",
       evidenceIds: [],
-      comparisons: [{ strategyId: "A", status: "unknown", reason: "待核验" }],
+      comparisons: [
+        { strategyId: "A", status: "unknown", reason: "待核验", basis: "unknown", quote: "" },
+      ],
       attackFindings: [],
     };
     vi.stubGlobal(

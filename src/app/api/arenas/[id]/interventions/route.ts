@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request, context: ArenaRouteContext) {
   try {
     const input = await readBody(request, InterventionSchema);
-    return json(intervene((await context.params).id, requireOwner(request), input));
+    return json(intervene((await context.params).id, requireOwner(request), input, "agent"));
   } catch (error) {
     return errorResponse(error);
   }

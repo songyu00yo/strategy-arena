@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { MODEL_IDS } from "./model-catalog";
 
-export const SCHEMA_VERSION = "1.0.0";
+export const SCHEMA_VERSION = "1.3.1";
 export const STAGES = ["propose", "attack", "verify", "revise", "judge"] as const;
 export type Stage = (typeof STAGES)[number];
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -22,7 +23,7 @@ export const ChallengeSchema = z.object({
   timeHours: z.number().min(0.01).max(100000).nullable().default(null),
 });
 export type Challenge = z.infer<typeof ChallengeSchema>;
-export const ModelModeSchema = z.enum(["auto", "deepseek", "gpt"]);
+export const ModelModeSchema = z.enum([...MODEL_IDS, "auto", "deepseek", "gpt"]);
 export type ModelMode = z.infer<typeof ModelModeSchema>;
 export type ModelProvider = "deepseek" | "openai";
 export type Currency = "CNY" | "USD";
@@ -41,7 +42,15 @@ export interface ModelOption {
   currency: Currency;
   error?: string;
 }
+export interface ModelCatalogOption extends ModelOption {
+  label: string;
+  inputPrice: number;
+  outputPrice: number;
+}
+export const ExecutionModeSchema = z.enum(["fixed", "agent"]);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 export const CreateArenaRequestSchema = ChallengeSchema.extend({
+  executionMode: ExecutionModeSchema.default("agent"),
   modelMode: ModelModeSchema.default("auto"),
 });
 export const ClaimSchema = z.object({
@@ -50,6 +59,21 @@ export const ClaimSchema = z.object({
   status: z.enum(["user", "estimate", "unknown", "supported"]).default("unknown"),
   sourceIds: z.array(z.string()).default([]),
 });
+export const CostPlanSchema = z.object({
+  complete: z.boolean(),
+  items: z
+    .array(
+      z.object({
+        id: z.string().regex(/^[a-zA-Z0-9_-]{1,16}$/),
+        label: z.string().min(1).max(24),
+        amount: z.number().nonnegative().max(100000000).nullable(),
+        basis: z.enum(["user", "assumption", "unknown"]),
+        quote: z.string().max(200),
+      }),
+    )
+    .max(8),
+});
+export type CostPlan = z.infer<typeof CostPlanSchema>;
 export const StrategySchema = z.object({
   id: z.enum(["A", "B", "C"]),
   title: z.string().min(1).max(50),
@@ -57,6 +81,7 @@ export const StrategySchema = z.object({
   steps: z.array(short).min(1).max(6),
   claims: z.array(ClaimSchema).min(1).max(3),
   resources: short,
+  costPlan: CostPlanSchema.optional(),
   firstAction: short,
   failureCondition: short,
   estimatedCost: z.number().nonnegative().nullable().default(null),
@@ -65,6 +90,8 @@ export const StrategySchema = z.object({
 export type Strategy = z.infer<typeof StrategySchema>;
 export const ToolRequestSchema = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("search_materials"), query: z.string().min(1).max(300) }),
+  z.object({ tool: z.literal("search_web"), query: z.string().min(1).max(300) }),
+  z.object({ tool: z.literal("read_web"), url: z.string().url().max(2000) }),
   z.object({
     tool: z.literal("calculate"),
     expression: z.string().min(1).max(300),
@@ -84,16 +111,41 @@ export const AttackSchema = z.object({
   requests: z.array(ToolRequestSchema).max(2),
   status: z.enum(["pending", "supported", "refuted", "unresolved"]).default("pending"),
 });
-export type Attack = z.infer<typeof AttackSchema>;
+export type Attack = z.infer<typeof AttackSchema> & { round?: number; targetRevisionHash?: string };
 export const EvidenceSchema = z.object({
   id: short,
   attackId: short,
-  tool: z.enum(["search_materials", "calculate", "constraint_check"]),
+  tool: z.enum(["search_materials", "calculate", "constraint_check", "search_web", "read_web"]),
   status: z.enum(["found", "calculated", "unavailable", "error"]),
   title: short,
   content: z.string().max(6000),
   source: short,
   sourceIds: z.array(z.string()).default([]),
+  provenance: z
+    .enum([
+      "user_text",
+      "document",
+      "model_transcription",
+      "model_interpretation",
+      "unknown",
+      "web",
+    ])
+    .optional(),
+  references: z
+    .array(
+      z.object({
+        id: z.string(),
+        location: z.string(),
+        url: z.string().optional(),
+        contentHash: z.string(),
+        corpusHash: z.string().optional(),
+        accessedAt: z.string().optional(),
+      }),
+    )
+    .optional(),
+  query: z.string().optional(),
+  actionId: z.string().optional(),
+  estimateScope: z.enum(["proposal", "final"]).optional(),
   expression: z.string().nullable().default(null),
   result: z.number().nullable().default(null),
   assumptions: z.string().default(""),
@@ -117,7 +169,7 @@ export const RevisionSchema = z.object({
   summary: short,
   changed: z.boolean(),
 });
-export type Revision = z.infer<typeof RevisionSchema>;
+export type Revision = z.infer<typeof RevisionSchema> & { revisionId?: string; round?: number };
 export const VerdictSchema = z.object({
   outcome: z.enum(["recommendation", "tie", "insufficient", "infeasible", "partial"]),
   preferred: z.enum(["A", "B", "C"]).nullable(),
@@ -134,6 +186,8 @@ export const VerdictSchema = z.object({
         strategyId: z.enum(["A", "B", "C"]),
         status: z.enum(["eligible", "violates", "unknown"]),
         reason: short,
+        basis: z.enum(["user", "assumption", "unknown"]).optional(),
+        quote: z.string().max(300).optional(),
       }),
     )
     .max(3),
@@ -148,6 +202,19 @@ export const VerdictSchema = z.object({
     )
     .default([]),
 });
+export const GeneratedStrategySchema = StrategySchema.required({ costPlan: true });
+export const GeneratedRevisionSchema = RevisionSchema.extend({ strategy: GeneratedStrategySchema });
+export const GeneratedVerdictSchema = VerdictSchema.extend({
+  comparisons: z
+    .array(
+      VerdictSchema.shape.comparisons.element
+        .extend({
+          reason: z.string().min(1).max(320),
+        })
+        .required({ basis: true, quote: true }),
+    )
+    .max(3),
+});
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type RunStatus =
   | "ready"
@@ -159,6 +226,8 @@ export type RunStatus =
   | "superseded";
 export type StepStatus = "pending" | "running" | "completed" | "failed" | "uncertain" | "skipped";
 export interface ArenaStep {
+  kind?: import("./agent-contracts").AgentAction["kind"];
+  round?: number;
   id: string;
   versionId: string;
   stage: Stage;
@@ -180,6 +249,23 @@ export interface ArenaEvent {
   createdAt: string;
 }
 export interface ArenaVersion {
+  workflow?: "clarification";
+  clarification?: import("./clarification-contracts").ClarificationState;
+  waitingForIntake?: { id: string; versionId: string };
+  continuedFrom?: { versionId: string; modelRequests: number };
+  requirements?: {
+    confirmed: string[];
+    unresolved: string[];
+    suggestions: string[];
+    missingMaterials: string[];
+    executionPrompt: string;
+  };
+  executionMode?: ExecutionMode;
+  agent?: import("./agent-contracts").AgentState;
+  corpusHash?: string;
+  toolCostUsd?: number;
+  toolReservedUsd?: number;
+  toolUsage?: { estimatedUsd: number; reservedUsd: number; requests: number };
   id: string;
   number: number;
   challenge: Challenge;
@@ -195,9 +281,21 @@ export interface ArenaVersion {
   costUsd?: number;
   reservedUsd?: number;
   modelSelection?: ModelSelection;
+  intake?: {
+    id: string;
+    originalGoal: string;
+    answers: import("./intake-contracts").RecordedAnswer[];
+    assumptions: string[];
+    rejectedAssumptions?: string[];
+    usedSources: import("./intake-contracts").MaterialSource[];
+    usage: ModelUsage[];
+    confirmation?: import("./intake-contracts").IntakeConfirmation;
+    attachments?: import("./intake-contracts").IntakeAttachment[];
+  };
   createdAt: string;
   changeReason: string;
   parentVersionId: string | null;
+  followUp?: FollowUpInput & { sourceVersionId: string };
   error: string | null;
   runConfiguration?: Record<string, unknown>;
   configurationHash?: string;
@@ -209,18 +307,35 @@ export interface ArenaSnapshot {
   versions: ArenaVersion[];
   steps: ArenaStep[];
   events: ArenaEvent[];
+  eventCursor?: number;
+  drafts?: ModelDraft[];
   model: {
     id: string;
     configured: boolean;
     promptVersion: string;
     schemaVersion: string;
     providers?: ModelOption[];
+    models?: ModelCatalogOption[];
+    tools?: { webConfigured: boolean; protocol: string; provider?: "deepseek" | "tavily" };
   };
+}
+export interface ModelDraft {
+  stepId: string;
+  versionId: string;
+  stage: Stage;
+  role: string;
+  revision: number;
+  fields: Record<string, string>;
+  status: "generating" | "committed" | "rejected" | "interrupted";
 }
 export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  serviceTier?: string;
+  cacheWriteInputTokens?: number;
+  cacheWrite30mInputTokens?: number;
+  cacheWrite12hInputTokens?: number;
   estimatedCny: number;
   estimatedUsd?: number;
   currency?: Currency;
@@ -230,11 +345,24 @@ export interface ModelUsage {
   responseId: string;
   durationMs: number;
 }
+export interface ModelFormatNormalization {
+  kind: "single-redundant-trailing-object-brace";
+  originalOutput: string;
+  originalOutputSha256: string;
+  removedSuffix: "}";
+  removedOffset: number;
+}
 export interface ModelResult<T> {
   value: T;
   usage: ModelUsage;
+  formatNormalization?: ModelFormatNormalization;
 }
 export interface StageInput {
+  confirmedRequirements?: string[];
+  unresolvedRequirements?: string[];
+  researchContext?: Evidence[];
+  routeBrief?: string;
+  toolCapabilities?: string[];
   challenge: Challenge;
   role: string;
   strategies: Strategy[];
@@ -242,6 +370,7 @@ export interface StageInput {
   evidence: Evidence[];
   revisions: Revision[];
   userChallenges: string[];
+  assumptions?: string[];
   previousStrategy?: Strategy;
   duplicateHint?: string;
   repairFeedback?: string;
@@ -253,9 +382,25 @@ export const InterventionSchema = z.object({
   targetStrategyId: z.enum(["A", "B", "C"]),
   targetClaimId: short,
   text: z.string().min(3).max(1000),
+  baseVersionId: z.string().min(1).max(200).optional(),
+  quote: short.optional(),
 });
-export const VersionRequestSchema = z.object({
-  challenge: ChallengeSchema,
-  changeReason: z.string().min(1).max(1000),
-  modelMode: ModelModeSchema.optional(),
+export const FollowUpSchema = z.object({
+  stepId: z.string().min(1).max(600),
+  quote: z.string().min(1).max(30000),
+  text: z.string().trim().min(3).max(1000),
 });
+export type FollowUpInput = z.infer<typeof FollowUpSchema>;
+export const VersionRequestSchema = z
+  .object({
+    challenge: ChallengeSchema,
+    changeReason: z.string().min(1).max(1000),
+    modelMode: ModelModeSchema.optional(),
+    executionMode: ExecutionModeSchema.default("agent"),
+    baseVersionId: z.string().min(1).max(200).optional(),
+    followUp: FollowUpSchema.optional(),
+  })
+  .refine((value) => !value.followUp || !!value.baseVersionId, {
+    message: "请指定补充意见对应的原版本。",
+    path: ["baseVersionId"],
+  });

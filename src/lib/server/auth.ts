@@ -2,6 +2,28 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { ArenaError, atomic, db, sessionSecret } from "./db";
 
 const COOKIE = "arena_owner";
+const OWNER_MAX_AGE = 365 * 86400;
+export interface OwnerCredential {
+  owner: string;
+  recovery_hash: string | null;
+  auth_generation: number;
+  allow_legacy_cookie: number;
+}
+export function ownerCredential(owner: string): OwnerCredential | undefined {
+  return db()
+    .prepare(
+      "SELECT owner,recovery_hash,auth_generation,allow_legacy_cookie FROM owner_credentials WHERE owner=?",
+    )
+    .get(owner) as OwnerCredential | undefined;
+}
+export function ownerCookie(owner: string, generation: number) {
+  const expires = Date.now() + OWNER_MAX_AGE * 1000;
+  const payload = `${owner}.${generation}.${expires}`;
+  const signature = createHmac("sha256", sessionSecret())
+    .update(`owner-v2:${payload}`)
+    .digest("base64url");
+  return secureCookie(COOKIE, `${payload}.${signature}`, OWNER_MAX_AGE);
+}
 function sign(owner: string) {
   return createHmac("sha256", sessionSecret()).update(owner).digest("base64url");
 }
@@ -13,11 +35,28 @@ export function ownerFromRequest(request: Request): string | null {
     .find((s) => s.startsWith(`${COOKIE}=`))
     ?.slice(COOKIE.length + 1);
   if (!cookie || cookie.length > 180) return null;
-  const [owner, signature, extra] = cookie.split(".");
-  if (!owner || !signature || extra || !/^[a-f0-9-]{36}$/.test(owner)) return null;
+  const parts = cookie.split(".");
+  const owner = parts[0];
+  if (!/^[a-f0-9-]{36}$/.test(owner || "")) return null;
+  if (parts.length === 4) {
+    const [, generation, expires, signature] = parts;
+    if (!/^\d{1,12}$/.test(generation) || !/^\d{13}$/.test(expires)) return null;
+    const expiry = Number(expires);
+    if (expiry <= Date.now() || expiry > Date.now() + OWNER_MAX_AGE * 1000 + 60_000) return null;
+    const expected = createHmac("sha256", sessionSecret())
+      .update(`owner-v2:${owner}.${generation}.${expires}`)
+      .digest("base64url");
+    if (!equal(signature, expected)) return null;
+    const credential = ownerCredential(owner);
+    return credential?.auth_generation === Number(generation) ? owner : null;
+  }
+  if (parts.length !== 2) return null;
+  const signature = parts[1];
   const expected = Buffer.from(sign(owner));
   const actual = Buffer.from(signature);
-  return actual.length === expected.length && timingSafeEqual(actual, expected) ? owner : null;
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+  const credential = ownerCredential(owner);
+  return !credential || credential.allow_legacy_cookie === 1 ? owner : null;
 }
 export function requireOwner(request: Request) {
   requireArenaAccess(request);
@@ -29,11 +68,18 @@ export function ensureOwner(request: Request) {
   requireArenaAccess(request);
   const existing = ownerFromRequest(request);
   const owner = existing || randomUUID();
+  db()
+    .prepare(
+      "INSERT INTO owner_credentials(owner,auth_generation,allow_legacy_cookie,created_at) VALUES(?,?,?,?) ON CONFLICT(owner) DO NOTHING",
+    )
+    .run(owner, existing ? 0 : 1, existing ? 1 : 0, Date.now());
+  const credential = ownerCredential(owner)!;
+  const legacy =
+    existing &&
+    !request.headers.get("cookie")?.includes(`${COOKIE}=${owner}.${credential.auth_generation}.`);
   return {
     owner,
-    cookie: existing
-      ? null
-      : `${COOKIE}=${owner}.${sign(owner)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
+    cookie: !existing || legacy ? ownerCookie(owner, credential.auth_generation) : null,
   };
 }
 export function checkOrigin(request: Request) {

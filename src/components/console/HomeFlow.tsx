@@ -38,7 +38,7 @@ export function HomeFlow() {
       <ol>
         <li>
           <b>1 各自提案</b>
-          <span>三条路线独立写，互相看不到。</span>
+          <span>三条路线分别提案，互相看不到。</span>
         </li>
         <li>
           <b>2 互相质疑，查证修正</b>
@@ -46,10 +46,10 @@ export function HomeFlow() {
         </li>
         <li>
           <b>3 给出有条件的建议</b>
-          <span>说清何时成立、还缺什么，以及现在的第一步。</span>
+          <span>说清建议何时成立、还缺什么，以及第一步该做什么。</span>
         </li>
       </ol>
-      <small>上图是流程示意。未知会保留未知，估算会标明估算。</small>
+      <small>上图仅展示流程。未知的部分会如实保留，估算也会注明。</small>
     </aside>
   );
 }

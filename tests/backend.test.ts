@@ -44,11 +44,12 @@ vi.mock("../src/lib/server/model", () => {
     generateVerdict: (input: unknown) => model.generate(input),
   };
 });
-import { closeDb, db, getVersion } from "../src/lib/server/db";
+import { closeDb, db, getVersion, saveVersion } from "../src/lib/server/db";
 import {
   advanceArena,
   createArena,
   getArena,
+  intervene,
   newVersion,
   stopArena,
 } from "../src/lib/server/runtime";
@@ -63,6 +64,11 @@ import {
 } from "../src/lib/server/auth";
 import { validateRevision, validateVerdict } from "../src/lib/server/tools";
 import { startArenaWorker, stopArenaWorker } from "../src/lib/server/runner";
+import { stepContext } from "../src/lib/step-context";
+import { advanceFixture, fixtureSnapshot } from "./e2e/ui.fixture";
+import { POST as createArenaRequest } from "../src/app/api/arenas/route";
+import { POST as newVersionRequest } from "../src/app/api/arenas/[id]/versions/route";
+import { POST as advanceArenaRequest } from "../src/app/api/arenas/[id]/advance/route";
 
 const challenge = ChallengeSchema.parse({ goal: "在两个月内完成一门入门课程并交付项目" });
 function result(role = "A"): ModelResult<Strategy> {
@@ -94,6 +100,7 @@ beforeEach(() => {
   stopArenaWorker();
   closeDb();
   vi.stubEnv("ARENA_DATABASE_PATH", ":memory:");
+  vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", undefined);
   vi.stubEnv("ARENA_RUN_BUDGET_CNY", "1.5");
   vi.stubEnv("ARENA_GLOBAL_BUDGET_CNY", "90");
   vi.stubEnv("ARENA_DAILY_VISITOR_LIMIT", "6");
@@ -312,6 +319,57 @@ describe("durable execution and ownership", () => {
     expect(repaired.versions[0].costCny).toBe(0.08);
     expect(repaired.events.filter((e) => e.type === "protocol_repair_scheduled")).toHaveLength(1);
   });
+  it("passes all local cost diagnostics beyond 500 characters into one paid repair", async () => {
+    const source = "未来24周生活费每月2000元，6个月12000元。已有运行环境。";
+    const arena = createArena({ ...challenge, materials: source, budget: 18000 }, "owner");
+    const malformed = result();
+    malformed.value.estimatedCost = null;
+    malformed.value.costPlan = {
+      complete: false,
+      items: [
+        {
+          id: "living",
+          label: "生活费",
+          amount: 12000,
+          basis: "user",
+          quote: "每月2000元，6个月12000元",
+        },
+        { id: "runtime", label: "运行环境", amount: 0, basis: "user", quote: "已有运行环境" },
+      ],
+    };
+    malformed.value.steps = ["确认累计总额不超过18000元后再作不可撤回承诺。"];
+    const corrected = structuredClone(malformed);
+    corrected.value.costPlan!.items[0].quote = "未来24周生活费每月2000元，6个月12000元";
+    corrected.value.costPlan!.items[1] = {
+      id: "runtime",
+      label: "运行环境费用待核实",
+      amount: null,
+      basis: "unknown",
+      quote: "",
+    };
+    corrected.value.steps = ["完整费用清单累计总额已核实且不超过18000元后才可正式执行。"];
+    model.generate.mockResolvedValueOnce(malformed).mockImplementationOnce(async (input) => {
+      expect(input.repairFeedback.length).toBeGreaterThan(500);
+      expect(input.repairFeedback).toContain("costPlan.items[0]（id=living）");
+      expect(input.repairFeedback).toContain("costPlan.items[1]（id=runtime）");
+      expect(input.repairFeedback).toContain("steps[0] 费用正文格式");
+      expect(JSON.parse(input.rejectedOutput)).toEqual(malformed.value);
+      return corrected;
+    });
+    const failed = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(failed.versions[0].strategies).toHaveLength(0);
+    expect(
+      failed.events.filter((entry) => entry.type === "protocol_repair_scheduled"),
+    ).toHaveLength(1);
+    const repaired = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(model.generate).toHaveBeenCalledTimes(2);
+    expect(repaired.versions[0]).toMatchObject({ status: "ready", costCny: 0.08, reservedCny: 0 });
+    expect(repaired.versions[0].strategies).toHaveLength(1);
+    expect(repaired.steps.filter((step) => step.status === "failed")).toHaveLength(1);
+    expect(
+      repaired.events.filter((entry) => entry.type === "protocol_repair_scheduled"),
+    ).toHaveLength(1);
+  });
   it("bounds known-format repair to one attempt and charges both failed responses", async () => {
     const arena = createArena(challenge, "owner");
     model.generate.mockImplementation(async () => result("B"));
@@ -321,7 +379,7 @@ describe("durable execution and ownership", () => {
     await advanceArena(arena.id, "owner", arena.activeVersionId);
     expect(model.generate).toHaveBeenCalledTimes(2);
   });
-  it("treats stale leases as uncertain, but can settle a late response exactly once", async () => {
+  it("settles a late expired response exactly once while keeping later calls stopped", async () => {
     const arena = createArena(challenge, "owner");
     let resolve!: (value: ModelResult<Strategy>) => void;
     model.generate.mockImplementationOnce(
@@ -342,7 +400,16 @@ describe("durable execution and ownership", () => {
     expect(model.generate).toHaveBeenCalledTimes(1);
     resolve(result());
     const settled = await first;
-    expect(settled.versions[0]).toMatchObject({ status: "ready", reservedCny: 0, costCny: 0.04 });
+    expect(settled.versions[0]).toMatchObject({ status: "paused", reservedCny: 0, costCny: 0.04 });
+    expect(settled.versions[0].strategies).toHaveLength(1);
+    expect(settled.events.filter((entry) => entry.type === "step_uncertain")).toHaveLength(1);
+    expect(settled.steps.find((step) => step.status === "completed")?.error).toContain(
+      "超出记录期限",
+    );
+    const stopped = await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(stopped.versions[0]).toMatchObject({ status: "paused", reservedCny: 0, costCny: 0.04 });
+    expect(stopped.versions[0].strategies).toHaveLength(1);
+    expect(model.generate).toHaveBeenCalledTimes(1);
   });
   it("settles an old in-flight response only into its original superseded version", async () => {
     const arena = createArena(challenge, "owner");
@@ -468,6 +535,8 @@ describe("budgets and limits", () => {
       decision: "unresolved",
       evidenceIds: [],
     });
+    expect(checked.summary).toContain("接受1项质疑，拒绝0项，未解决1项");
+    expect(checked.summary).not.toBe(revision.summary);
     expect(checked.strategy.claims[0]).toMatchObject({ status: "unknown", sourceIds: [] });
     expect(() =>
       validateRevision(
@@ -588,6 +657,128 @@ describe("budgets and limits", () => {
     for (let i = 0; i < 5; i++) newVersion(arena.id, "owner", challenge, `重赛${i}`);
     expect(() => newVersion(arena.id, "owner", challenge, "超额重赛")).toThrow("次数已用完");
     expect(getArena(arena.id, "owner").versions).toHaveLength(6);
+  });
+  it("serves independent friend identities past daily and spending quotas through normal API routes", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    vi.stubEnv("ARENA_RUN_BUDGET_CNY", "0.000001");
+    vi.stubEnv("ARENA_GLOBAL_BUDGET_CNY", "0.000001");
+    const request = (path: string, body: unknown, cookie = "") =>
+      new Request(`http://localhost:3100${path}`, {
+        method: "POST",
+        headers: { Origin: "http://localhost:3100", "Content-Type": "application/json", cookie },
+        body: JSON.stringify(body),
+      });
+    const owners: string[] = [];
+    for (let friend = 0; friend < 2; friend++) {
+      let cookie = "";
+      let arena!: ReturnType<typeof createArena>;
+      for (let index = 0; index < 7; index++) {
+        const response = await createArenaRequest(
+          request("/api/arenas", { ...challenge, executionMode: "fixed" }, cookie),
+        );
+        expect(response.status).toBe(201);
+        cookie ||= response.headers.get("set-cookie")!.split(";", 1)[0];
+        arena = await response.json();
+        expect(arena.versions[0].challenge).toEqual(challenge);
+      }
+      const owner = ownerFromRequest(request("/api/arenas", {}, cookie))!;
+      owners.push(owner);
+      const context = { params: Promise.resolve({ id: arena.id }) };
+      const advanced = await advanceArenaRequest(
+        request(`/api/arenas/${arena.id}/advance`, { versionId: arena.activeVersionId }, cookie),
+        context,
+      );
+      expect(advanced.status).toBe(200);
+      const rematched = await newVersionRequest(
+        request(
+          `/api/arenas/${arena.id}/versions`,
+          { challenge, changeReason: "朋友补充条件后重比", executionMode: "fixed" },
+          cookie,
+        ),
+        context,
+      );
+      expect(rematched.status).toBe(200);
+      const rematch = (await rematched.json()) as ReturnType<typeof createArena>;
+      const second = await advanceArenaRequest(
+        request(`/api/arenas/${arena.id}/advance`, { versionId: rematch.activeVersionId }, cookie),
+        context,
+      );
+      expect(second.status).toBe(200);
+      expect(getArena(arena.id, owner).versions.map((version) => version.costCny)).toEqual([
+        0.04, 0.04,
+      ]);
+      expect(db().prepare("SELECT count FROM visitor_runs WHERE owner=?").get(owner)).toMatchObject(
+        {
+          count: 8,
+        },
+      );
+      vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "true");
+      const limited = await createArenaRequest(
+        request("/api/arenas", { ...challenge, executionMode: "fixed" }, cookie),
+      );
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ code: "DAILY_LIMIT" });
+      vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    }
+    expect(new Set(owners).size).toBe(2);
+    expect(model.generate).toHaveBeenCalledTimes(4);
+  });
+  it("retains uncertain reservations, no-replay and global concurrency with usage quotas disabled", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    vi.stubEnv("ARENA_MAX_CONCURRENT_CALLS", "1");
+    const arena = createArena(challenge, "owner");
+    const other = createArena(challenge, "other");
+    model.generate.mockRejectedValueOnce(new ModelCallError("请求结果未知", true));
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    await advanceArena(arena.id, "owner", arena.activeVersionId);
+    expect(getVersion(arena.activeVersionId)).toMatchObject({
+      status: "uncertain",
+      reservedCny: 0.2,
+    });
+    await expect(advanceArena(other.id, "other", other.activeVersionId)).rejects.toMatchObject({
+      code: "CONCURRENCY_LIMIT",
+    });
+    expect(model.generate).toHaveBeenCalledTimes(1);
+  });
+  it("still rejects invalid cost configuration with usage quotas disabled", async () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    model.estimate = Number.NaN;
+    const arena = createArena(challenge, "owner");
+    await expect(advanceArena(arena.id, "owner", arena.activeVersionId)).rejects.toMatchObject({
+      code: "INVALID_COST_CONFIG",
+    });
+    expect(model.generate).not.toHaveBeenCalled();
+  });
+  it("keeps the user's decision budget and time constraints with usage quotas disabled", () => {
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "false");
+    const checked = validateVerdict(
+      {
+        outcome: "recommendation",
+        preferred: "A",
+        headline: "先核实条件",
+        rationale: "合成估计供核实",
+        conditions: [],
+        uncertainties: [],
+        nextActions: ["核实实际投入"],
+        exitCondition: "超限则退出",
+        evidenceIds: [],
+        comparisons: [],
+        attackFindings: [],
+      },
+      {
+        challenge: { ...challenge, budget: 1, timeHours: 1 },
+        role: "judge",
+        strategies: [{ ...result().value, estimatedCost: 2, estimatedHours: 2 }],
+        attacks: [],
+        evidence: [],
+        revisions: [],
+        userChallenges: [],
+      },
+    );
+    expect(checked.comparisons).toEqual([
+      expect.objectContaining({ strategyId: "A", status: "violates" }),
+    ]);
+    expect(checked.preferred).toBeNull();
   });
   it("fails explicitly without a model key and makes no model request", async () => {
     model.configured = false;
@@ -725,5 +916,227 @@ describe("browser ownership and request origin", () => {
         }),
       ),
     ).toThrow("ARENA_PUBLIC_ORIGIN");
+  });
+});
+
+// Explicit synthetic source records and mocked model boundary; no provider is contacted.
+describe("version-bound follow-up regressions", () => {
+  function preparedSource() {
+    const arena = createArena(challenge, "owner");
+    const synthetic = fixtureSnapshot();
+    for (let stage = 0; stage < 5; stage++) advanceFixture(synthetic);
+    const completed = synthetic.versions[0];
+    const version = getVersion(arena.activeVersionId);
+    Object.assign(version, {
+      status: "completed",
+      stage: "judge",
+      strategies: completed.strategies,
+      attacks: completed.attacks,
+      evidence: completed.evidence,
+      revisions: completed.revisions,
+      verdict: completed.verdict,
+    });
+    saveVersion(version);
+    return { arena, version };
+  }
+  function persistedState() {
+    return ["arenas", "versions", "steps", "events", "visitor_runs", "interventions"].map((table) =>
+      db().prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+    );
+  }
+  function rejectsWithoutMutation(action: () => unknown, code: string) {
+    const before = persistedState();
+    expect(action).toThrowError(expect.objectContaining({ status: 409, code }));
+    expect(persistedState()).toEqual(before);
+    expect(model.generate).not.toHaveBeenCalled();
+  }
+
+  it("resolves all five source kinds and uses the original proposal when a revision exists", () => {
+    const { version } = preparedSource();
+    version.revisions[0].strategy.thesis = "修订后的测试论点，与原始提案不同。";
+    const ids = ["p:A", "a:attack-fixture", "v:attack-fixture", "r:A", "judge"];
+    for (const stepId of ids) {
+      const source = stepContext(version, stepId);
+      expect(source).toMatchObject({
+        stepId,
+        title: expect.any(String),
+        quote: expect.any(String),
+      });
+      expect(source!.title.length).toBeGreaterThan(0);
+      expect(source!.quote.length).toBeGreaterThan(0);
+    }
+    expect(stepContext(version, "p:A")!.quote).toContain(version.strategies[0].thesis);
+    expect(stepContext(version, "p:A")!.quote).not.toContain(version.revisions[0].strategy.thesis);
+    expect(stepContext(version, "r:A")!.quote).toContain(version.revisions[0].strategy.thesis);
+    for (const stepId of ["p:Z", "a:missing", "v:missing", "r:Z", "unknown"])
+      expect(stepContext(version, stepId)).toBeNull();
+    version.verdict = null;
+    expect(stepContext(version, "judge")).toBeNull();
+  });
+
+  it.each(["p:A", "a:attack-fixture", "v:attack-fixture", "r:A", "judge"])(
+    "persists %s follow-up and starts a complete fresh protocol with user opinion separated from facts",
+    async (stepId) => {
+      const { arena, version } = preparedSource();
+      const context = stepContext(version, stepId)!;
+      const followUp = {
+        stepId,
+        quote: context.quote,
+        text: "测试用户意见：这个前提可能还需核对。",
+      };
+      const changed = newVersion(
+        arena.id,
+        "owner",
+        version.challenge,
+        "用户补充",
+        undefined,
+        undefined,
+        {
+          baseVersionId: version.id,
+          followUp,
+        },
+      );
+      const next = getVersion(changed.activeVersionId);
+      expect(next.followUp).toEqual({ ...followUp, sourceVersionId: version.id });
+      expect(next).toMatchObject({
+        parentVersionId: version.id,
+        stage: "propose",
+        status: "ready",
+        costCny: 0,
+        reservedCny: 0,
+      });
+      expect(next.challenge).toEqual(version.challenge);
+      expect(next.strategies).toEqual([]);
+      expect(next.attacks).toEqual([]);
+      expect(next.evidence).toEqual([]);
+      expect(next.revisions).toEqual([]);
+      expect(next.verdict).toBeNull();
+      expect(changed.steps.filter((step) => step.versionId === next.id)).toHaveLength(11);
+      expect(
+        changed.steps
+          .filter((step) => step.versionId === next.id)
+          .every((step) => step.status === "pending"),
+      ).toBe(true);
+      await advanceArena(arena.id, "owner", next.id);
+      const input = model.generate.mock.calls[0][0] as StageInput;
+      expect(input.userChallenges.join("\n")).toContain(followUp.text);
+      expect(input.userChallenges.join("\n")).toContain(followUp.quote);
+      expect(input.userChallenges.join("\n")).toMatch(/用户|意见|待核/);
+      expect(input.challenge.materials).toBe(version.challenge.materials);
+      expect(getVersion(version.id).followUp).toBeUndefined();
+    },
+  );
+
+  it("rejects changed, missing and duplicate sources without spending a run or altering prior records", () => {
+    const { arena, version } = preparedSource();
+    const context = stepContext(version, "p:A")!;
+    const submit = (stepId: string, quote: string, baseVersionId = version.id) =>
+      newVersion(arena.id, "owner", challenge, "用户补充", undefined, undefined, {
+        baseVersionId,
+        followUp: { stepId, quote, text: "测试：请核对这个条件。" },
+      });
+    rejectsWithoutMutation(() => submit("p:A", `${context.quote}被改写`), "STALE_SOURCE");
+    rejectsWithoutMutation(() => submit("a:missing", context.quote), "STALE_SOURCE");
+    rejectsWithoutMutation(() => submit("p:A", context.quote, "missing-version"), "STALE_VERSION");
+    submit("p:A", context.quote);
+    rejectsWithoutMutation(() => submit("p:A", context.quote), "STALE_VERSION");
+    rejectsWithoutMutation(
+      () =>
+        newVersion(arena.id, "owner", challenge, "旧条件", undefined, undefined, {
+          baseVersionId: version.id,
+        }),
+      "STALE_VERSION",
+    );
+  });
+
+  it("checks exact claim quotes after revision and retains old intervention and version clients", () => {
+    const { arena, version } = preparedSource();
+    const revised = version.revisions[0].strategy.claims[0];
+    const oldQuote = revised.text;
+    revised.text = "修订后的测试判断：请先计算等待时间。";
+    saveVersion(version);
+    rejectsWithoutMutation(
+      () =>
+        intervene(arena.id, "owner", {
+          targetStrategyId: "A",
+          targetClaimId: revised.id,
+          text: "测试：补充质疑。",
+          baseVersionId: version.id,
+          quote: oldQuote,
+        }),
+      "STALE_SOURCE",
+    );
+    const changed = intervene(arena.id, "owner", {
+      targetStrategyId: "A",
+      targetClaimId: revised.id,
+      text: "测试：补充质疑。",
+      baseVersionId: version.id,
+      quote: revised.text,
+    });
+    rejectsWithoutMutation(
+      () =>
+        intervene(arena.id, "owner", {
+          targetStrategyId: "A",
+          targetClaimId: revised.id,
+          text: "测试：再次提交。",
+          baseVersionId: version.id,
+          quote: revised.text,
+        }),
+      "STALE_VERSION",
+    );
+    expect(changed.versions).toHaveLength(2);
+    const legacy = newVersion(arena.id, "owner", challenge, "旧客户端条件更新");
+    expect(legacy.versions).toHaveLength(3);
+    const source = getVersion(legacy.activeVersionId);
+    source.strategies = [result().value];
+    saveVersion(source);
+    const legacyIntervention = intervene(arena.id, "owner", {
+      targetStrategyId: "A",
+      targetClaimId: "A1",
+      text: "旧客户端不携带版本与原文。",
+    });
+    expect(legacyIntervention.versions).toHaveLength(4);
+  });
+
+  it("settles an in-flight result into its source version after a step follow-up creates the new version", async () => {
+    const { arena, version } = preparedSource();
+    version.status = "ready";
+    version.stage = "propose";
+    version.strategies = [result().value];
+    saveVersion(version);
+    db()
+      .prepare(
+        "UPDATE steps SET status='completed' WHERE version_id=? AND stage='propose' AND role='A'",
+      )
+      .run(version.id);
+    let resolve!: (value: ModelResult<Strategy>) => void;
+    model.generate.mockImplementationOnce(
+      () =>
+        new Promise<ModelResult<Strategy>>((done) => {
+          resolve = done;
+        }),
+    );
+    const running = advanceArena(arena.id, "owner", version.id);
+    const context = stepContext(version, "p:A")!;
+    const changed = newVersion(arena.id, "owner", challenge, "用户补充", undefined, undefined, {
+      baseVersionId: version.id,
+      followUp: { stepId: context.stepId, quote: context.quote, text: "测试：补充投入时间。" },
+    });
+    const late = result("B");
+    late.value.steps = ["阅读公开源码，自行制作结构拆解和实验报告"];
+    late.value.resources = "开源代码仓库和独立研究记录";
+    late.value.thesis = "通过自主研究开源实现来完成学习目标。";
+    resolve(late);
+    await running;
+    const after = getArena(arena.id, "owner");
+    expect(after.activeVersionId).toBe(changed.activeVersionId);
+    expect(after.versions[0]).toMatchObject({
+      status: "superseded",
+      reservedCny: 0,
+      costCny: 0.04,
+    });
+    expect(after.versions[0].strategies.map((strategy) => strategy.id)).toEqual(["A", "B"]);
+    expect(after.versions[1].strategies).toEqual([]);
+    expect(after.versions[1].costCny).toBe(0);
   });
 });

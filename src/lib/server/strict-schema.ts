@@ -2,7 +2,7 @@ import type { StageInput } from "../contracts";
 
 type Schema = Record<string, unknown>;
 export type OutputKind = "propose" | "attack" | "revise" | "judge";
-const nullableFields = new Set(["estimatedCost", "estimatedHours", "preferred"]);
+const nullableFields = new Set(["estimatedCost", "estimatedHours", "preferred", "amount"]);
 const omitted = new Set(["$schema", "default", "minLength", "maxLength", "minItems", "maxItems"]);
 
 /** DeepSeek strict-tool subset. Public validation still uses the unchanged Zod schema. */
@@ -18,6 +18,8 @@ export function toStrictToolSchema(value: unknown, field?: string): Schema {
   const result: Schema = {};
   for (const [key, item] of Object.entries(source)) {
     if (omitted.has(key)) continue;
+    // DeepSeek strict tools do not support URI format. Zod still validates returned URLs.
+    if (key === "format" && item === "uri") continue;
     if (key === "properties") {
       result.properties = Object.fromEntries(
         Object.entries(item as Schema).map(([name, child]) => [

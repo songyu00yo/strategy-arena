@@ -39,8 +39,10 @@ import {
   ModelCallError,
 } from "../src/lib/server/model";
 import {
+  normalizeStrategyResources,
   checkConstraints,
   executeAttackTools,
+  proposedClaims,
   strategiesDuplicate,
   validateAttack,
   validateRevision,
@@ -204,26 +206,10 @@ function settle(
 function normalizeStrategy(strategy: Strategy, input: StageInput): Strategy {
   if (strategy.id !== input.role)
     throw new Error("Proposal role does not match its assigned strategy ID.");
-  const userText = [
-    input.challenge.goal,
-    input.challenge.constraints,
-    input.challenge.preferences,
-    input.challenge.materials,
-    ...input.challenge.options,
-  ].join("\n");
+  strategy = normalizeStrategyResources(strategy, input.challenge);
   return {
     ...strategy,
-    claims: strategy.claims.map((claim, index) => ({
-      ...claim,
-      id: `${strategy.id}-claim-${index + 1}`,
-      status:
-        claim.status === "estimate"
-          ? "estimate"
-          : claim.status === "user" && userText.includes(claim.text)
-            ? "user"
-            : "unknown",
-      sourceIds: [],
-    })),
+    claims: proposedClaims(strategy, input.challenge),
   };
 }
 function validateOutput(
@@ -545,6 +531,21 @@ export async function runTrajectory(options: {
       activeStage = "revise";
       for (const role of roles) current.revisions.push((await call("revise", role)) as Revision);
       activeStage = "judge";
+      const finalStrategies = current.strategies.map(
+        (strategy) =>
+          current.revisions.find((revision) => revision.strategyId === strategy.id)?.strategy ??
+          strategy,
+      );
+      const finalEvidence = checkConstraints(current.challenge, finalStrategies, "final");
+      current.evidence = [...current.evidence, ...finalEvidence];
+      checkpoint({
+        type: "final_constraints_completed",
+        id: result.id,
+        condition,
+        toolRequestCount: 0,
+        evidence: finalEvidence,
+        accounting: { ...accounting },
+      });
       current.verdict = (await call("judge", "judge")) as Verdict;
       current.attacks = current.attacks.map((attack) => ({
         ...attack,

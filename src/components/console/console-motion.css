@@ -1,6 +1,6 @@
 /* A stable shell; individual changes own their animation rather than replaying the whole HUD. */
 .c-root {
-  animation: c-console-enter 560ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: c-console-enter 360ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes c-console-enter {
   from {
@@ -11,19 +11,28 @@
   }
 }
 .c-hud > * {
-  animation: c-hud-enter 620ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation: c-hud-enter 260ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 .c-hud > .c-conditions {
-  animation-delay: 50ms;
+  animation-delay: 20ms;
 }
 .c-hud > .c-track {
-  animation-delay: 90ms;
+  animation-delay: 40ms;
 }
 .c-hud > .c-main {
-  animation-delay: 130ms;
+  animation-delay: 60ms;
 }
 .c-hud > .c-bottom {
-  animation-delay: 170ms;
+  animation-delay: 80ms;
+}
+.console-shell .c-root[data-shell-entered="true"],
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > *,
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > .c-main > .c-rail,
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > .c-slate h1::after {
+  animation: none !important;
+}
+.console-shell .c-root[data-shell-entered="true"] > .c-hud > .c-slate h1::after {
+  opacity: 0 !important;
 }
 @keyframes c-hud-enter {
   from {
@@ -54,10 +63,9 @@
   animation: none;
 }
 .c-root.is-seeking .c-log .hot,
-.c-root.is-seeking .c-row,
-.c-root.is-seeking .struck {
+.c-root.is-seeking .c-row {
   animation: none;
 }
 .c-root.is-seeking .c-scope i {
-  transition-duration: 620ms;
+  transition-duration: 220ms;
 }

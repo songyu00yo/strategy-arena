@@ -16,6 +16,11 @@ import {
   sha256,
 } from "../scripts/live-acceptance-plan";
 
+import {
+  parseLiveAcceptanceOptions,
+  resolveLiveAcceptanceExecutionOptions,
+} from "../scripts/live-acceptance";
+
 const text = readFileSync(new URL("../evals/live-acceptance.json", import.meta.url), "utf8");
 const fixture = FixtureSchema.parse(JSON.parse(text));
 
@@ -42,6 +47,48 @@ describe("frozen live acceptance inputs", () => {
         .every((version) => version.semanticReview.status === "not-reviewed"),
     ).toBe(true);
   });
+  it("keeps the default twelve-version plan shape and hash unchanged", () => {
+    const plan = planCases(fixture);
+    expect(plan.flatMap((item) => item.versions)).toHaveLength(12);
+    expect(sha256(JSON.stringify(plan))).toBe(
+      "b4df1def92a0ba3c0189f1195c870cb8b997e45a57c4daa1c35466ce6ec3f634",
+    );
+    expect(planCases(fixture, undefined, [], undefined, false)).toEqual(plan);
+  });
+  it("plans only initial inputs without claiming changed-version or chain coverage", () => {
+    const before = JSON.stringify(fixture);
+    const full = planCases(fixture);
+    const partial = planCases(fixture, undefined, [], undefined, true);
+    expect(partial).toHaveLength(7);
+    expect(partial.flatMap((item) => item.versions)).toHaveLength(7);
+    for (const item of partial) {
+      expect(item.versions).toHaveLength(1);
+      const { validationLabel, ...version } = item.versions[0];
+      const { validationLabel: fullLabel, ...initial } = full.find(
+        (candidate) => candidate.id === item.id,
+      )!.versions[0];
+      expect(version.name).toBe("initial");
+      expect(validationLabel).toBe("partial-initial-only-not-change-chain-validation");
+      expect(fullLabel).toBe("planned-mode-validation");
+      expect(version).toEqual(initial);
+    }
+    expect(partial.flatMap((item) => item.versions).filter((v) => v.name === "changed")).toEqual(
+      [],
+    );
+    expect(JSON.stringify(fixture)).toBe(before);
+  });
+  it("retains planned and execution routes plus input for an initial-only explicit override", () => {
+    const partial = planCases(fixture, ["career"], [], "deepseek", true);
+    const fullInitial = planCases(fixture, ["career"], [], "deepseek")[0].versions[0];
+    expect(partial[0].versions).toHaveLength(1);
+    expect(partial[0].versions[0]).toEqual({
+      ...fullInitial,
+      validationLabel:
+        "partial-initial-only-explicit-override-not-planned-mode-or-change-chain-validation",
+    });
+    expect(partial[0].versions[0].plannedRoute.provider).toBe("openai");
+    expect(partial[0].versions[0].executionRoute.provider).toBe("deepseek");
+  });
   it("freezes planned routes including the actual changed creation auto-to-GPT branch", () => {
     const plan = planCases(fixture);
     const providers = (id: string) =>
@@ -63,6 +110,25 @@ describe("frozen live acceptance inputs", () => {
     }
     expect(fixture.cases.find((item) => item.id === "career")?.plannedMode).toBe("gpt");
   });
+  it("labels combined CLI initial-only and override as neither planned GPT nor change-chain validation", () => {
+    const opts = resolveLiveAcceptanceExecutionOptions(
+      parseLiveAcceptanceOptions([
+        "--cases",
+        "career",
+        "--initial-only",
+        "--model-mode",
+        "deepseek",
+      ]),
+    );
+    const version = planCases(fixture, opts.cases, opts.exclude, opts.override, opts.initialOnly)[0]
+      .versions[0];
+    expect(version.plannedMode).toBe("gpt");
+    expect(version.plannedRoute.provider).toBe("openai");
+    expect(version.executionRoute.provider).toBe("deepseek");
+    expect(version.validationLabel).toBe(
+      "partial-initial-only-explicit-override-not-planned-mode-or-change-chain-validation",
+    );
+  });
   it("selects/excludes cases and refuses typos before execution", () => {
     expect(planCases(fixture, undefined, ["creation"])).toHaveLength(6);
     expect(planCases(fixture, ["learning"])).toHaveLength(1);
@@ -83,6 +149,49 @@ describe("frozen live acceptance inputs", () => {
 });
 
 describe("safe paid-attempt resumption", () => {
+  it("persists initial-only only when requested and preserves saved options on resume", () => {
+    const defaults = resolveLiveAcceptanceExecutionOptions(parseLiveAcceptanceOptions([]));
+    expect(defaults).not.toHaveProperty("initialOnly");
+    const partial = resolveLiveAcceptanceExecutionOptions(
+      parseLiveAcceptanceOptions(["--cases", "creation", "--initial-only"]),
+    );
+    expect(partial.initialOnly).toBe(true);
+    const resume = parseLiveAcceptanceOptions(["--run", "--resume", "artifacts/saved.json"]);
+    expect(resolveLiveAcceptanceExecutionOptions(resume, partial)).toBe(partial);
+    expect(resolveLiveAcceptanceExecutionOptions(resume, defaults)).toBe(defaults);
+    expect(resolveLiveAcceptanceExecutionOptions(resume, defaults)).not.toHaveProperty(
+      "initialOnly",
+    );
+    const restored = resolveLiveAcceptanceExecutionOptions(resume, partial);
+    expect(
+      planCases(
+        fixture,
+        restored.cases,
+        restored.exclude,
+        restored.override,
+        restored.initialOnly,
+      )[0].versions.map((version) => version.name),
+    ).toEqual(["initial"]);
+    for (const selection of [
+      ["--initial-only"],
+      ["--cases", "creation"],
+      ["--exclude", "creation"],
+      ["--model-mode", "deepseek"],
+    ]) {
+      const replacement = parseLiveAcceptanceOptions([
+        "--resume",
+        "artifacts/saved.json",
+        ...selection,
+      ]);
+      expect(() => resolveLiveAcceptanceExecutionOptions(replacement, partial)).toThrow(
+        "Resume retains saved",
+      );
+      expect(() => resolveLiveAcceptanceExecutionOptions(replacement, defaults)).toThrow(
+        "Resume retains saved",
+      );
+    }
+    expect(() => parseLiveAcceptanceOptions(["--changed-only"])).toThrow("Unknown option");
+  });
   it("rejects changed HEAD, source, clean state or effective configuration before resuming", () => {
     const source = {
       commit: "frozen-sha",

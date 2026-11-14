@@ -3,8 +3,10 @@ import http from "node:http";
 import { after, before, test } from "node:test";
 import { createDemoServer, DEMO_MODEL } from "./demo/server.mjs";
 import { scenarioFor } from "./demo/scenarios.mjs";
-import { samples } from "../src/lib/sample.ts";
-import { ChallengeSchema } from "../src/lib/contracts.ts";
+import { tsImport } from "tsx/esm/api";
+const { samples } = await tsImport("../src/lib/sample.ts", import.meta.url);
+const { ChallengeSchema } = await tsImport("../src/lib/contracts.ts", import.meta.url);
+const { stepContext } = await tsImport("../src/lib/step-context.ts", import.meta.url);
 
 test("every sample has its own scenario, distinct from the others", () => {
   const seen = new Set();
@@ -183,6 +185,112 @@ test("interventions use an actual visible claim and retain the current challenge
   assert.equal(snapshot.versions[1].parentVersionId, oldId);
   assert.deepEqual(snapshot.versions[1].challenge, ChallengeSchema.parse(samples[0].challenge));
   assert.match(snapshot.versions[1].changeReason, /补充一条演示质疑/);
+});
+
+test("scripted step follow-ups and claim guards reject stale sources without forwarding APIs or producing model results", async () => {
+  forwarded = [];
+  const post = (path, body) =>
+    fetch(`${base()}${path}`, { method: "POST", body: JSON.stringify(body) });
+  const chosen = samples[0].challenge;
+  let snapshot = await (await post("/api/arenas", chosen)).json();
+  const path = `/api/arenas/${snapshot.id}`;
+  const read = () => fetch(`${base()}${path}`).then((response) => response.json());
+  const rejectWithoutMutation = async (action, body, code) => {
+    const before = await read();
+    const response = await post(`${path}/${action}`, body);
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, code);
+    assert.deepEqual(await read(), before);
+  };
+  const sourceId = snapshot.activeVersionId;
+  const scenario = scenarioFor(chosen);
+  // This quote is valid in the preset but its step has not been revealed to this demo visitor.
+  const invisible = stepContext({ ...snapshot.versions[0], verdict: scenario.verdict }, "judge");
+  await rejectWithoutMutation(
+    "versions",
+    {
+      challenge: chosen,
+      changeReason: "演示：不可见步骤不能作为补充来源",
+      baseVersionId: sourceId,
+      followUp: {
+        stepId: invisible.stepId,
+        quote: invisible.quote,
+        text: "演示补充，尚未看到裁决。",
+      },
+    },
+    "STALE_SOURCE",
+  );
+  snapshot = await (await post(`${path}/advance`, { versionId: sourceId })).json();
+  const source = stepContext(snapshot.versions[0], "p:A");
+  assert.ok(source);
+  const body = {
+    challenge: chosen,
+    changeReason: "演示：补充已展示的提案",
+    baseVersionId: sourceId,
+    followUp: { stepId: source.stepId, quote: source.quote, text: "演示补充：请留意交通时间。" },
+  };
+  await rejectWithoutMutation(
+    "versions",
+    { ...body, followUp: { ...body.followUp, quote: `${source.quote}被改写` } },
+    "STALE_SOURCE",
+  );
+  const strategy = snapshot.versions[0].strategies[0];
+  const claim = strategy.claims[0];
+  await rejectWithoutMutation(
+    "interventions",
+    {
+      baseVersionId: sourceId,
+      targetStrategyId: strategy.id,
+      targetClaimId: claim.id,
+      quote: `${claim.text}被改写`,
+      text: "演示：错原文不能提交。",
+    },
+    "STALE_SOURCE",
+  );
+  const response = await post(`${path}/versions`, body);
+  assert.equal(response.status, 200);
+  snapshot = await response.json();
+  const followUpVersion = snapshot.versions[1];
+  assert.equal(snapshot.versions.length, 2);
+  assert.deepEqual(followUpVersion.followUp, { ...body.followUp, sourceVersionId: sourceId });
+  assert.equal(followUpVersion.parentVersionId, sourceId);
+  assert.deepEqual(followUpVersion.challenge, ChallengeSchema.parse(chosen));
+  assert.deepEqual(followUpVersion.strategies, []);
+  assert.equal(followUpVersion.verdict, null);
+  assert.equal(followUpVersion.costCny, 0);
+  await rejectWithoutMutation("versions", body, "STALE_VERSION");
+  await rejectWithoutMutation(
+    "interventions",
+    {
+      baseVersionId: sourceId,
+      targetStrategyId: strategy.id,
+      targetClaimId: claim.id,
+      quote: claim.text,
+      text: "演示：旧版本不能再次质疑。",
+    },
+    "STALE_VERSION",
+  );
+  snapshot = await (await post(`${path}/advance`, { versionId: followUpVersion.id })).json();
+  const shown = snapshot.versions[1].strategies[0];
+  const intervention = {
+    baseVersionId: followUpVersion.id,
+    targetStrategyId: shown.id,
+    targetClaimId: shown.claims[0].id,
+    quote: shown.claims[0].text,
+    text: "演示：这条可见判断需要补充条件。",
+  };
+  snapshot = await (await post(`${path}/interventions`, intervention)).json();
+  assert.equal(snapshot.versions.length, 3);
+  assert.equal(snapshot.versions[2].parentVersionId, followUpVersion.id);
+  await rejectWithoutMutation("interventions", intervention, "STALE_VERSION");
+  assert.equal(snapshot.model.id, "demo-no-model");
+  assert.ok(snapshot.events.every((event) => event.data.scripted === true));
+  assert.ok(snapshot.events.every((event) => !event.data.modelOutput));
+  assert.ok(
+    snapshot.events.every((event) => !event.data.usage || event.data.usage.model === DEMO_MODEL.id),
+  );
+  // Replay may display preset estimates; no /api reaches upstream, so no provider is called or billed.
+  assert.deepEqual(forwarded, []);
 });
 
 test("invalid create/rematch requests return contract errors without creating a version", async () => {

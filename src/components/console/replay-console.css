@@ -1,0 +1,41 @@
+.clarification-replay .c-time.replay-time {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+}
+
+.clarification-replay .replay-time .seg {
+  flex-shrink: 0;
+  min-width: 54px;
+}
+
+.clarification-replay .replay-time .ticks button {
+  flex: 1 0 6px;
+}
+
+.clarification-replay .c-result.whole {
+  max-height: 42vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.clarification-replay .c-now .big,
+.clarification-replay .c-now > p {
+  opacity: 1;
+}
+
+.clarification-replay.at-result .c-result[data-confirmation="confirmed"] .tag b {
+  border: 3px double var(--vermilion, #c8331f);
+  background: var(--paper, #fbf8f1);
+  color: var(--vermilion, #c8331f);
+  transform: rotate(-1deg);
+}
+
+@media (max-width: 650px) {
+  .clarification-replay .c-result.whole {
+    max-height: 50vh;
+  }
+}

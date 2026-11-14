@@ -1,0 +1,68 @@
+.console-shell .c-stage3.clarification-paper-stage .c-board {
+  translate: 0 var(--paper-lift, 0px);
+  outline: 1.5px solid rgb(200 51 31 / calc(var(--paper-receive, 0) * 0.6));
+  outline-offset: 3px;
+  transition:
+    translate var(--paper-feedback, 160ms) var(--reveal-ease),
+    border-color var(--paper-feedback, 160ms) var(--reveal-ease),
+    box-shadow var(--paper-feedback, 160ms) var(--reveal-ease);
+}
+.clarification-paper-stage .c-board::after {
+  opacity: var(--paper-receive, 0);
+  transition: opacity var(--paper-feedback, 160ms) var(--reveal-ease);
+}
+.console-shell .clarification-paper-stage .c-board .c-outline rect {
+  animation: none;
+}
+.paper-role-transfer {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.paper-role-transfer path {
+  fill: none;
+  stroke: var(--ink, #15130f);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  opacity: 0;
+}
+.c-stage3[data-background-held]
+  :is(.c-world, .c-world *, .c-threads, .c-threads *, .c-deck, .c-deck *, .c-live, .c-live *) {
+  animation-play-state: paused !important;
+}
+.c-wall[data-background-held] .c-cw {
+  animation-play-state: paused !important;
+}
+.c-stage3[data-background-held] .c-deck-card {
+  transition-duration: var(--paper-settle, 200ms);
+}
+.console-shell .paper-record-wall .c-cw {
+  animation: none;
+}
+.initial-paper-transfer {
+  position: fixed;
+  z-index: 80;
+  margin: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--paper, #fbf8f1);
+  transform-origin: center;
+  pointer-events: none;
+  box-shadow: 3px 4px 0 rgb(21 19 15 / 0.16);
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-shell .c-stage3.clarification-paper-stage .c-board,
+  .clarification-paper-stage .c-board::after {
+    transition: none;
+  }
+  .paper-role-transfer,
+  .initial-paper-transfer {
+    display: none;
+  }
+}

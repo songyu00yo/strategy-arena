@@ -3,6 +3,8 @@ import { basename, relative, resolve, sep } from "node:path";
 
 const privateRoots = new Set([
   "data",
+  "uploads",
+  "attachments",
   "artifacts",
   "work",
   "private",
@@ -17,6 +19,7 @@ export function allowedReleaseSource(source, root) {
   const parts = path.split(sep);
   return (
     !privateRoots.has(parts[0]) &&
+    !(parts[0] === "public" && ["uploads", "attachments"].includes(parts[1])) &&
     !parts.some((part) => /^\.env(?:\.|$)/.test(part)) &&
     !/\.(?:sqlite(?:-wal|-shm)?|db|pem|key)$/.test(basename(source))
   );

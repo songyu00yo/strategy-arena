@@ -83,6 +83,112 @@ type SamplerWindow = Window & {
   __actionSampling?: boolean;
   __actionInputs?: unknown[];
 };
+type ContentClockEffect = {
+  id: number;
+  kind: "opacity" | "height";
+  state: string;
+  time: number;
+  writes: number;
+};
+type ContentClockFrame = { at: number; effects: ContentClockEffect[] };
+type ContentClockWindow = Window & {
+  __contentClock?: {
+    frames: ContentClockFrame[];
+    read: () => ContentClockFrame;
+    pauseAfterPlay: "opacity" | "height" | null;
+    excludedPlayId: number | null;
+    stopped: boolean;
+  };
+};
+
+async function observeContentClock(page: Page) {
+  await page.evaluate(() => {
+    const target = window as ContentClockWindow;
+    const entries = new Map<
+      Animation,
+      { id: number; kind: "opacity" | "height"; writes: number }
+    >();
+    let identity = 0;
+    let pauseOnCreation = true;
+    const entry = (animation: Animation) => {
+      if (entries.has(animation)) return entries.get(animation)!;
+      const effect = animation.effect;
+      if (!(effect instanceof KeyframeEffect) || !(effect.target instanceof HTMLElement))
+        return null;
+      const node = effect.target;
+      if (node.closest<HTMLElement>(".replay-question-scene")?.dataset.replayAction !== "answer")
+        return null;
+      const properties = effect.getKeyframes().flatMap((frame) => Object.keys(frame));
+      const height = node.matches(".replay-question-scene") && properties.includes("height");
+      const opacity =
+        properties.includes("opacity") &&
+        (node.dataset.replayContentRetiring === "true" ||
+          (node.parentElement?.matches(".replay-question-scene") &&
+            node.matches("header,.replay-question-body,footer")));
+      if (!height && !opacity) return null;
+      const value = {
+        id: ++identity,
+        kind: height ? ("height" as const) : ("opacity" as const),
+        writes: 0,
+      };
+      entries.set(animation, value);
+      return value;
+    };
+    const pause = () => {
+      const button = [...document.querySelectorAll("button")].find(
+        (node) => node.textContent?.trim() === "暂停放映",
+      );
+      if (!button) throw new Error("The content-clock probe requires the actual pause control.");
+      button.click();
+    };
+    const read = (): ContentClockFrame => ({
+      at: performance.now(),
+      effects: [...entries].flatMap(([animation, value]) =>
+        animation.playState === "idle"
+          ? []
+          : [{ ...value, state: animation.playState, time: Number(animation.currentTime) }],
+      ),
+    });
+    const probe = {
+      frames: [] as ContentClockFrame[],
+      read,
+      pauseAfterPlay: null as "opacity" | "height" | null,
+      excludedPlayId: null as number | null,
+      stopped: false,
+    };
+    target.__contentClock = probe;
+    const currentTime = Object.getOwnPropertyDescriptor(Animation.prototype, "currentTime")!;
+    Object.defineProperty(Animation.prototype, "currentTime", {
+      ...currentTime,
+      set(this: Animation, value: number | CSSNumericValue | null) {
+        currentTime.set!.call(this, value);
+        const observed = entry(this);
+        if (!observed) return;
+        observed.writes++;
+        if (pauseOnCreation && observed.kind === "opacity") {
+          pauseOnCreation = false;
+          // Keep the real play/pause implementation. The UI pauses before the first rendered frame.
+          queueMicrotask(pause);
+        }
+      },
+    });
+    const play = Animation.prototype.play;
+    Animation.prototype.play = function () {
+      play.call(this);
+      const observed = entry(this);
+      if (observed?.kind === probe.pauseAfterPlay && observed?.id !== probe.excludedPlayId) {
+        probe.pauseAfterPlay = null;
+        setTimeout(pause, 35);
+      }
+    };
+    const sample = () => {
+      if (probe.stopped) return;
+      probe.frames.push(read());
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+}
 
 function savedBeats(slug: string) {
   const payload = JSON.parse(
@@ -835,6 +941,133 @@ test("normal action pause: closing step details preserves the paused native cros
   }
   expect(forbidden).toEqual([]);
 });
+
+for (const boundary of ["first-start-paused", "paused-resize", "playing-resize"] as const) {
+  test(`explicit geometry fixture: content crossfade preserves native clocks at ${boundary}`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const beats = savedBeats("personal-website");
+    const start = beats.findIndex((beat) => beat.replayAction?.kind === "questions");
+    const forbidden = await openReplay(page, "personal-website", "慢速");
+    await seek(page, start + 1);
+    // Explicit geometry fixture makes the content-height branch deterministic.
+    // Saved actions and the native animation implementation stay in use.
+    await page.addStyleTag({
+      content:
+        '.console-shell .replay-question-scene { max-height: none; } .replay-question-scene[data-replay-action="questions"] { height: 620px; } .replay-question-scene[data-replay-action="answer"] { height: 360px; }',
+    });
+    await observeContentClock(page);
+    await page.getByRole("button", { name: "继续放映", exact: true }).click();
+    await page.waitForFunction(() => {
+      const effects = (window as ContentClockWindow).__contentClock!.read().effects;
+      return (
+        effects.filter((effect) => effect.kind === "opacity").length === 4 &&
+        effects.some((effect) => effect.kind === "height") &&
+        effects.every((effect) => effect.state === "paused")
+      );
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    const snapshot = () =>
+      page.evaluate(() => (window as ContentClockWindow).__contentClock!.read());
+    const initial = await snapshot();
+    expect(initial.effects.every((effect) => effect.time === 0)).toBe(true);
+    await page.waitForTimeout(80);
+    const initialHeld = await snapshot();
+    expect(initialHeld.effects).toEqual(initial.effects);
+
+    let held = initialHeld;
+    if (boundary === "paused-resize") {
+      await page.setViewportSize({ width: 344, height: 844 });
+      held = await snapshot();
+      const previousHeight = initial.effects.find((effect) => effect.kind === "height")!;
+      const nextHeight = held.effects.find((effect) => effect.kind === "height")!;
+      expect(nextHeight.id).not.toBe(previousHeight.id);
+      expect(nextHeight.state).toBe("paused");
+      expect(nextHeight.time).toBe(0);
+      expect(nextHeight.writes).toBe(1);
+      expect(held.effects.filter((effect) => effect.kind === "opacity")).toEqual(
+        initial.effects.filter((effect) => effect.kind === "opacity"),
+      );
+      await page.waitForTimeout(80);
+      expect((await snapshot()).effects).toEqual(held.effects);
+    } else {
+      await page.evaluate(
+        ({ kind, initialHeightId }) => {
+          const probe = (window as ContentClockWindow).__contentClock!;
+          probe.pauseAfterPlay = kind;
+          probe.excludedPlayId = initialHeightId;
+        },
+        {
+          kind: boundary === "playing-resize" ? ("height" as const) : ("opacity" as const),
+          initialHeightId: initial.effects.find((effect) => effect.kind === "height")!.id,
+        },
+      );
+      await page.getByRole("button", { name: "继续放映", exact: true }).click();
+      if (boundary === "playing-resize") await page.setViewportSize({ width: 344, height: 844 });
+      await expect(page.getByRole("button", { name: "继续放映", exact: true })).toBeVisible();
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      held = await snapshot();
+      expect(held.effects.length).toBe(initial.effects.length);
+      expect(held.effects.every((effect) => effect.state === "paused" && effect.time > 0)).toBe(
+        true,
+      );
+      if (boundary === "playing-resize") {
+        const height = held.effects.find((effect) => effect.kind === "height")!;
+        expect(height.id).not.toBe(initial.effects.find((effect) => effect.kind === "height")!.id);
+        expect(height.writes).toBe(1);
+      }
+    }
+
+    await page.getByRole("button", { name: "继续放映", exact: true }).click();
+    await page.waitForFunction((baseline) => {
+      const current = (window as ContentClockWindow).__contentClock!.read().effects;
+      return baseline.every((previous) =>
+        current.some((effect) => effect.id === previous.id && effect.time > previous.time),
+      );
+    }, held.effects);
+    const record = await page.evaluate(() => {
+      const probe = (window as ContentClockWindow).__contentClock!;
+      probe.stopped = true;
+      return { frames: probe.frames, resumed: probe.read() };
+    });
+    await info.attach(`content-clock-${boundary}`, {
+      body: JSON.stringify({
+        classification: "explicit-css-geometry-fixture-native-waapi-observation",
+        initial,
+        held,
+        ...record,
+      }),
+      contentType: "application/json",
+    });
+    for (const previous of held.effects) {
+      const resumed = record.resumed.effects.find((effect) => effect.id === previous.id)!;
+      expect(resumed).toBeDefined();
+      expect(resumed.state).toBe("running");
+      expect(resumed.writes).toBe(
+        boundary === "playing-resize" && previous.kind === "height" ? 1 : 2,
+      );
+      let last = previous.time;
+      for (const frame of record.frames.filter((frame) => frame.at > held.at)) {
+        const effect = frame.effects.find((effect) => effect.id === previous.id);
+        if (!effect) continue;
+        expect(effect.time).toBeGreaterThanOrEqual(last);
+        last = effect.time;
+      }
+    }
+    expect(forbidden).toEqual([]);
+  });
+}
 
 test("explicit UI fixture: a450ms unknown answer keeps unresolved state and flat old content across the next action", async ({
   page,

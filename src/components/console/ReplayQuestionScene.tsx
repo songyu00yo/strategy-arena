@@ -602,6 +602,8 @@ export function ReplayQuestionScene({
         ...nodes.map((node) => scope.prepare(node, [{ opacity: 0 }, { opacity: 1 }], timing)),
       ];
       const animationStarts = new Map<Animation, number>();
+      // Initialize each effect once. Native hold time remains authoritative on resume.
+      const startedAnimations = new WeakSet<Animation>();
       let heightAnimation: Animation | null = null;
       if (geometry) {
         element.style.height = `${old.height}px`;
@@ -646,8 +648,11 @@ export function ReplayQuestionScene({
           for (const part of animations) {
             if (!playing) part.pause();
             else {
-              part.playbackRate = rate;
-              part.currentTime = Math.max(0, next.elapsed - (animationStarts.get(part) ?? began));
+              if (!startedAnimations.has(part)) {
+                part.playbackRate = rate;
+                part.currentTime = Math.max(0, next.elapsed - (animationStarts.get(part) ?? began));
+                startedAnimations.add(part);
+              }
               part.play();
             }
           }
@@ -663,19 +668,25 @@ export function ReplayQuestionScene({
         element.style.height = originalHeight;
         const target = element.offsetHeight;
         element.style.height = `${current}px`;
-        const next = timeline?.read();
-        const remaining = Math.max(1, span - ((next?.elapsed ?? began) - began));
+        const next = timeline?.read() ?? frameRef.current;
+        const sameStep = next.stepId === activeStepId;
+        const logicalNow = sameStep ? next.elapsed : began;
+        const remaining = Math.max(1, span - (logicalNow - began));
         heightAnimation = scope.prepare(
           element,
           [{ height: `${current}px` }, { height: `${target}px` }],
           { ...timing, duration: remaining },
         );
         animations[index] = heightAnimation;
-        animationStarts.set(heightAnimation, next?.elapsed ?? began);
+        animationStarts.set(heightAnimation, logicalNow);
         heightAnimation.pause();
         heightAnimation.currentTime = 0;
         heightAnimation.playbackRate = playbackRate.current;
-        if (running) heightAnimation.play();
+        const shouldPlay = sameStep && next.running && !motionPaused();
+        if (shouldPlay) {
+          heightAnimation.play();
+          startedAnimations.add(heightAnimation);
+        }
         refresh.current();
       };
       contentMotion.current = { stepId: activeStepId, geometry, paint, resize, finish };

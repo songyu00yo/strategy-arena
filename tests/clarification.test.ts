@@ -4,6 +4,7 @@ import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DecisionItemSchema,
+  HandoffReviewSchema,
   type DecisionItem,
   type HandoffReview,
 } from "../src/lib/clarification-contracts";
@@ -13,16 +14,24 @@ import { closeDb, db } from "../src/lib/server/db";
 import { createArena, newVersion, refreshRequirements } from "../src/lib/server/runtime";
 import {
   emptyClarification,
+  clarificationFingerprint,
+  clarificationProtocolHash,
+  clarificationReviewConfig,
   formatClarification,
   runClarification,
 } from "../src/lib/server/clarification";
 import { ChallengeSchema } from "../src/lib/contracts";
 
-const fixture = vi.hoisted(() => ({ generate: vi.fn(), gap: false }));
-vi.mock("../src/lib/server/model", async (original) => ({
-  ...(await original<typeof import("../src/lib/server/model")>()),
-  generateStructured: fixture.generate,
-}));
+const fixture = vi.hoisted(() => ({ generate: vi.fn(), estimate: vi.fn(), gap: false }));
+vi.mock("../src/lib/server/model", async (original) => {
+  const actual = await original<typeof import("../src/lib/server/model")>();
+  fixture.estimate.mockImplementation(actual.estimateStructuredCall);
+  return {
+    ...actual,
+    generateStructured: fixture.generate,
+    estimateStructuredCall: fixture.estimate,
+  };
+});
 import { ModelCallError, resolveModelConfig } from "../src/lib/server/model";
 import {
   analyzeIntake,
@@ -30,6 +39,8 @@ import {
   getIntake,
   submitClarificationIntake,
   updateIntake,
+  addIntakeAttachment,
+  removeIntakeAttachment,
 } from "../src/lib/server/intakes";
 
 const owner = "explicit-clarification-test-owner";
@@ -289,6 +300,7 @@ beforeEach(() => {
   closeDb();
   fixture.gap = false;
   fixture.generate.mockReset();
+  fixture.estimate.mockClear();
   for (const [key, value] of Object.entries({
     ARENA_DATABASE_PATH: ":memory:",
     OPENAI_API_KEY: "explicit-test-double",
@@ -321,6 +333,458 @@ afterEach(() => {
 });
 
 describe("explicit clarification workflow with model test doubles", () => {
+  it.each([
+    "goal",
+    "constraints",
+    "preferences",
+    "budget",
+    "timeHours",
+    "options",
+    "domain",
+    "assumptions",
+  ] as const)("invalidates both report outputs when summary $0 changes", async (field) => {
+    const draft = await answeredDraft();
+    const challenge = { ...draft.challenge! };
+    const changes = {
+      goal: "更改为明确的新目标并继续逐项确认",
+      constraints: "不得采集联系方式",
+      preferences: "新的风格",
+      budget: 10,
+      timeHours: 8,
+      options: ["单页成果"],
+      domain: "work" as const,
+    };
+    if (field !== "assumptions") Object.assign(challenge, { [field]: changes[field] });
+    const updated = updateIntake(draft.id, owner, {
+      revision: draft.revision,
+      summary: {
+        challenge,
+        assumptions: field === "assumptions" ? ["新增待核实前提"] : draft.assumptions,
+      },
+    });
+    expect(updated.clarification).toMatchObject({
+      review: null,
+      specification: "",
+      executionPrompt: "",
+      draftOnly: true,
+    });
+    const stored = JSON.parse(
+      (db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as { body: string })
+        .body,
+    ) as IntakeDraft;
+    expect(stored.clarification?.specification).toBe("");
+    expect(stored.clarification?.executionPrompt).toBe("");
+    expect(updated.confirmation?.history.at(-1)?.answers).toEqual(draft.answers);
+    expect(updated.clarification?.runs).toEqual(draft.clarification?.runs);
+    expect(updated.confirmation?.summary).toEqual(draft.confirmation?.summary);
+  });
+
+  it("invalidates historical draft edits, downstream confirmations and obsolete question queues", async () => {
+    const draft = await answeredDraft("真实报名");
+    const body = JSON.parse(
+      (db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as { body: string })
+        .body,
+    ) as IntakeDraft;
+    body.queuedQuestions = [question(item("obsolete", "content", "过期问题"))];
+    const downstream = item("export_fields", "function", "导出字段", ["real_fields"]);
+    const independent = item("independent", "style", "独立偏好");
+    const independentAnswer: RecordedAnswer = {
+      questionId: independent.id,
+      question: question(independent),
+      state: "answered",
+      value: "保持原样",
+      confirmation: "confirmed",
+    };
+    body.answers.push(
+      {
+        questionId: downstream.id,
+        question: question(downstream),
+        state: "answered",
+        value: "导出原字段",
+        confirmation: "confirmed",
+      },
+      independentAnswer,
+    );
+    const originalAnswers = structuredClone(body.answers);
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(body), draft.id);
+    const updated = updateIntake(draft.id, owner, {
+      revision: draft.revision,
+      answerMode: "draft",
+      answers: [{ questionId: "purpose", state: "answered", value: "仅做界面演示" }],
+    });
+    expect(updated.queuedQuestions).toEqual([]);
+    expect(updated.answers.find((entry) => entry.questionId === "purpose")).toMatchObject({
+      confirmation: "pending",
+      needsReconfirmation: true,
+    });
+    expect(updated.answers.find((entry) => entry.questionId === "real_fields")).toMatchObject({
+      confirmation: "pending",
+      needsReconfirmation: true,
+    });
+    expect(updated.answers.find((entry) => entry.questionId === downstream.id)).toMatchObject({
+      confirmation: "pending",
+      needsReconfirmation: true,
+    });
+    expect(updated.answers.find((entry) => entry.questionId === independent.id)).toEqual(
+      independentAnswer,
+    );
+    expect(updated.clarification).toMatchObject({
+      review: null,
+      specification: "",
+      executionPrompt: "",
+    });
+    expect(getIntake(draft.id, owner).answers).toEqual(updated.answers);
+    expect(updated.confirmation?.history.at(-1)?.answers).toEqual(originalAnswers);
+  });
+
+  it.each([{ assumptions: [] as string[] }, { assumptions: ["用户改写的暂定前提，仍待核实"] }])(
+    "preserves user-retained assumptions through reload and explicit analysis: %j",
+    async ({ assumptions }) => {
+      const draft = await answeredDraft();
+      const removed = draft.assumptions[0];
+      expect(removed).toBeTruthy();
+      updateIntake(draft.id, owner, {
+        revision: draft.revision,
+        summary: { challenge: draft.challenge!, assumptions },
+      });
+      const saved = getIntake(draft.id, owner);
+      expect(saved.assumptions).toEqual(assumptions);
+      expect(saved.clarification?.specification).toBe("");
+      const before = fixture.generate.mock.calls.length;
+      const analyzed = await next(saved);
+      expect(analyzed.assumptions).toEqual(assumptions);
+      expect(analyzed.clarification?.suggestions).toEqual(assumptions);
+      for (const [request] of fixture.generate.mock.calls.slice(before)) {
+        expect(request.input.assumptions).toEqual(assumptions);
+        expect(request.input.editedAssumptions).toEqual(assumptions);
+      }
+      expect(analyzed.clarification?.specification).not.toContain(removed);
+      expect(analyzed.clarification?.executionPrompt).not.toContain(removed);
+      expect(analyzed.confirmation?.summary).toBeUndefined();
+      expect(
+        analyzed.clarification?.runs.some(
+          (run) =>
+            run.role === "A" &&
+            "suggestions" in run.output &&
+            run.output.suggestions.includes(removed),
+        ),
+      ).toBe(true);
+      expect(getIntake(draft.id, owner).assumptions).toEqual(assumptions);
+    },
+  );
+
+  it("invalidates reports after model and attachment changes", async () => {
+    let draft = await answeredDraft();
+    draft = updateIntake(draft.id, owner, { revision: draft.revision, modelMode: "gpt-6.1-sol" });
+    expect(draft.clarification).toMatchObject({
+      review: null,
+      specification: "",
+      executionPrompt: "",
+    });
+    draft = await next(draft);
+    draft = await addIntakeAttachment(
+      draft.id,
+      owner,
+      Buffer.from("明确标记的测试材料"),
+      "test.txt",
+    );
+    expect(draft.clarification).toMatchObject({
+      review: null,
+      specification: "",
+      executionPrompt: "",
+    });
+    draft = await next(draft);
+    const removed = removeIntakeAttachment(draft.id, owner, draft.attachments[0].id);
+    expect(removed.clarification).toMatchObject({
+      review: null,
+      specification: "",
+      executionPrompt: "",
+    });
+  });
+
+  it.each(["summary", "analyzing", "uncertain"] as const)(
+    "projects old protocol reports without mutating the stored $0 draft or call locks",
+    async (status) => {
+      const draft = await answeredDraft();
+      const body = JSON.parse(
+        (
+          db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+            body: string;
+          }
+        ).body,
+      );
+      body.clarificationPromptHash = "legacy-protocol";
+      body.status = status;
+      body.reservedUsd = 0.4;
+      body.clarification.next = "completed";
+      const operationId = randomUUID();
+      db()
+        .prepare(
+          "INSERT INTO intake_operations(id,draft_id,revision,body,state,updated_at) VALUES(?,?,?,?,?,?)",
+        )
+        .run(
+          operationId,
+          draft.id,
+          draft.revision,
+          "{}",
+          status === "uncertain" ? "uncertain" : "pending",
+          Date.now(),
+        );
+      const serialized = JSON.stringify(body);
+      db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(serialized, draft.id);
+      const operations = db()
+        .prepare("SELECT * FROM intake_operations WHERE draft_id=?")
+        .all(draft.id);
+      const calls = db().prepare("SELECT * FROM intake_calls ORDER BY rowid").all();
+      const projected = getIntake(draft.id, owner);
+      expect(projected).toMatchObject({ status, revision: draft.revision, reservedUsd: 0.4 });
+      expect(projected.clarification).toMatchObject({
+        review: null,
+        specification: "",
+        executionPrompt: "",
+        draftOnly: true,
+      });
+      expect(projected.answers).toEqual(body.answers);
+      expect(projected.confirmation).toEqual(body.confirmation);
+      expect(
+        (
+          db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+            body: string;
+          }
+        ).body,
+      ).toBe(serialized);
+      expect(
+        db().prepare("SELECT * FROM intake_operations WHERE draft_id=?").all(draft.id),
+      ).toEqual(operations);
+      expect(db().prepare("SELECT * FROM intake_calls ORDER BY rowid").all()).toEqual(calls);
+    },
+  );
+
+  it("binds reports to final summary content and hides changed-input reports read-only", async () => {
+    const draft = await answeredDraft();
+    expect(draft.clarification?.review?.fingerprint).toBe(clarificationFingerprint(draft));
+    expect(draft.clarification?.specification).not.toBe("");
+    const row = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+      body: string;
+    };
+    const body = JSON.parse(row.body);
+    body.modelMode = "gpt-6.1-sol";
+    const changed = JSON.stringify(body);
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(changed, draft.id);
+    expect(getIntake(draft.id, owner).clarification?.specification).toBe("");
+    expect(
+      (db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as { body: string })
+        .body,
+    ).toBe(changed);
+  });
+
+  it("includes attachment state, provenance and feedback in the content fingerprint", () => {
+    const draft = create();
+    draft.sources = [
+      {
+        id: "s1",
+        attachmentId: "a1",
+        filename: "test.txt",
+        location: "1",
+        text: "材料",
+        interpretation: false,
+        origin: "document",
+      },
+    ];
+    draft.attachments = [
+      {
+        id: "a1",
+        name: "test.txt",
+        size: 6,
+        state: "ready",
+        imageCount: 0,
+        interpreted: false,
+        locations: ["1"],
+        warnings: [],
+      },
+    ];
+    draft.clarification = emptyClarification();
+    const initial = clarificationFingerprint(draft);
+    for (const change of [
+      (value: IntakeDraft) => {
+        value.sources[0].origin = "model_transcription";
+      },
+      (value: IntakeDraft) => {
+        value.attachments[0].state = "failed";
+      },
+      (value: IntakeDraft) => {
+        value.clarification!.feedback = [
+          { kind: "user_change", text: "变更需求", createdAt: "test", source: "user" },
+        ];
+      },
+    ]) {
+      const changed = structuredClone(draft);
+      change(changed);
+      expect(clarificationFingerprint(changed)).not.toBe(initial);
+    }
+    draft.revision++;
+    expect(clarificationFingerprint(draft)).toBe(initial);
+  });
+
+  it.each([undefined, "1800", "4000", "5000", "6000"])(
+    "reserves and sends the same C configuration with explicit output override %s",
+    async (override) => {
+      vi.stubEnv("OPENAI_MAX_OUTPUT_TOKENS", override);
+      await answeredDraft();
+      const requests = fixture.generate.mock.calls.map(([request]) => request);
+      for (const request of requests) {
+        const expected = override
+          ? Number(override)
+          : request.name === "clarification_review"
+            ? 4200
+            : 2200;
+        expect(request.config.maxOutputTokens).toBe(expected);
+        const reserved = fixture.estimate.mock.calls.find(
+          ([estimate]) => estimate.name === request.name && estimate.config === request.config,
+        );
+        expect(reserved).toBeDefined();
+      }
+      expect(requests.find((request) => request.name === "clarification_review").allowRepair).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each([undefined, "1800", "4000", "5000", "6000"])(
+    "respects DeepSeek explicit output override %s",
+    (override) => {
+      vi.stubEnv("MODEL_MAX_OUTPUT_TOKENS", override);
+      const config = {
+        ...resolveModelConfig("gpt-6.1-terra"),
+        provider: "deepseek" as const,
+        maxOutputTokens: override ? Number(override) : 2200,
+      };
+      expect(clarificationReviewConfig(config).maxOutputTokens).toBe(
+        override ? Number(override) : 4200,
+      );
+      expect(config.maxOutputTokens).toBe(override ? Number(override) : 2200);
+    },
+  );
+
+  it("does not retry a failed C report or create a formal version", async () => {
+    const draft = await answeredDraft();
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_review") {
+        expect(request.allowRepair).toBe(false);
+        throw new ModelCallError("明确标注的C截断/结构错误测试替身", false, response(null).usage, {
+          feedback: "结构不完整",
+          rejectedOutput: "{",
+        });
+      }
+      return response(modelValue(request.name, request.input));
+    });
+    const prior = fixture.generate.mock.calls.length;
+    const failed = await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    expect("versions" in failed).toBe(false);
+    expect(getIntake(draft.id, owner)).toMatchObject({
+      status: "failed",
+      clarification: { review: null, specification: "", executionPrompt: "" },
+    });
+    expect(fixture.generate.mock.calls.slice(prior).map(([request]) => request.name)).toEqual([
+      "clarification_decompose",
+      "clarification_options",
+      "clarification_review",
+    ]);
+    expect(db().prepare("SELECT count(*) AS count FROM arenas").get()).toMatchObject({ count: 0 });
+    expect(
+      db().prepare("SELECT state,usage FROM intake_calls ORDER BY rowid DESC LIMIT 1").get(),
+    ).toMatchObject({
+      state: "failed",
+      usage: expect.stringContaining("explicit-clarification-test-double"),
+    });
+  });
+
+  it("rejects an old protocol completed draft at the final createArena boundary", async () => {
+    const draft = await answeredDraft();
+    const row = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+      body: string;
+    };
+    const body = JSON.parse(row.body);
+    body.clarificationPromptHash = "legacy";
+    body.clarification.next = "completed";
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(body), draft.id);
+    expect(() =>
+      createArena(draft.challenge!, owner, draft.modelMode, {
+        intakeId: draft.id,
+        revision: draft.revision,
+      }),
+    ).toThrow("需求查漏协议已更新");
+  });
+
+  it("rejects stale completed retries and rechecks old-protocol reports after a quota failure", async () => {
+    let draft = await answeredDraft();
+    const staleRevision = draft.revision;
+    vi.stubEnv("ARENA_USAGE_LIMITS_ENABLED", "true");
+    vi.stubEnv("ARENA_DAILY_VISITOR_LIMIT", "1");
+    createArena(ChallengeSchema.parse({ goal: "占用测试配额的独立任务" }), owner, "gpt-6.1-terra");
+    await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    draft = getIntake(draft.id, owner);
+    expect(draft.clarification?.next).toBe("completed");
+    const row = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+      body: string;
+    };
+    const body = JSON.parse(row.body);
+    body.clarificationPromptHash = "legacy-completed";
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(body), draft.id);
+    vi.stubEnv("ARENA_DAILY_VISITOR_LIMIT", "100");
+    await expect(
+      submitClarificationIntake(draft.id, owner, {
+        revision: staleRevision,
+        challenge: draft.challenge!,
+        assumptions: [],
+      }),
+    ).rejects.toMatchObject({ code: "STALE_INTAKE" });
+    const before = fixture.generate.mock.calls.length;
+    const delivered = await submitClarificationIntake(draft.id, owner, {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    });
+    expect("versions" in delivered).toBe(true);
+    expect(fixture.generate.mock.calls.length - before).toBe(3);
+    expect(
+      JSON.parse(
+        (
+          db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+            body: string;
+          }
+        ).body,
+      ).clarificationPromptHash,
+    ).toBe(clarificationProtocolHash());
+  });
+
+  it("allows one concurrent explicit submit to create the version", async () => {
+    const draft = await answeredDraft();
+    const input = {
+      revision: draft.revision,
+      challenge: draft.challenge!,
+      assumptions: draft.assumptions,
+    };
+    const results = await Promise.allSettled([
+      submitClarificationIntake(draft.id, owner, input),
+      submitClarificationIntake(draft.id, owner, input),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(db().prepare("SELECT count(*) AS count FROM arenas").get()).toMatchObject({ count: 1 });
+    expect(db().prepare("SELECT count(*) AS count FROM versions").get()).toMatchObject({
+      count: 1,
+    });
+  });
+
   it("opts in without changing legacy drafts and persists independent A and B calls before user questions", async () => {
     expect(createIntake(owner, { goal, modelMode: "gpt-6.1-terra" }).workflow).toBeUndefined();
     const draft = await next(create());
@@ -357,6 +821,7 @@ describe("explicit clarification workflow with model test doubles", () => {
   it("rejects an old C readiness fingerprint when the saved requirements have changed", async () => {
     const draft = await answeredDraft();
     expect(draft.clarification?.review?.ready).toBe(true);
+    expect(draft.clarification?.draftOnly).toBe(true);
     const changed = structuredClone(draft);
     changed.goal = "本人已更换目标，旧查漏结论不能继续使用";
     changed.challenge = { ...changed.challenge!, goal: changed.goal };
@@ -614,6 +1079,65 @@ describe("explicit clarification workflow with model test doubles", () => {
     expect(pending.clarification?.draftOnly).toBe(true);
   });
 
+  it("upgrades a legacy clarification prompt hash without discarding the draft or its answers", async () => {
+    const draft = await answeredDraft();
+    const row = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+      body: string;
+    };
+    const stored = JSON.parse(row.body) as Record<string, unknown>;
+    stored.clarificationPromptHash = "legacy-clarification-prompt-hash";
+    const legacyState = stored.clarification as Record<string, unknown>;
+    legacyState.specification = "旧协议生成的报告";
+    legacyState.executionPrompt = "旧协议生成的提示词";
+    db()
+      .prepare("UPDATE intake_drafts SET body=? WHERE id=?")
+      .run(JSON.stringify(stored), draft.id);
+
+    const before = getIntake(draft.id, owner);
+    const updated = await analyzeIntake(draft.id, owner, {
+      revision: before.revision,
+      operationId: randomUUID(),
+      finish: false,
+    });
+    expect(updated.answers).toEqual(before.answers);
+    expect(updated.confirmation).toEqual(before.confirmation);
+    expect(updated.clarification?.runs.slice(0, before.clarification!.runs.length)).toEqual(
+      before.clarification!.runs,
+    );
+    expect(updated.clarification?.review).not.toBeNull();
+    expect(updated.clarification?.specification).not.toContain("旧协议生成的报告");
+    expect(updated.clarification?.executionPrompt).not.toContain("旧协议生成的提示词");
+    expect(updated.clarification?.draftOnly).toBe(true);
+  });
+
+  it("preserves the uncertain-request lock when a draft has an older prompt hash", async () => {
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_options")
+        throw new ModelCallError("明确标记的未知结果测试替身", true);
+      return response(modelValue(request.name, request.input));
+    });
+    const draft = await next(create());
+    expect(draft.status).toBe("uncertain");
+    const row = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as {
+      body: string;
+    };
+    const stored = JSON.parse(row.body) as Record<string, unknown>;
+    stored.clarificationPromptHash = "legacy-uncertain-prompt-hash";
+    db()
+      .prepare("UPDATE intake_drafts SET body=? WHERE id=?")
+      .run(JSON.stringify(stored), draft.id);
+
+    await expect(next(getIntake(draft.id, owner))).rejects.toMatchObject({
+      code: "INTAKE_UNCERTAIN",
+    });
+    expect(fixture.generate).toHaveBeenCalledTimes(2);
+    expect(getIntake(draft.id, owner).status).toBe("uncertain");
+    expect(db().prepare("SELECT state FROM intake_calls ORDER BY rowid").all()).toMatchObject([
+      { state: "completed" },
+      { state: "uncertain" },
+    ]);
+  });
+
   it("reconfirms changed requirements and delivers a new version within the same task", async () => {
     const draft = await answeredDraft();
     const first = await submitClarificationIntake(draft.id, owner, {
@@ -623,6 +1147,7 @@ describe("explicit clarification workflow with model test doubles", () => {
     });
     if (!("versions" in first)) throw new Error("Expected explicit test-double handoff snapshot");
     const original = first.versions.find((version) => version.id === first.activeVersionId)!;
+    expect(original.clarification?.draftOnly).toBe(false);
     const changed = newVersion(
       first.id,
       owner,
@@ -662,6 +1187,10 @@ describe("explicit clarification workflow with model test doubles", () => {
       delivered.versions.find((version) => version.id === original.id)?.clarification
         ?.executionPrompt,
     ).toBe(original.clarification?.executionPrompt);
+    const historical = delivered.versions.find((version) => version.id === original.id)!;
+    expect(historical.challenge).toEqual(original.challenge);
+    expect(historical.intake).toEqual(original.intake);
+    expect(historical.clarification).toEqual(original.clarification);
     expect(delivered.steps.filter((step) => step.versionId === current.id)).toEqual([]);
   });
 
@@ -689,7 +1218,8 @@ describe("explicit clarification workflow with model test doubles", () => {
     expect(draft.clarification?.review?.ready ?? false).toBe(false);
     expect(draft.clarification?.executionPrompt).not.toContain("活泼明亮");
     expect(draft.clarification?.executionPrompt).not.toContain("简洁正式");
-    expect(draft.clarification?.specification).toContain("偏好与风格的摘要修改尚待确认");
+    expect(draft.confirmation?.pendingSummaryFields).toContain("preferences");
+    expect(draft.clarification?.specification).toBe("");
     expect(draft.questions.map((entry) => entry.id)).toContain("style");
     draft = await next(answer(draft, { style: "活泼明亮" }));
     const submitted = await submitClarificationIntake(draft.id, owner, {
@@ -778,7 +1308,14 @@ describe("explicit clarification workflow with model test doubles", () => {
     const confirmed = await execute(true);
     expect(confirmed.state.review?.ready).toBe(true);
     expect(confirmed.state.executionPrompt).toContain("新的活泼风格");
-    expect(confirmed.state.executionPrompt).not.toContain("简洁正式");
+    expect(confirmed.state.executionPrompt).toContain(
+      `原始目标（原始输入，不自动视为确认）：${challenge.goal}`,
+    );
+    const currentInstructions = confirmed.state.executionPrompt
+      .split("\n")
+      .filter((line) => !line.startsWith("原始目标（"))
+      .join("\n");
+    expect(currentInstructions).not.toContain("简洁正式");
   });
 
   it.each([
@@ -834,10 +1371,194 @@ describe("explicit clarification workflow with model test doubles", () => {
       });
       expect(result.status).toBe("questions");
       expect(result.state.draftOnly).toBe(true);
-      expect(result.state.executionPrompt).toContain("原始目标（相关修改待确认）");
+      expect(result.state.executionPrompt).toContain("原始目标（原始输入，不自动视为确认）");
       expect(result.state.executionPrompt).not.toContain(`- ${quote}`);
     },
   );
+
+  it("adds evidence-bounded planning sections without invoking a model", () => {
+    const draft = create();
+    const state = emptyClarification();
+    state.draftOnly = true;
+    formatClarification(draft, state, ChallengeSchema.parse({ goal }));
+
+    expect(state.specification).toContain("# 需求草稿");
+    for (const heading of [
+      "可行性分析",
+      "已确认需求（正式依据）",
+      "产品与实施规划",
+      "风险、假设与待核实",
+    ])
+      expect(state.specification).toContain(`## ${heading}`);
+    expect(state.specification).toContain("需求确认只代表用户同意该要求，不证明技术上可实现");
+    expect(state.specification).toContain("5. 发布复盘");
+    expect(fixture.generate).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps report suggestions, conflicts and unread materials visible outside confirmed facts", () => {
+    const draft = create();
+    draft.attachments = [
+      {
+        id: "incomplete-material",
+        name: "未读材料.pdf",
+        size: 12,
+        state: "needs_pages",
+        imageCount: 0,
+        interpreted: false,
+        locations: [],
+        warnings: [],
+        error: "缺少第2页",
+      },
+    ];
+    const state = emptyClarification();
+    state.draftOnly = true;
+    state.suggestions = ["建议购买外部服务"];
+    state.conflicts = ["用户对公开范围的回答冲突"];
+    formatClarification(draft, state, ChallengeSchema.parse({ goal }));
+
+    const facts = state.specification.split("## 已确认需求（正式依据）\n")[1].split("\n## ")[0];
+    expect(facts).not.toContain(state.suggestions[0]);
+    expect(facts).not.toContain(state.conflicts[0]);
+    expect(state.specification).toContain("AI 建议/假设（待确认或验证）：建议购买外部服务");
+    expect(state.specification).toContain("冲突（待解决）：用户对公开范围的回答冲突");
+    expect(state.specification).toContain("材料缺口：未读材料.pdf — 缺少第2页");
+    expect(state.specification).toContain("材料处理缺口：未读材料.pdf — 缺少第2页");
+    expect(state.specification).not.toContain("综合判断：需求覆盖较完整");
+    expect(state.executionPrompt).not.toContain(state.suggestions[0]);
+  });
+
+  it("keeps original input and unconfirmed summary values out of the confirmed-facts section", () => {
+    const draft = create("原始目标尚待细化，请继续向我提问");
+    const state = emptyClarification();
+    state.draftOnly = true;
+    const inferred = ChallengeSchema.parse({
+      goal: draft.goal,
+      constraints: "模型推断必须购买收费服务",
+      preferences: "模型推断采用炫彩风格",
+    });
+    formatClarification(draft, state, inferred);
+
+    const facts = state.specification.split("## 已确认需求（正式依据）\n")[1].split("\n## ")[0];
+    expect(state.specification).toContain(`## 原始输入目标（未自动视为确认）\n${draft.goal}`);
+    expect(facts).not.toContain(draft.goal);
+    expect(facts).not.toContain(inferred.constraints);
+    expect(facts).not.toContain(inferred.preferences);
+    expect(facts).toContain("尚无正式确认摘要或已确认回答");
+  });
+
+  it("does not report complete coverage before C has reviewed the current requirements", () => {
+    const draft = create();
+    const state = emptyClarification();
+    state.draftOnly = true;
+    formatClarification(draft, state, ChallengeSchema.parse({ goal }));
+
+    expect(state.review).toBeNull();
+    expect(state.specification).toContain("功能：尚未完成 C 角色查漏");
+    expect(state.specification).toContain("内容：尚未完成 C 角色查漏");
+    expect(state.specification).toContain("流程：尚未完成 C 角色查漏");
+    expect(state.specification).not.toContain("需求层面已覆盖");
+    expect(state.specification).not.toContain("综合判断：需求覆盖较完整");
+  });
+
+  it("preserves unknown confirmed budget and time as evidence gaps", () => {
+    const summary = ChallengeSchema.parse({ goal, budget: null, timeHours: null });
+    const draft: IntakeDraft = {
+      ...create(),
+      challenge: summary,
+      confirmation: {
+        history: [],
+        summary: { revision: 1, confirmedAt: new Date().toISOString(), challenge: summary },
+      },
+    };
+    const state = emptyClarification();
+    formatClarification(draft, state, summary);
+
+    expect(state.specification).not.toContain("授权与资源：已覆盖");
+    expect(state.specification).toContain("预算边界：未知");
+    expect(state.specification).toContain("时间边界：未知");
+    expect(state.specification).not.toContain("综合判断：需求覆盖较完整");
+    expect(state.executionPrompt).not.toContain("金额上限（人民币元） — 0");
+    expect(state.executionPrompt).not.toContain("时间上限（小时） — 0");
+  });
+
+  it("withholds pending summary and retired answers from confirmed report facts", () => {
+    const summary = ChallengeSchema.parse({
+      goal,
+      constraints: "未确认的公开报名要求",
+      budget: 300,
+      timeHours: 12,
+    });
+    const draft: IntakeDraft = {
+      ...create(),
+      challenge: summary,
+      confirmation: {
+        history: [],
+        summary: { revision: 1, confirmedAt: new Date().toISOString(), challenge: summary },
+        pendingSummaryFields: ["goal", "constraints", "budget", "timeHours"],
+      },
+    };
+    const retired = item("retired_detail", "content", "旧版收集内容");
+    draft.answers = [
+      {
+        questionId: retired.id,
+        question: question(retired),
+        state: "answered",
+        value: "旧版收集身份证号",
+        confirmation: "confirmed",
+      },
+    ];
+    const state = emptyClarification();
+    state.items = [retired];
+    state.retiredIds = [retired.id];
+    state.draftOnly = true;
+    formatClarification(draft, state, summary);
+
+    const facts = state.specification.split("## 已确认需求（正式依据）\n")[1].split("\n## ")[0];
+    expect(facts).not.toContain(summary.goal);
+    expect(facts).not.toContain(summary.constraints);
+    expect(facts).not.toContain("金额上限（人民币元） — 300");
+    expect(facts).not.toContain("旧版收集身份证号");
+    expect(state.specification).toContain("要求的摘要修改尚待确认");
+    expect(state.specification).toContain("金额的摘要修改尚待确认");
+    expect(state.specification).toContain("预算边界：未知");
+    expect(state.specification).toContain("时间边界：未知");
+    expect(state.executionPrompt).not.toContain(`用户确认摘要：${summary.goal}`);
+  });
+
+  it("requires confirmation of undecided tasks and preserves explicit delegation boundaries", () => {
+    const draft = create();
+    const state = emptyClarification();
+    state.draftOnly = true;
+    state.items = [item("storage", "function", "如何保存报名信息")];
+    formatClarification(draft, state, ChallengeSchema.parse({ goal }));
+
+    expect(state.specification).toContain(
+      "未确认事项先向用户确认；用户已明确授权自定的事项，按授权范围处理并记录依据",
+    );
+    expect(state.specification).not.toContain("采用可撤销默认值");
+    expect(state.executionPrompt).toContain("未决，不得擅自决定");
+    expect(state.executionPrompt).toContain("当前为草稿/预览，禁止直接执行");
+  });
+
+  it("keeps legacy C reports readable while requiring report fields in the strict output schema", () => {
+    const legacy = { summary: "旧查漏记录", ready: false, coverage: [], gaps: [], conflicts: [] };
+    const parsed = HandoffReviewSchema.parse(legacy);
+    const strict = toStrictToolSchema(z.toJSONSchema(HandoffReviewSchema));
+    const reportFields = ["feasibility", "implementationPlan", "tradeoffs", "risks"] as const;
+    for (const field of reportFields) {
+      expect(parsed[field]).toEqual([]);
+      expect(strict.required).toContain(field);
+    }
+    expect(JSON.stringify(strict)).not.toContain('"default"');
+    expect(strict.additionalProperties).toBe(false);
+    expect(
+      HandoffReviewSchema.safeParse({
+        ...legacy,
+        feasibility: [{ dimension: "technical", status: "supported" }],
+      }).success,
+    ).toBe(false);
+  });
 
   it("exports every confirmed advanced summary field including zero while withholding pending or inferred values", () => {
     // Stored zero-hour records remain readable. New inputs keep the existing positive-hour validator.
@@ -887,6 +1608,145 @@ describe("explicit clarification workflow with model test doubles", () => {
     formatClarification(draft, state, inferred);
     expect(state.executionPrompt).not.toContain("金额上限（人民币元）");
     expect(state.executionPrompt).not.toContain("时间上限（小时）");
+  });
+
+  it("does not promote unconfirmed challenge fields or model-derived sources into confirmed facts", () => {
+    const draft = create();
+    draft.challenge = ChallengeSchema.parse({
+      goal: "模型暂时整理出的项目目标描述",
+      constraints: "模型暂时推断的硬性要求",
+      preferences: "模型暂时推断的视觉偏好",
+      budget: null,
+      timeHours: null,
+    });
+    draft.sources = [
+      {
+        id: "S-doc",
+        attachmentId: "a1",
+        filename: "brief.md",
+        location: "第 1 段",
+        text: "原文",
+        interpretation: false,
+        origin: "document",
+      },
+      {
+        id: "S-trans",
+        attachmentId: "a2",
+        filename: "scan.png",
+        location: "第 1 页",
+        text: "转录",
+        interpretation: false,
+        origin: "model_transcription",
+      },
+      {
+        id: "S-interp",
+        attachmentId: "a3",
+        filename: "scan.png",
+        location: "第 1 页",
+        text: "解读",
+        interpretation: true,
+        origin: "model_interpretation",
+      },
+      {
+        id: "S-unknown",
+        attachmentId: "a4",
+        filename: "old.pdf",
+        location: "第 2 页",
+        text: "来源未记录",
+        interpretation: false,
+      },
+    ];
+    const state = emptyClarification();
+    formatClarification(draft, state, draft.challenge);
+    expect(state.specification).toContain("原始输入目标（未自动视为确认）");
+    expect(state.specification).not.toContain("用户确认的摘要");
+    expect(state.specification).not.toContain("模型暂时推断的硬性要求");
+    expect(state.specification).toContain("附件原文（来源材料，不等同用户确认）");
+    expect(state.specification).toContain("模型转录（需对照原图核验）");
+    expect(state.specification).toContain("模型解读（推论，不作为原始事实）");
+    expect(state.specification).toContain("来源不明（不可升级为原始事实）");
+    expect(state.specification).toContain("尚未完成 C 角色查漏");
+    expect(state.specification).toContain("预算上限未知");
+    expect(state.specification).toContain("可投入时间未知");
+    expect(state.executionPrompt).toContain("用户尚未确认正式摘要");
+    expect(state.executionPrompt).not.toContain("模型暂时推断的视觉偏好");
+
+    const reviewed = emptyClarification();
+    reviewed.draftOnly = true;
+    reviewed.review = {
+      summary: "【AI分析】初步可行，但需验证 API 限制",
+      ready: false,
+      coverage: [],
+      gaps: [],
+      conflicts: [],
+      feasibility: [
+        {
+          dimension: "technical",
+          status: "conditional",
+          assessment: "可采用现有系统能力，但尚未验证并发上限",
+          basis: "依据原始目标和用户确认的功能范围；没有服务端压测数据",
+          uncertainty: "实际并发能力未知",
+          validation: "在目标环境执行 50 并发压力测试并记录 P95 延迟",
+        },
+      ],
+      implementationPlan: [
+        {
+          phase: "最小闭环",
+          objective: "验证用户主路径",
+          tasks: ["实现提交表单", "保存结果"],
+          dependencies: ["确认数据字段"],
+          deliverables: ["可运行的端到端演示"],
+          acceptance: ["成功提交后可读取结果"],
+          estimate: "待验证，暂不承诺工时",
+          estimateBasis: "尚无目标环境和人员投入信息",
+          estimateUncertainty: "接口复杂度和数据权限未核实",
+        },
+      ],
+      tradeoffs: [
+        {
+          decision: "数据保存方式",
+          options: [
+            { option: "本地保存", benefit: "实现简单", cost: "跨设备同步弱" },
+            { option: "服务端保存", benefit: "便于管理", cost: "需要权限与隐私设计" },
+          ],
+          recommendation: "先根据是否需要跨设备管理再决定",
+          basis: "目前用户未确认管理端需求",
+          uncertainty: "数据保留期限和权限未知",
+        },
+      ],
+      risks: [
+        {
+          risk: "个人信息被未授权访问",
+          likelihood: "unknown",
+          impact: "high",
+          basis: "尚未确定访问角色与数据字段",
+          mitigation: "先最小化采集并设计访问控制，再做安全测试",
+          uncertainty: "具体数据类型和部署环境未明确",
+        },
+      ],
+      fingerprint: "test-fingerprint",
+      basedOnRevision: draft.revision,
+    };
+    formatClarification(draft, reviewed, draft.challenge!);
+    expect(reviewed.specification).toContain("C 角色 AI 可行性初判（非实测）");
+    expect(reviewed.specification).toContain("50 并发压力测试");
+    expect(reviewed.specification).toContain("最小闭环");
+    expect(reviewed.specification).toContain("数据保存方式");
+    expect(reviewed.specification).toContain("个人信息被未授权访问");
+    expect(reviewed.executionPrompt).toContain("AI 风险分析");
+
+    const legacyReview = emptyClarification();
+    legacyReview.review = {
+      summary: "旧记录的 C 查漏摘要",
+      ready: false,
+      coverage: [],
+      gaps: [],
+      conflicts: [],
+      fingerprint: "legacy",
+      basedOnRevision: draft.revision,
+    } as NonNullable<typeof legacyReview.review>;
+    formatClarification(draft, legacyReview, draft.challenge!);
+    expect(legacyReview.specification).toContain("C 角色未提供结构化技术评估");
   });
 
   it("omits retired answers from the new-mode API requirements while preserving legacy reading", async () => {
@@ -1080,7 +1940,10 @@ describe("explicit clarification workflow with model test doubles", () => {
     expect(draft.answers.find((entry) => entry.questionId === scope.id)?.confirmation).toBe(
       "confirmed",
     );
-    expect(draft.clarification?.executionPrompt).toContain("展示个人作品");
+    expect(draft.answers.find((entry) => entry.questionId === scope.id)?.value).toBe(
+      "展示个人作品",
+    );
+    expect(draft.clarification?.executionPrompt).toBe("");
   });
 
   async function crossDecisionReference(

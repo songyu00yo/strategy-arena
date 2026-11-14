@@ -5,7 +5,10 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { IntakeDraft } from "../src/lib/intake-contracts";
 import type { ReplayAction } from "../src/lib/replay-contracts";
-import { clarificationFingerprint } from "../src/lib/server/clarification";
+import {
+  clarificationFingerprint,
+  clarificationProtocolHash,
+} from "../src/lib/server/clarification";
 import {
   NEW_EXAMPLES,
   canonical,
@@ -34,7 +37,13 @@ function apiTraceDouble(mode: "draft" | "complete" = "complete") {
   const version = record.snapshot.versions[0];
   const state = version.clarification!;
   const first = state.runs.slice(0, 2);
-  const final = state.runs.slice(-3).map((run) => ({ ...run, round: 2, basedOnRevision: 4 }));
+  // This synthetic trace uses the current fingerprint. The historical public JSON stays unchanged.
+  const final = state.runs.slice(-3).map((run) => ({
+    ...run,
+    round: 2,
+    basedOnRevision: 4,
+    promptHash: clarificationProtocolHash(),
+  }));
   const questions = state.rounds[0].questions;
   const answers = version.intake!.answers.filter((answer) =>
     questions.some((question) => question.id === answer.questionId),
@@ -51,8 +60,11 @@ function apiTraceDouble(mode: "draft" | "complete" = "complete") {
   ];
   state.review!.fingerprint = clarificationFingerprint({
     goal: record.originalGoal,
+    modelMode: version.modelSelection!.requestedMode,
     answers,
     sources: version.intake!.usedSources,
+    attachments: version.intake!.attachments ?? [],
+    clarification: state,
     challenge: version.challenge,
     confirmation: version.intake!.confirmation,
   } as IntakeDraft);

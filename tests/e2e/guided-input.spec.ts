@@ -278,11 +278,13 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
     .getByLabel("你想做什么", { exact: true })
     .fill("测试：我想在一个月内学会剪辑并完成自己的第一支视频");
   await page.getByRole("button", { name: "开始梳理", exact: true }).click();
-  await expect(page.locator(".gi-question")).toHaveCount(3);
+  await expect(page.getByRole("dialog", { name: "需求梳理", exact: true })).toBeVisible();
+  await expect(page.locator(".gi-question")).toHaveCount(1);
   await page
     .getByRole("group", { name: questions[0].title, exact: true })
     .getByRole("radio", { name: "完成作品", exact: true })
     .check();
+  await page.getByRole("button", { name: "下一题", exact: true }).click();
   const multiple = page.getByRole("group", { name: questions[1].title, exact: true });
   await multiple.getByRole("checkbox", { name: "不买设备" }).check();
   await multiple.getByRole("checkbox", { name: "独立完成" }).check();
@@ -290,12 +292,17 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
   await expect(multiple.getByRole("checkbox", { name: "不买设备" })).toBeHidden();
   await multiple.getByRole("button", { name: "我来补充", exact: true }).click();
   await expect(multiple.getByRole("checkbox", { name: "不买设备" })).toBeChecked();
+  await page.getByRole("button", { name: "下一题", exact: true }).click();
   await page
     .getByRole("group", { name: questions[2].title, exact: true })
     .getByRole("button", { name: "跳过", exact: true })
     .click();
   await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
-  await expect(page.getByText("第 2 轮 · 可以说不知道")).toBeVisible();
+  await expect(
+    page
+      .getByRole("dialog", { name: "需求梳理", exact: true })
+      .getByText("第 2 轮", { exact: false }),
+  ).toBeVisible();
   expect(answers[0]).toEqual([
     { questionId: "direction", state: "answered", value: "完成作品" },
     { questionId: "limits", state: "answered", value: ["不买设备", "独立完成"] },
@@ -365,6 +372,8 @@ test("explicit UI fixture: refresh restores questions and a late pre-refresh res
       .getByRole("group", { name: questions[0].title, exact: true })
       .getByRole("radio", { name: "学会基础" })
       .check();
+    await page.getByRole("button", { name: "下一题", exact: true }).click();
+    await page.getByRole("button", { name: "下一题", exact: true }).click();
     await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
     await started;
     await page.reload();
@@ -542,6 +551,10 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByLabel("可投入金额（人民币）", { exact: true })).toBeVisible();
   await page.getByLabel("可投入金额（人民币）", { exact: true }).fill("120");
+  await page
+    .getByRole("dialog", { name: "需求梳理", exact: true })
+    .getByRole("button", { name: "暂存并退出", exact: true })
+    .click();
   await page.getByRole("button", { name: /查看材料原文与位置/ }).click();
   await page.getByRole("button", { name: /fixture-long.pdf 第 8 页/ }).click();
   await expect(page.getByText("测试原文：每天可投入一小时。", { exact: true })).toBeVisible();

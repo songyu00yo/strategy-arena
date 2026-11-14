@@ -129,11 +129,16 @@ test("explicit UI fixture: model changes first save the current answers, and fai
   await page.goto("/");
   const answer = page.getByRole("textbox", { name: "哪些条件必须保留？", exact: true });
   await answer.fill("测试：不离职，保留当前收入。");
+  await page.getByRole("button", { name: "下一题", exact: true }).click();
   await page
     .getByRole("group", { name: "还有哪些个人情况？", exact: true })
     .getByRole("button", { name: "跳过", exact: true })
     .click();
+  await page.getByRole("button", { name: "上一题", exact: true }).click();
   const selectSol = async () => {
+    const dialog = page.getByRole("dialog", { name: "需求梳理", exact: true });
+    await dialog.getByRole("button", { name: "暂存并退出", exact: true }).click();
+    await expect(dialog).toBeHidden();
     await page.getByRole("button", { name: /^选择模型，当前/ }).click();
     await page.getByRole("option", { name: "GPT 6.1 Sol", exact: true }).click();
   };
@@ -142,6 +147,7 @@ test("explicit UI fixture: model changes first save the current answers, and fai
   await expect(
     page.getByRole("button", { name: "选择模型，当前GPT 6.1 Terra", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "继续回答", exact: true }).click();
   await expect(answer).toHaveValue("测试：不离职，保留当前收入。");
   expect(patches).toHaveLength(1);
   expect(draft.modelMode).toBe("gpt-6.1-terra");
@@ -209,6 +215,14 @@ test("explicit UI fixture: unsent question answers survive refresh and failed sy
   await expect(
     page.getByRole("status").filter({ hasText: "回答已保存在当前标签页" }),
   ).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "需求梳理", exact: true });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("button", { name: "继续回答", exact: true })).toBeFocused();
+  expect(answerSaves).toBe(0);
+  expect(analyses).toBe(0);
+  await page.getByRole("button", { name: "继续回答", exact: true }).click();
+  await expect(field).toHaveValue("测试：不离职，保留当前收入。");
   await page.reload();
   await expect(field).toHaveValue("测试：不离职，保留当前收入。");
   expect(answerSaves).toBe(0);
@@ -520,10 +534,12 @@ test("explicit UI fixture: a third question round confirms only entered answers 
   await expect(style).not.toBeChecked();
   await expect(page.getByRole("radio", { name: "活泼插画", exact: true })).not.toBeChecked();
   await style.check();
+  await page.getByRole("button", { name: "下一题", exact: true }).click();
   await page
     .getByRole("group", { name: "已有最终图片材料吗？", exact: true })
     .getByRole("button", { name: "暂时不知道", exact: true })
     .click();
+  await page.getByRole("button", { name: "下一题", exact: true }).click();
   await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "这份演示文稿给谁阅读？", exact: true }),

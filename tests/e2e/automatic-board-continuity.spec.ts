@@ -339,6 +339,20 @@ test("automatic mobile body pauses across speed and width changes, then yields t
   expect(changedSpeed.rate).toBe(1.8);
   expect(Math.abs(Number(changedSpeed.time) - Number(paused.time))).toBeLessThanOrEqual(1);
   await page.setViewportSize({ width: 420, height: 844 });
+  // Viewport emulation can return before resize retargets the held native effect.
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.c-stage3 [data-board="A"]')
+      ?.getAnimations()
+      .some(
+        (animation) =>
+          animation.effect instanceof KeyframeEffect &&
+          animation.effect.getKeyframes().some((frame) => typeof frame.height === "string") &&
+          animation.effect.getTiming().duration === 160 &&
+          animation.playState === "paused" &&
+          animation.currentTime === 0,
+      ),
+  );
   const resized = await read();
   expect(resized.state).toBe("paused");
   expect(Math.abs(resized.height - paused.height)).toBeLessThanOrEqual(1);

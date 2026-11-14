@@ -114,6 +114,11 @@ describe("completed real-model clarification simulations", () => {
     const stale = structuredClone(record);
     stale.snapshot.versions[0].clarification!.review!.fingerprint = "0".repeat(64);
     expect(() => pack(stale)).toThrow("不一致");
+    const unknownProtocol = structuredClone(record);
+    unknownProtocol.snapshot.versions[0].clarification!.runs.findLast(
+      (run) => run.role === "C" && run.status === "completed",
+    )!.promptHash = "unrecognized-historical-protocol";
+    expect(() => pack(unknownProtocol)).toThrow("不一致");
     const unconfirmed = structuredClone(record);
     delete unconfirmed.snapshot.versions[0].intake!.confirmation!.summary;
     expect(() => pack(unconfirmed)).toThrow("明确确认");

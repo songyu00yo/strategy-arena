@@ -53,24 +53,88 @@ export const OptionReviewSchema = z.object({
     .max(12),
 });
 export const HandoffReviewSchema = z.object({
-  summary: z.string().min(1).max(1000),
+  summary: z.string().min(1).max(500),
   ready: z.boolean(),
   coverage: z
     .array(
       z.object({
         topic: ClarificationTopicSchema,
         applicable: z.boolean(),
-        reason: z.string().min(1).max(300),
+        reason: z.string().min(1).max(160),
         decisionIds: z.array(decisionId).max(20),
       }),
     )
     .max(8),
-  gaps: z.array(DecisionItemSchema).max(20),
-  conflicts: z.array(z.string().min(1).max(500)).max(12),
+  gaps: z.array(DecisionItemSchema).max(12),
+  conflicts: z.array(z.string().min(1).max(500)).max(8),
+  feasibility: z
+    .array(
+      z.object({
+        dimension: z.enum(["technical", "resource", "data", "security", "delivery", "integration"]),
+        status: z.enum(["supported", "conditional", "unknown", "blocked"]),
+        assessment: z.string().min(1).max(240),
+        basis: z.string().min(1).max(220),
+        uncertainty: z.string().min(1).max(160),
+        validation: z.string().min(1).max(180),
+      }),
+    )
+    .max(4)
+    .default([]),
+  implementationPlan: z
+    .array(
+      z.object({
+        phase: z.string().min(1).max(80),
+        objective: z.string().min(1).max(180),
+        tasks: z.array(z.string().min(1).max(140)).min(1).max(4),
+        dependencies: z.array(z.string().min(1).max(200)).max(3),
+        deliverables: z.array(z.string().min(1).max(200)).max(3),
+        acceptance: z.array(z.string().min(1).max(300)).max(3),
+        estimate: z.string().min(1).max(60),
+        estimateBasis: z.string().min(1).max(180),
+        estimateUncertainty: z.string().min(1).max(160),
+      }),
+    )
+    .max(3)
+    .default([]),
+  tradeoffs: z
+    .array(
+      z.object({
+        decision: z.string().min(1).max(200),
+        options: z
+          .array(
+            z.object({
+              option: z.string().min(1).max(120),
+              benefit: z.string().min(1).max(200),
+              cost: z.string().min(1).max(200),
+            }),
+          )
+          .min(2)
+          .max(3),
+        recommendation: z.string().min(1).max(300),
+        basis: z.string().min(1).max(400),
+        uncertainty: z.string().min(1).max(160),
+      }),
+    )
+    .max(2)
+    .default([]),
+  risks: z
+    .array(
+      z.object({
+        risk: z.string().min(1).max(300),
+        likelihood: z.enum(["low", "medium", "high", "unknown"]),
+        impact: z.enum(["low", "medium", "high", "unknown"]),
+        basis: z.string().min(1).max(180),
+        mitigation: z.string().min(1).max(180),
+        uncertainty: z.string().min(1).max(160),
+      }),
+    )
+    .max(3)
+    .default([]),
 });
 export type Decomposition = z.infer<typeof DecompositionSchema>;
 export type OptionReview = z.infer<typeof OptionReviewSchema>;
-export type HandoffReview = z.infer<typeof HandoffReviewSchema>;
+// Stored reviews can predate the report fields. Model responses are parsed with defaults above.
+export type HandoffReview = z.input<typeof HandoffReviewSchema>;
 export interface ClarificationRun {
   id: string;
   operationId: string;

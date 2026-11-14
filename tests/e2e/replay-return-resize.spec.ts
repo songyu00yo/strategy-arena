@@ -244,6 +244,11 @@ for (const width of [390, 1440]) {
           width: width === 390 ? 430 : 1280,
           height: width === 390 ? 780 : 760,
         });
+        // Both resize listeners must publish their samples before geometry is compared.
+        await page.waitForFunction(() => {
+          const probe = (window as ProbeWindow).__returnProbe;
+          return Boolean(probe?.before && probe.after);
+        });
         const redirect = await page.evaluate(() => {
           const probe = (window as ProbeWindow).__returnProbe!;
           return { before: probe.before!, after: probe.after! };

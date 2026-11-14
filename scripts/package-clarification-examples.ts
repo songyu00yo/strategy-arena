@@ -69,10 +69,27 @@ export function canonical(value: unknown): string {
 
 function currentFingerprint(version: ArenaVersion) {
   const intake = version.intake!;
+  const lastReview = version.clarification?.runs.findLast(
+    (run) => run.role === "C" && run.status === "completed",
+  );
+  // Immutable real recordings from this exact protocol retain their original fingerprint algorithm.
+  if (lastReview?.promptHash === "3faca167eff0ca1c60d76b74bd4dd99357afdab866cead782549fa9d7246610e")
+    return digest(
+      JSON.stringify({
+        goal: intake.originalGoal,
+        answers: intake.answers,
+        sources: intake.usedSources,
+        summary: version.challenge,
+        pendingFields: intake.confirmation?.pendingSummaryFields ?? [],
+      }),
+    );
   return clarificationFingerprint({
     goal: intake.originalGoal,
+    modelMode: version.modelSelection?.requestedMode,
     answers: intake.answers,
     sources: intake.usedSources,
+    attachments: intake.attachments ?? [],
+    clarification: version.clarification,
     challenge: version.challenge,
     confirmation: intake.confirmation,
   } as IntakeDraft);
@@ -101,17 +118,6 @@ function completedVersion(record: CompletedCaseRecord) {
     version.intake.confirmation.pendingSummaryFields?.length
   )
     throw new Error("案例缺少最终明确确认。");
-  if (
-    version.intake.originalGoal !== record.originalGoal ||
-    currentFingerprint(version) !== state.review.fingerprint
-  )
-    throw new Error("案例来源、最终要求与当前审查版本不一致。");
-  if (
-    !state.specification.trim() ||
-    !state.executionPrompt.trim() ||
-    version.requirements?.executionPrompt !== state.executionPrompt
-  )
-    throw new Error("案例缺少一致的最终需求与执行提示词。");
   for (const role of ["A", "B", "C"])
     if (
       !state.runs.some(
@@ -126,6 +132,17 @@ function completedVersion(record: CompletedCaseRecord) {
       )
     )
       throw new Error(`案例缺少 ${role} 的实际调用与用量记录。`);
+  if (
+    version.intake.originalGoal !== record.originalGoal ||
+    currentFingerprint(version) !== state.review.fingerprint
+  )
+    throw new Error("案例来源、最终要求与当前审查版本不一致。");
+  if (
+    !state.specification.trim() ||
+    !state.executionPrompt.trim() ||
+    version.requirements?.executionPrompt !== state.executionPrompt
+  )
+    throw new Error("案例缺少一致的最终需求与执行提示词。");
   if (
     !state.rounds.some((round) => round.questions.length) ||
     !version.intake.answers.some((answer) => answer.confirmation === "confirmed")

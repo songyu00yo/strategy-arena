@@ -45,7 +45,7 @@ import { CostPlanValidationError } from "./resource-totals";
 import { allSources, createFollowUpIntake } from "./intakes";
 import type { IntakeDraft, SubmitIntakeSchema } from "@/lib/intake-contracts";
 import { freezeCorpus } from "./retrieval";
-import { clarificationFingerprint } from "./clarification";
+import { clarificationFingerprint, clarificationProtocolHash } from "./clarification";
 import { SCHEMA_VERSION, ChallengeSchema } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
@@ -315,6 +315,12 @@ export function createArena(
     }
     let frozen: SelectedConfig | undefined;
     if (draftBody?.workflow === "clarification") {
+      if (draftBody.clarificationPromptHash !== clarificationProtocolHash())
+        throw new ArenaError(
+          "需求查漏协议已更新，请重新分析当前草稿。",
+          409,
+          "CLARIFICATION_PROTOCOL_STALE",
+        );
       const state = draftBody.clarification as ArenaVersion["clarification"];
       if (
         !state ||

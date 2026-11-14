@@ -26,6 +26,7 @@ export interface ClarificationContext {
   config: ModelConfig;
   submit?: { challenge: Challenge; assumptions: string[] };
   editedFields?: Partial<Omit<Challenge, "materials">>;
+  editedAssumptions?: string[];
   call: <T>(role: "A" | "B" | "C", request: StructuredRequest<T>) => Promise<T>;
   record: (state: ClarificationState) => void;
 }
@@ -39,6 +40,12 @@ export function clarificationProtocolHash() {
       }),
     )
     .digest("hex");
+}
+export function clarificationReviewConfig(config: ModelConfig): ModelConfig {
+  const override =
+    config.provider === "openai" ? "OPENAI_MAX_OUTPUT_TOKENS" : "MODEL_MAX_OUTPUT_TOKENS";
+  if (process.env[override] !== undefined) return config;
+  return config.maxOutputTokens >= 4200 ? config : { ...config, maxOutputTokens: 4200 };
 }
 export function emptyClarification(): ClarificationState {
   return {
@@ -64,10 +71,32 @@ export function clarificationFingerprint(
     .update(
       JSON.stringify({
         goal: draft.goal,
-        answers: draft.answers,
-        sources: draft.sources,
+        modelMode: draft.modelMode,
+        answers: draft.answers.map((answer) => ({
+          questionId: answer.questionId,
+          state: answer.state,
+          value: answer.value,
+          confirmation: answer.confirmation,
+          needsReconfirmation: answer.needsReconfirmation,
+        })),
+        sources: draft.sources.map((source) => ({
+          id: source.id,
+          attachmentId: source.attachmentId,
+          location: source.location,
+          text: source.text,
+          interpretation: source.interpretation,
+          origin: source.origin,
+        })),
+        attachments: (draft.attachments ?? []).map((attachment) => ({
+          id: attachment.id,
+          name: attachment.name,
+          state: attachment.state,
+          locations: attachment.locations,
+          warnings: attachment.warnings,
+        })),
         summary: submission?.challenge ?? draft.challenge,
         pendingFields: draft.confirmation?.pendingSummaryFields ?? [],
+        feedback: draft.clarification?.feedback ?? [],
       }),
     )
     .digest("hex");
@@ -178,6 +207,8 @@ export function formatClarification(
   state: ClarificationState,
   challenge: Challenge,
 ) {
+  // Preserve the existing call signature while sourcing facts only from stored confirmations.
+  void challenge;
   const pendingFields = new Set(draft.confirmation?.pendingSummaryFields ?? []);
   const summary = draft.confirmation?.summary?.challenge;
   const domains = {
@@ -192,8 +223,8 @@ export function formatClarification(
     label: string;
     value: string | number | string[] | null | undefined;
   }> = [
-    { field: "constraints", label: "要求", value: challenge.constraints },
-    { field: "preferences", label: "偏好", value: challenge.preferences },
+    { field: "constraints", label: "要求", value: summary?.constraints },
+    { field: "preferences", label: "偏好", value: summary?.preferences },
     { field: "budget", label: "金额上限（人民币元）", value: summary?.budget },
     { field: "timeHours", label: "时间上限（小时）", value: summary?.timeHours },
     { field: "options", label: "备选方案", value: summary?.options },
@@ -226,15 +257,15 @@ export function formatClarification(
     authorization: "授权",
   } as const;
   const lines = [
-    `# ${state.draftOnly ? "需求草稿" : "已确认需求说明"}`,
+    `# ${state.draftOnly || !draft.confirmation?.summary ? "需求草稿 / 预览" : "已确认需求说明"}`,
     "",
-    "## 用户目标",
+    "## 原始输入目标（未自动视为确认）",
     draft.goal,
     "",
   ];
-  if (draft.confirmation?.summary || !state.draftOnly) {
+  if (summary) {
     lines.push("## 用户确认的摘要");
-    if (!pendingFields.has("goal")) lines.push(`目标 — ${challenge.goal}`);
+    if (!pendingFields.has("goal")) lines.push(`目标 — ${summary.goal}`);
     lines.push(...summaryLines);
     lines.push("");
   }
@@ -264,6 +295,226 @@ export function formatClarification(
   const missing = draft.attachments
     .filter((attachment) => attachment.state !== "ready")
     .map((attachment) => `${attachment.name} — ${attachment.error || "需要补充或完整读取"}`);
+  const active = activeItems(state);
+  const confirmedSummary = draft.confirmation?.summary?.challenge;
+  const confirmedFacts = [
+    ...(confirmedSummary
+      ? [
+          ...(!pendingFields.has("goal") ? [`- 用户确认的目标：${confirmedSummary.goal}`] : []),
+          ...summaryLines.map((line) => `- 用户确认的摘要字段：${line}`),
+        ]
+      : []),
+    ...formal.map((answer) => `- 用户确认的回答：${formatAnswer(answer)}`),
+  ];
+  const topicLabels: Record<DecisionItem["topic"], string> = {
+    scope: "目标与范围",
+    function: "功能",
+    content: "内容",
+    flow: "流程",
+    style: "风格",
+    acceptance: "验收",
+    materials: "材料",
+    authorization: "授权",
+  };
+  const topics: DecisionItem["topic"][] = [
+    "scope",
+    "function",
+    "content",
+    "flow",
+    "style",
+    "acceptance",
+    "materials",
+    "authorization",
+  ];
+  const coverageRows = topics.map((topic) => {
+    const relevant = active.filter((item) => item.topic === topic);
+    const open = relevant.filter((item) => !resolved(draft, item));
+    const coverage = state.review?.coverage.find((entry) => entry.topic === topic);
+    const cRequired = ["function", "content", "flow", "style"].includes(topic);
+    const status = !state.review
+      ? "尚未完成 C 角色查漏"
+      : coverage
+        ? !coverage.applicable
+          ? "C 角色判断不适用（需核查理由）"
+          : open.length
+            ? "存在未解决事项"
+            : !coverage.decisionIds.length
+              ? "没有可追溯的覆盖事项"
+              : "需求层面已覆盖"
+        : cRequired
+          ? "C 角色未提供覆盖结论"
+          : open.length
+            ? "存在未解决事项"
+            : relevant.length
+              ? "事项均已解决（未列入 C 强制覆盖维度）"
+              : "未列出该类事项（非 C 强制覆盖维度）";
+    return {
+      label: topicLabels[topic],
+      status,
+      reasons: [...(coverage ? [coverage.reason] : []), ...open.map((item) => item.title)].filter(
+        Boolean,
+      ),
+    };
+  });
+  const budgetKnown = !pendingFields.has("budget") && confirmedSummary?.budget != null;
+  const timeKnown = !pendingFields.has("timeHours") && confirmedSummary?.timeHours != null;
+  const authorizationGranted = formal.some((answer) => {
+    if (!answer.question.authorization) return false;
+    const value = Array.isArray(answer.value) ? answer.value.join(" ").trim() : answer.value.trim();
+    return /^(?:同意|允许|确认|是)(?:$|[，,、：: （(])|^(?:yes|agree)(?:$|\b)/i.test(value);
+  });
+  const feasibilityLines = coverageRows.map(
+    (row) =>
+      `- ${row.label}：${row.status}${row.reasons.length ? `；依据：${row.reasons.join("；")}` : ""}`,
+  );
+  const reportGaps = [
+    ...unresolved.map((item) => `${item.title}${item.required ? "（必需）" : "（可选）"}`),
+    ...coverageRows
+      .filter(
+        (row, index) =>
+          ["function", "content", "flow", "style"].includes(topics[index]) &&
+          !["需求层面已覆盖", "C 角色判断不适用（需核查理由）"].includes(row.status),
+      )
+      .map((row) => `${row.label}：${row.status}`),
+    ...[...pendingFields].map((field) => `${SUMMARY_FIELD_LABELS[field] ?? field}的摘要修改待确认`),
+    ...state.conflicts.map((conflict) => `冲突：${conflict}`),
+    ...missing.map((entry) => `材料处理缺口：${entry}`),
+    ...(state.review && !state.review.ready ? ["C 角色尚未判定可以正式交接"] : []),
+    ...(!budgetKnown ? ["预算上限未知"] : []),
+    ...(!timeKnown ? ["可投入时间未知"] : []),
+    ...(!state.review ? ["尚无 C 角色查漏结论"] : []),
+  ];
+  const projectDecisions = active.map((item) => {
+    const answer = decisionAnswer(draft, item);
+    const confirmedByUser = confirmed(answer);
+    const provided = item.provided && resolved(draft, item) ? item.provided.quote : null;
+    const decision = confirmedByUser
+      ? formatAnswer(answer!)
+      : provided
+        ? `来源提取：${provided}（非逐项确认）`
+        : "待决定";
+    return `- **${topicLabels[item.topic]}｜${item.title}**：${decision}。${item.description}${item.acceptance.length ? `；建议验收：${item.acceptance.join("；")}` : ""}`;
+  });
+  const implementationTasks = active.map((item, index) => {
+    const answer = decisionAnswer(draft, item);
+    return `${index + 1}. ${item.title}：${confirmed(answer) ? "按已确认要求实现" : "未确认事项先向用户确认；用户已明确授权自定的事项，按授权范围处理并记录依据"}；验收：${item.acceptance.join("；") || "补充可观察验收条件"}。`;
+  });
+  const evidenceLines = draft.sources.map((source) => {
+    const origin = source.interpretation ? "model_interpretation" : (source.origin ?? "unknown");
+    const status =
+      origin === "document"
+        ? "附件原文（来源材料，不等同用户确认）"
+        : origin === "model_transcription"
+          ? "模型转录（需对照原图核验）"
+          : origin === "model_interpretation"
+            ? "模型解读（推论，不作为原始事实）"
+            : "来源不明（不可升级为原始事实）";
+    return `- [${source.id}] ${source.filename} · ${source.location} · ${status}`;
+  });
+  const feasibilityStatusLabels = {
+    supported: "初步支持（仍需验证）",
+    conditional: "有条件可行",
+    unknown: "证据不足/未知",
+    blocked: "当前条件下存在阻塞",
+  } as const;
+  const dimensionLabels = {
+    technical: "技术实现",
+    resource: "资源与预算",
+    data: "数据与材料",
+    security: "安全与权限",
+    delivery: "交付与运维",
+    integration: "系统集成",
+  } as const;
+  const aiFeasibility = state.review?.feasibility ?? [];
+  const aiPlan = state.review?.implementationPlan ?? [];
+  const aiTradeoffs = state.review?.tradeoffs ?? [];
+  const aiRisks = state.review?.risks ?? [];
+  reportGaps.push(
+    ...aiFeasibility
+      .filter((entry) => entry.status === "blocked")
+      .map((entry) => `AI 初步判断存在可行性阻塞（${entry.dimension}）：${entry.assessment}`),
+  );
+  const aiFeasibilityLines = aiFeasibility.map(
+    (entry) =>
+      `- ${dimensionLabels[entry.dimension]}：${feasibilityStatusLabels[entry.status]}。判断：${entry.assessment}；依据：${entry.basis}；不确定性：${entry.uncertainty}；验证：${entry.validation}`,
+  );
+  const aiPlanLines = aiPlan.flatMap((phase, index) => [
+    `### ${index + 1}. ${phase.phase}`,
+    `目标：${phase.objective}`,
+    `任务：${phase.tasks.join("；")}`,
+    `依赖：${phase.dependencies.join("；") || "未提供"}`,
+    `交付物：${phase.deliverables.join("；") || "未提供"}`,
+    `验收：${phase.acceptance.join("；") || "未提供"}`,
+    `估算：${phase.estimate}；依据：${phase.estimateBasis}；不确定性：${phase.estimateUncertainty}`,
+  ]);
+  const tradeoffLines = aiTradeoffs.map(
+    (entry) =>
+      `- ${entry.decision}：${entry.options.map((option) => `${option.option}（收益：${option.benefit}；代价：${option.cost}）`).join("；")}；AI 暂定建议：${entry.recommendation}；依据：${entry.basis}；不确定性：${entry.uncertainty}`,
+  );
+  const riskLines = aiRisks.map(
+    (entry) =>
+      `- ${entry.risk}（可能性：${entry.likelihood}；影响：${entry.impact}）；依据：${entry.basis}；缓解：${entry.mitigation}；不确定性：${entry.uncertainty}`,
+  );
+  const planStages = [
+    "1. 需求冻结：列出已确认答案、未决事项、授权边界和来源；由用户确认后锁定正式需求版本。",
+    "2. 技术验证：对接口、数据、安全、性能、部署等关键风险做最小验证；失败时回到方案取舍。",
+    "3. 分阶段实现：先完成最小闭环，再扩展次要能力；每项任务绑定输入、输出、依赖和验收。",
+    "4. 集成验收：执行功能、异常、权限、恢复、性能和兼容测试，保留可复核记录。",
+    "5. 发布复盘：交付部署/使用说明、已知限制、运维责任及未完成事项；变更需求创建新版本。",
+  ];
+  lines.push(
+    "## 可行性分析",
+    "需求确认只代表用户同意该要求，不证明技术上可实现。需求覆盖、资源边界和工程可行性分别判断。",
+    ...feasibilityLines,
+    `- 预算边界：${budgetKnown ? `用户确认上限 ¥${confirmedSummary!.budget}` : "未知；不得视为预算充足或已授权支出"}`,
+    `- 时间边界：${timeKnown ? `用户确认可投入 ${confirmedSummary!.timeHours} 小时` : "未知；不得据此承诺工期"}`,
+    `- 外部/敏感操作授权：${authorizationGranted ? "存在明确同意，仍仅限题目所述范围" : "未发现明确同意，不得推定授权"}`,
+    `- 技术可行性：${state.review ? "尚需工程验证；C 角色查漏不等同于技术验证" : "未评估；缺少 C 角色查漏及工程验证"}`,
+    `- 综合判断：${reportGaps.length ? "可形成阶段性规划，但存在明确缺口，不应承诺无条件完整交付" : "需求覆盖较完整，仍须工程验证后才能作出技术可行性结论"}`,
+    "",
+    "### C 角色 AI 可行性初判（非实测）",
+    ...(aiFeasibilityLines.length
+      ? aiFeasibilityLines
+      : ["- C 角色未提供结构化技术评估；须补充证据并进行工程验证。"]),
+    "",
+    "## 已确认需求（正式依据）",
+    ...(confirmedFacts.length ? confirmedFacts : ["- 尚无正式确认摘要或已确认回答。"]),
+    "",
+    "## 项目需求拆解（标明来源状态）",
+    ...(projectDecisions.length ? projectDecisions : ["- 当前尚无结构化需求事项。"]),
+    "",
+    "## 产品与实施规划",
+    "### 功能、内容、流程与体验",
+    ...(projectDecisions.length ? projectDecisions : ["- 先完成需求拆解。"]),
+    "### C 角色项目阶段计划（AI 分析，估算须验证）",
+    ...(aiPlanLines.length ? aiPlanLines : planStages),
+    "### 可执行任务",
+    ...(implementationTasks.length
+      ? implementationTasks
+      : ["1. 完成需求拆解和技术调研，再拆分实施任务。"]),
+    "",
+    "## 技术路线与方案取舍（AI 分析，非用户确认）",
+    "- 当前材料可确定业务需求与约束；具体技术栈、部署拓扑、数据模型和第三方依赖须结合现有代码与环境验证，不凭空指定。",
+    "- 优先复用现有系统；新增服务、付费依赖或不可逆迁移须论证成本、收益、退出路径并取得授权。",
+    ...(tradeoffLines.length
+      ? tradeoffLines
+      : ["- C 角色未提供有依据的候选方案比较；需先补充环境与约束，再比较技术路线。"]),
+    "",
+    "## 风险、假设与待核实",
+    ...(riskLines.length ? riskLines : []),
+    ...(state.suggestions.length
+      ? state.suggestions.map((entry) => `- AI 建议/假设（待确认或验证）：${entry}`)
+      : ["- 暂无额外 AI 建议。"]),
+    ...(state.conflicts.length
+      ? state.conflicts.map((entry) => `- 冲突（待解决）：${entry}`)
+      : ["- 当前未记录模型识别出的冲突。"]),
+    ...reportGaps.map((entry) => `- 未决/证据缺口：${entry}`),
+    ...missing.map((entry) => `- 材料缺口：${entry}`),
+    "",
+    "## 材料与来源可信度",
+    ...(evidenceLines.length ? evidenceLines : ["- 尚未提供附件材料。"]),
+    "",
+  );
   lines.push(
     "## 未决与阻塞",
     ...(unresolved.length
@@ -292,30 +543,33 @@ export function formatClarification(
   );
   state.specification = lines.join("\n");
   state.executionPrompt = [
-    "依据当前版本用户确认的需求执行。",
-    pendingFields.size
-      ? `原始目标（相关修改待确认） — ${draft.goal}`
-      : `用户目标 — ${challenge.goal}`,
-    ...summaryLines.map((line) => `已确认${line}`),
-    ...formal.map((answer) => `- ${formatAnswer(answer)}`),
-    ...activeItems(state)
-      .filter(
-        (item) => item.provided && !confirmed(decisionAnswer(draft, item)) && resolved(draft, item),
-      )
-      .map((item) => `- ${item.provided!.quote}`),
-    "执行中遇到尚未确认的选择，请向用户提问。授权仅在明确同意的单项范围内生效。",
-    ...(state.draftOnly
+    "你是本项目的实施代理。严格遵循本版本需求；不得把 AI 推论、附件转录或未决事项改写成用户确认。",
+    `需求版本：${draft.revision}；报告状态：${state.draftOnly || !confirmedSummary ? "预览/草稿，禁止视为正式授权" : "正式需求说明"}`,
+    `原始目标（原始输入，不自动视为确认）：${draft.goal}`,
+    ...(confirmedSummary
       ? [
-          "当前为草稿，以下事项仍待确认。",
-          ...unresolved.map((item) => `- ${item.title}`),
-          ...[...pendingFields].map(
-            (field) => `- ${SUMMARY_FIELD_LABELS[field] ?? field}的摘要修改尚待确认`,
-          ),
+          ...(!pendingFields.has("goal") ? [`用户确认摘要：${confirmedSummary.goal}`] : []),
+          ...summaryLines.map((line) => `用户确认字段：${line}`),
         ]
+      : ["用户尚未确认正式摘要。"]),
+    ...formal.map((answer) => `用户确认回答：${formatAnswer(answer)}`),
+    ...active.map((item) => {
+      const answer = decisionAnswer(draft, item);
+      return `${item.topic}/${item.title}：${confirmed(answer) ? `用户确认：${formatAnswer(answer!)}` : item.provided && resolved(draft, item) ? `- ${item.provided.quote}（材料或目标推断，未逐项确认）` : "未决，不得擅自决定"}`;
+    }),
+    "附件原文、模型转录和模型解读必须分别标注；模型解读不得作为事实。",
+    "执行前先做技术可行性验证；需求确认不代表技术可行，也不代表预算、工期或外部操作已获授权。",
+    ...(aiFeasibilityLines.length
+      ? ["C 角色 AI 可行性初判（非实测）：", ...aiFeasibilityLines]
       : []),
-  ]
-    .filter(Boolean)
-    .join("\n");
+    ...(aiPlanLines.length ? ["C 角色 AI 实施计划（估算与任务均需核验）：", ...aiPlanLines] : []),
+    ...(tradeoffLines.length ? ["AI 方案取舍（不是用户确认）：", ...tradeoffLines] : []),
+    ...(riskLines.length ? ["AI 风险分析：", ...riskLines] : []),
+    "未经明确同意不得产生费用、发布内容、联系第三方、处理真实个人数据或执行不可逆操作。",
+    ...(state.draftOnly ? ["当前为草稿/预览，禁止直接执行；先列出阻塞项并请求用户确认。"] : []),
+    ...(reportGaps.length ? ["尚待处理：", ...reportGaps.map((entry) => `- ${entry}`)] : []),
+    "实施时逐项记录方案、依据、验证、结果与回滚方式。",
+  ].join("\n");
 }
 
 export async function runClarification(draft: IntakeDraft, context: ClarificationContext) {
@@ -346,6 +600,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       challenge: structuredClone(context.submit.challenge),
     };
   const state = structuredClone(draft.clarification ?? emptyClarification());
+  const retainedAssumptions = context.submit?.assumptions ?? context.editedAssumptions;
   const priorReview = state.runs.findLast(
     (run) => run.role === "C" && run.status === "completed",
   )?.output;
@@ -363,6 +618,8 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
     confirmedSummary: context.submit ?? draft.confirmation?.summary,
     editedSummary: draft.challenge,
     editedFields: context.editedFields,
+    assumptions: retainedAssumptions ?? draft.assumptions,
+    editedAssumptions: retainedAssumptions,
     pendingSummaryFields: [...pendingFields],
     sources: draft.sources,
     previousItems: activeItems(state),
@@ -401,8 +658,8 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
           schema,
           system: `${CLARIFICATION_SYSTEM}\n${CLARIFICATION_ROLES[name]}`,
           input,
-          config: context.config,
-          allowRepair: !repairOf,
+          config: name === "C" ? clarificationReviewConfig(context.config) : context.config,
+          allowRepair: name !== "C" && !repairOf,
         }),
       );
       run.output = value as ClarificationRun["output"];
@@ -418,7 +675,13 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       run.output = { error: run.summary, ...(repair ? { repair } : {}) };
       state.runs.push(run);
       context.record(state);
-      if (!repairOf && error instanceof ModelCallError && !error.uncertain && repair)
+      if (
+        name !== "C" &&
+        !repairOf &&
+        error instanceof ModelCallError &&
+        !error.uncertain &&
+        repair
+      )
         return role(
           name,
           schema,
@@ -465,7 +728,11 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       throw new ArenaError("事项排除缺少对应的用户确认依据。", 502, "CLARIFICATION_RETIREMENT");
     state.retiredIds = [...new Set([...state.retiredIds, retired.id])];
   }
-  state.suggestions = [...new Set([...state.suggestions, ...decomposition.suggestions])];
+  // Original A suggestions remain in runs. User-edited tentative assumptions take precedence.
+  state.suggestions =
+    retainedAssumptions !== undefined
+      ? [...retainedAssumptions]
+      : [...new Set([...state.suggestions, ...decomposition.suggestions])];
   function knownForQuestions(item: DecisionItem) {
     if (resolved(draft, item, context.submit)) return true;
     const summary = draft.confirmation?.summary?.challenge;
@@ -587,7 +854,8 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
     };
     if (!questions.length && review.gaps.length && !context.finish) questions = await options();
   }
-  state.draftOnly = context.finish || !state.review?.ready;
+  // A successful C review is only a preview. Formal status requires the explicit submit action.
+  state.draftOnly = !context.submit || context.finish || !state.review?.ready;
   state.requestedDraft = context.finish;
   state.next = questions.length && !context.finish ? "questions" : "summary";
   const changes = {
@@ -655,12 +923,18 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       options: [],
       ...context.editedFields,
     });
+  if (state.review)
+    state.review.fingerprint = clarificationFingerprint(
+      { ...draft, challenge, clarification: state },
+      context.submit,
+    );
   formatClarification(draft, state, challenge);
   return {
     state,
     questions: questions as IntakeQuestion[],
     challenge,
-    assumptions: state.suggestions.slice(0, 6),
+    assumptions:
+      retainedAssumptions !== undefined ? [...retainedAssumptions] : state.suggestions.slice(0, 6),
     status: state.next === "questions" ? ("questions" as const) : ("summary" as const),
   };
 }

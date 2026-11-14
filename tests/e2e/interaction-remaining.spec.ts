@@ -559,6 +559,9 @@ for (const width of [1440, 390]) {
     await expect(
       page.getByRole("heading", { name: "这是我们理解的任务。", exact: true }),
     ).toBeVisible();
+    const intakeDialog = page.getByRole("dialog", { name: "需求梳理", exact: true });
+    await click(intakeDialog.getByRole("button", { name: "暂存并退出", exact: true }));
+    await expect(intakeDialog).toBeHidden();
     await click(page.getByRole("button", { name: "准备新问题", exact: true }).first());
     await expect(page.getByRole("textbox", { name: "你想做什么", exact: true })).toHaveValue("");
     await checkpoint(page, info, "summary-new-goal-reset");

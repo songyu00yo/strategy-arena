@@ -181,7 +181,7 @@ export function assertToolBatchModelBudget(
 }
 function withLedger<T>(databasePath: string | undefined, fn: (connection: DatabaseSync) => T): T {
   const path = databasePath ?? process.env.ARENA_BILLING_DATABASE_PATH ?? "";
-  if (!path || !isAbsolute(path) || !existsSync(path))
+  if (!path || !isAbsolute(path) || !existsSync(/* turbopackIgnore: true */ path))
     throw new ToolBudgetError("请先配置并初始化中央费用账本。", "TOOL_LEDGER_NOT_CONFIGURED");
   const connection = new DatabaseSync(path);
   try {

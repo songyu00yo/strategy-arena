@@ -228,23 +228,48 @@ function publicDraft(draft: PrivateDraft): IntakeDraft {
   void omitted;
   void omittedHash;
   void omittedEdits;
+  if (
+    view.workflow === "clarification" &&
+    view.clarification &&
+    (draft.clarificationPromptHash !== clarificationProtocolHash() ||
+      !view.clarification.review ||
+      view.clarification.review.fingerprint !== clarificationFingerprint(draft))
+  ) {
+    const state = structuredClone(view.clarification);
+    view.clarification = {
+      ...state,
+      review: null,
+      next: draft.status === "uncertain" || draft.status === "analyzing" ? state.next : "questions",
+      draftOnly: true,
+      specification: "",
+      executionPrompt: "",
+    };
+  }
   return view;
 }
+function invalidateClarificationReport(
+  draft: PrivateDraft,
+  next: "questions" | "summary" = "questions",
+) {
+  const state = draft.clarification;
+  if (!state) return;
+  state.review = null;
+  state.next = next;
+  state.draftOnly = true;
+  state.specification = "";
+  state.executionPrompt = "";
+}
 function invalidate(draft: PrivateDraft, clearAnswers = false) {
-  if (draft.clarification) {
-    draft.clarification.review = null;
-    draft.clarification.next = "questions";
-    draft.clarification.draftOnly = true;
-  }
+  invalidateClarificationReport(draft);
   draft.status = "input";
   draft.questions = [];
+  draft.queuedQuestions = [];
   draft.challenge = null;
   draft.error = null;
   draft.assumptions = [];
   draft.usedSourceIds = [];
   if (clearAnswers) {
     draft.answers = [];
-    draft.queuedQuestions = [];
     draft.round = 0;
   }
 }
@@ -480,6 +505,7 @@ function recoverStale(draft: PrivateDraft) {
       changed = true;
     }
   if (changed) {
+    invalidateClarificationReport(draft);
     refreshSources(draft);
     draft.revision++;
     save(draft);
@@ -698,6 +724,8 @@ export function updateIntake(
         throw new ArenaError("当前任务还没有可编辑的摘要。", 409, "SUMMARY_REQUIRED");
       const fields = { ...draft.summaryEdits?.fields };
       const changedFields: (keyof Challenge)[] = [];
+      const changedAssumptions =
+        JSON.stringify(input.summary.assumptions) !== JSON.stringify(draft.assumptions);
       for (const key of Object.keys(input.summary.challenge) as (keyof Challenge)[]) {
         if (
           key !== "materials" &&
@@ -707,8 +735,8 @@ export function updateIntake(
           changedFields.push(key);
         }
       }
+      if (changedFields.length || changedAssumptions) rememberConfirmation(draft);
       if (changedFields.length) {
-        rememberConfirmation(draft);
         draft.confirmation!.pendingSummaryFields = [
           ...new Set([...(draft.confirmation!.pendingSummaryFields ?? []), ...changedFields]),
         ];
@@ -721,11 +749,8 @@ export function updateIntake(
         );
         invalidateDependents(draft, affectedIds);
       }
-      if (changedFields.length && draft.clarification) {
-        draft.clarification.review = null;
-        draft.clarification.next = "summary";
-        draft.clarification.draftOnly = true;
-      }
+      if (changedFields.length || changedAssumptions)
+        invalidateClarificationReport(draft, "summary");
       draft.summaryEdits = {
         fields,
         assumptions: input.summary.assumptions,
@@ -800,6 +825,7 @@ export function updateIntake(
       if (changedIds.size) {
         rememberConfirmation(draft);
         invalidateDependents(draft, changedIds);
+        draft.queuedQuestions = [];
       }
       const recorded = accepted.map((answer): RecordedAnswer => {
         const old = draft.answers.find((recorded) => recorded.questionId === answer.questionId);
@@ -824,6 +850,7 @@ export function updateIntake(
         ...draft.answers.filter((answer) => !ids.has(answer.questionId)),
         ...recorded,
       ];
+      if (recorded.length) invalidateClarificationReport(draft);
       if (draft.confirmation?.summary && recorded.length) {
         const fields = new Set(draft.confirmation.pendingSummaryFields ?? []);
         for (const answer of recorded) {
@@ -837,6 +864,14 @@ export function updateIntake(
       }
       // Complete advances the existing flow. Only its explicit flag confirms filled answers.
       if (input.answerMode !== "draft") {
+        const pendingQuestions =
+          draft.workflow !== "clarification" &&
+          !changedIds.size &&
+          accepted.every((answer) =>
+            draft.questions.some((question) => question.id === answer.questionId),
+          )
+            ? draft.queuedQuestions
+            : undefined;
         for (const question of draft.questions) {
           if (!draft.answers.some((answer) => answer.questionId === question.id))
             draft.answers.push({
@@ -848,6 +883,7 @@ export function updateIntake(
             });
         }
         invalidate(draft);
+        if (pendingQuestions) draft.queuedQuestions = pendingQuestions;
       }
     }
     if (changedGoal) {
@@ -881,12 +917,11 @@ export function updateIntake(
 function frozenConfiguration(draft: PrivateDraft) {
   if (draft.workflow === "clarification") {
     const promptHash = clarificationProtocolHash();
-    if (draft.clarificationPromptHash && draft.clarificationPromptHash !== promptHash)
-      throw new ArenaError(
-        "需求整理协议已更新，请创建新版本后继续。",
-        409,
-        "CONFIGURATION_CHANGED",
-      );
+    if (draft.clarificationPromptHash !== promptHash) {
+      // Prompt/schema upgrades keep the user's draft and answers, but invalidate stale review output.
+      // The next explicit analyze/submit regenerates C coverage and the new structured report.
+      invalidateClarificationReport(draft);
+    }
     draft.clarificationPromptHash = promptHash;
   }
   const config = resolveModelConfig(draft.modelMode);
@@ -1104,6 +1139,7 @@ async function executeClarification(
     finish,
     submit: submission,
     editedFields: draft.summaryEdits?.fields,
+    editedAssumptions: draft.summaryEdits?.assumptions,
     call: (role, request) => billed(draft.id, owner, operationId, `clarification_${role}`, request),
     record: (state) =>
       atomic(() => {
@@ -1197,14 +1233,18 @@ export async function submitClarificationIntake(
   if (current.arenaId) return getArena(current.arenaId, owner);
   const challenge = ChallengeSchema.parse({ ...input.challenge, materials: materials(current) });
   if (
+    current.revision === input.revision &&
+    current.status === "summary" &&
+    current.clarificationPromptHash === clarificationProtocolHash() &&
     current.clarification?.next === "completed" &&
     current.clarification.review?.fingerprint ===
       clarificationFingerprint(current, { ...input, challenge }) &&
+    JSON.stringify(input.assumptions) === JSON.stringify(current.assumptions) &&
     JSON.stringify(challenge) === JSON.stringify(current.challenge)
   )
     return createArena(challenge, owner, current.modelMode, {
       intakeId: draftId,
-      revision: current.revision,
+      revision: input.revision,
       assumptions: current.assumptions,
     });
   const operationId = id();
@@ -1583,6 +1623,7 @@ async function parseAndSave(
     )
       return publicDraft(draft);
     saveAttachment(draftId, attachment);
+    invalidateClarificationReport(draft);
     refreshSources(draft);
     draft.revision++;
     save(draft);

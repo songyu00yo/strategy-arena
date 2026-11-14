@@ -3194,6 +3194,14 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+.c-result .act > button.c-report-export {
+  position: static;
+  display: block;
+  margin-top: 10px;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
 .c-result .act > button:hover {
   color: var(--c-t0);
 }

@@ -113,6 +113,16 @@ export function ArenaConsole({
 }) {
   const beats = useMemo(() => beatsOf(version, replayActions), [version, replayActions]);
   const clarification = version.workflow === "clarification" ? version.clarification : undefined;
+  const exportClarification = () => {
+    if (!clarification?.specification.trim() || !clarification.executionPrompt.trim()) return;
+    const markdown = `${clarification.specification}\n\n---\n\n# 执行提示词\n\n${clarification.executionPrompt}`;
+    const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `方案擂台-${clarification.draftOnly ? "需求草稿" : "正式需求"}-${version.id}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
   const last = beats.length - 1;
   const [cursor, setCursor] = useState<number | null>(startFromBeginning ? -1 : null);
   const [playing, setPlaying] = useState(startFromBeginning);
@@ -826,6 +836,18 @@ export function ArenaConsole({
                       ? `材料引用 ${version.intake?.usedSources.map((source) => `${source.filename} ${source.location} [${source.id}]`).join("、") || "暂无材料引用"}`
                       : `接着做：${readableClaimText(version, listOf(verdict!.nextActions.slice(1)))}`}
                   </p>
+                )}
+                {clarification && (
+                  <button
+                    type="button"
+                    className="c-report-export"
+                    disabled={
+                      !clarification.specification.trim() || !clarification.executionPrompt.trim()
+                    }
+                    onClick={exportClarification}
+                  >
+                    导出完整规划与执行提示词（Markdown）
+                  </button>
                 )}
                 <button
                   type="button"

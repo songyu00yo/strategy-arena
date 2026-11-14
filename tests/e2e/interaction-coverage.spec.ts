@@ -577,8 +577,10 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole("heading", { name: "再了解你一点。", exact: true })).toBeVisible();
     await runtimeCheckpoint(page, testInfo, "questions-unanswered");
     await activate(page.getByRole("radio", { name: "展示作品", exact: true }));
+    await activate(page.getByRole("button", { name: "下一题", exact: true }));
     await activate(page.getByRole("checkbox", { name: "项目", exact: true }));
     await activate(page.getByRole("checkbox", { name: "文章", exact: true }));
+    await activate(page.getByRole("button", { name: "下一题", exact: true }));
     await page.getByRole("spinbutton", { name: "测试时间", exact: false }).fill("3");
     await runtimeCheckpoint(page, testInfo, "questions-filled");
     await activate(page.getByRole("button", { name: "确认本轮回答并继续", exact: true }));
@@ -1209,6 +1211,7 @@ for (const width of [1440, 390]) {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "再了解你一点。", exact: true })).toBeVisible();
     await activate(page.getByRole("radio", { name: "授权这一项", exact: true }));
+    await activate(page.getByRole("button", { name: "下一题", exact: true }));
     const text = page.locator('[data-question-id="content-text"]');
     await text
       .getByRole("textbox", { name: "测试文字内容", exact: true })
@@ -1223,6 +1226,7 @@ for (const width of [1440, 390]) {
     await expect(text.getByRole("textbox", { name: "测试文字内容", exact: true })).toHaveValue(
       "【测试替身】先填写再暂缓，检查可逆展开。",
     );
+    await activate(page.getByRole("button", { name: "下一题", exact: true }));
     await activate(
       page
         .locator('[data-question-id="time-skip"]')
@@ -1231,6 +1235,8 @@ for (const width of [1440, 390]) {
     await runtimeCheckpoint(page, testInfo, "question-skipped");
     await page.reload();
     await expect(page.getByRole("radio", { name: "授权这一项", exact: true })).toBeChecked();
+    await activate(page.getByRole("button", { name: "下一题", exact: true }));
+    await activate(page.getByRole("button", { name: "下一题", exact: true }));
     await expect(
       page
         .locator('[data-question-id="time-skip"]')

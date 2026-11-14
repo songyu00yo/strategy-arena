@@ -194,6 +194,10 @@ async function createSecondDraft(context: BrowserContext) {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await expect(page.getByLabel("你想做什么", { exact: true })).not.toHaveValue("");
+  await page
+    .getByRole("dialog", { name: "需求梳理", exact: true })
+    .getByRole("button", { name: "暂存并退出", exact: true })
+    .click();
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
   await page
     .getByLabel("你想做什么", { exact: true })
@@ -237,6 +241,10 @@ test("explicit UI fixture: starting over clears only the current tab's draft, pr
   await page.goto("/");
   await page.getByRole("textbox", { name: firstQuestion, exact: true }).fill(unsentAnswer);
   const other = await createSecondDraft(context);
+  await page
+    .getByRole("dialog", { name: "需求梳理", exact: true })
+    .getByRole("button", { name: "暂存并退出", exact: true })
+    .click();
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
   await expect(page.getByLabel("你想做什么", { exact: true })).toHaveValue("");
   // Empty owned pointer suppresses the legacy fallback on this tab's next refresh.
@@ -486,6 +494,9 @@ test("explicit UI fixture: unsynced summaries survive another tab's edits and st
   expect(await other.evaluate((key) => sessionStorage.getItem(key), SUMMARY_TAB_JOURNAL_KEY)).toBe(
     secondJournal,
   );
+  const dialog = page.getByRole("dialog", { name: "需求梳理", exact: true });
+  await dialog.getByRole("button", { name: "暂存并退出", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
   await expect(page.getByLabel("你想做什么", { exact: true })).toHaveValue("");
   expect(

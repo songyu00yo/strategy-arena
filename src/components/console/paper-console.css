@@ -711,6 +711,10 @@
   color: var(--ink);
   background-size: 100% 1.5px;
 }
+.console-shell .c-result .act > button.c-report-export,
+.console-shell .c-result .act > button.c-report-export:hover {
+  color: var(--paper);
+}
 .console-shell .c-root .c-result p {
   color: rgb(251 248 241 / 0.78);
 }

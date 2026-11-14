@@ -529,6 +529,37 @@ for (const width of [1440, 390]) {
       const button = [...probe.dialog.querySelectorAll("button")].find(
         (node) => node.textContent?.trim() === "调整条件",
       )!;
+      const inputs: unknown[] = [];
+      Object.assign(window, { __retargetInputs: inputs });
+      const sample = (event: MouseEvent) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const control = target?.closest("button");
+        const rect = button.getBoundingClientRect();
+        inputs.push({
+          type: event.type,
+          at: performance.now(),
+          trusted: event.isTrusted,
+          point: { x: event.clientX, y: event.clientY },
+          target: target
+            ? {
+                tag: target.tagName,
+                id: target.id,
+                className: target.getAttribute("class"),
+                label: target.getAttribute("aria-label"),
+              }
+            : null,
+          control: control?.textContent?.trim() ?? null,
+          hitsIntendedButton: control === button,
+          buttonRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          animationTime: probe.animation.currentTime,
+          animationState: probe.animation.playState,
+          animationPending: probe.animation.pending,
+          duration: probe.duration,
+          phase: probe.dialog.dataset.overlayMotionPhase,
+        });
+      };
+      for (const type of ["pointerdown", "pointerup", "click"] as const)
+        document.addEventListener(type, sample, { capture: true, passive: true });
       const record = (event: MouseEvent) => {
         if ((event.target as Element | null)?.closest("button") !== button) return;
         Object.assign(window, {
@@ -543,41 +574,60 @@ for (const width of [1440, 390]) {
       };
       document.addEventListener("click", record, true);
     });
-    // Direct mouse coordinates avoid Playwright waiting for a deliberately moving button to settle.
-    const box = await supplement
-      .getByRole("button", { name: "调整条件", exact: true })
-      .boundingBox();
-    expect(box).not.toBeNull();
-    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
-    const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
-    await expect(conditions).toBeVisible();
-    const click = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __retargetClick: { trusted: boolean; time: number; duration: number; phase: string };
-          }
-        ).__retargetClick,
-    );
-    expect(click.trusted).toBe(true);
-    expect(click.phase).toBe("handoff");
-    expect(click.time).toBeGreaterThan(0);
-    expect(click.time).toBeLessThan(click.duration);
-    await expect(conditions).not.toHaveAttribute("data-overlay-motion-active", "true");
-    const frames = await endProbe(page);
-    expect(
-      frames.every((frame) => frame.held && frame.dialogs.some((dialog) => dialog.opacity > 0)),
-    ).toBe(true);
-    const state = await closedPaperState(page);
-    await info.attach("real-click-retarget", {
-      body: JSON.stringify({ click, state, frames }),
-      contentType: "application/json",
-    });
-    expect(state.oldEffectsCancelled).toBe(true);
-    expect(state.oldTransitionsSettled).toBe(true);
-    await conditions.getByRole("button", { name: "取消", exact: true }).click();
-    await expectPaperReleased(page);
-    expect(unexpected).toEqual([]);
+    try {
+      // Direct mouse coordinates avoid Playwright waiting for a deliberately moving button to settle.
+      const box = await supplement
+        .getByRole("button", { name: "调整条件", exact: true })
+        .boundingBox();
+      expect(box).not.toBeNull();
+      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+      await expect(conditions).toBeVisible();
+      const click = await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __retargetClick: { trusted: boolean; time: number; duration: number; phase: string };
+            }
+          ).__retargetClick,
+      );
+      expect(click.trusted).toBe(true);
+      expect(click.phase).toBe("handoff");
+      expect(click.time).toBeGreaterThan(0);
+      expect(click.time).toBeLessThan(click.duration);
+      await expect(conditions).not.toHaveAttribute("data-overlay-motion-active", "true");
+      const frames = await endProbe(page);
+      expect(
+        frames.every((frame) => frame.held && frame.dialogs.some((dialog) => dialog.opacity > 0)),
+      ).toBe(true);
+      const state = await closedPaperState(page);
+      await info.attach("real-click-retarget", {
+        body: JSON.stringify({ click, state, frames }),
+        contentType: "application/json",
+      });
+      expect(state.oldEffectsCancelled).toBe(true);
+      expect(state.oldTransitionsSettled).toBe(true);
+      await conditions.getByRole("button", { name: "取消", exact: true }).click();
+      await expectPaperReleased(page);
+      expect(unexpected).toEqual([]);
+    } finally {
+      const evidence = await page
+        .evaluate(() => {
+          const target = window as unknown as {
+            __retargetInputs?: unknown[];
+            __retargetClick?: unknown;
+          };
+          return {
+            inputs: target.__retargetInputs ?? [],
+            click: target.__retargetClick ?? null,
+          };
+        })
+        .catch((error: Error) => ({ captureError: error.message }));
+      await info.attach("real-click-retarget-inputs", {
+        body: JSON.stringify({ width, evidence }, null, 2),
+        contentType: "application/json",
+      });
+    }
   });
 
   test(`normal layout: viewport and expanded content resize one moving paper at ${width}px`, async ({

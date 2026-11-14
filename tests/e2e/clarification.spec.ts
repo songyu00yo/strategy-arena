@@ -392,6 +392,35 @@ for (const width of [1440, 390]) {
         );
       })
       .toBe(true);
+    for (const hovered of [false, true]) {
+      if (hovered) await exportButton.hover();
+      else await page.mouse.move(0, 0);
+      const contrast = await exportButton.evaluate((element) => {
+        const channels = (color: string) => color.match(/[\d.]+/g)!.map(Number);
+        const foreground = channels(getComputedStyle(element).color);
+        const background = channels(
+          getComputedStyle(element.closest(".c-result")!).backgroundColor,
+        );
+        const alpha = foreground[3] ?? 1;
+        const displayed = foreground
+          .slice(0, 3)
+          .map((channel, index) => channel * alpha + background[index] * (1 - alpha));
+        const luminance = (rgb: number[]) => {
+          const linear = rgb.slice(0, 3).map((channel) => {
+            const srgb = channel / 255;
+            return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+          });
+          return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+        };
+        const text = luminance(displayed);
+        const plate = luminance(background);
+        return (Math.max(text, plate) + 0.05) / (Math.min(text, plate) + 0.05);
+      });
+      expect(
+        contrast,
+        `Export text contrast at ${width}px, hover=${hovered}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
     const [reportDownload] = await Promise.all([
       page.waitForEvent("download"),
       result

@@ -34,3 +34,26 @@ test("a failed command through tee stops before a passing artifact can be record
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("CI runs independent checks after failures and collects their actual outcomes", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  for (const id of ["secrets", "typecheck", "lint", "unit", "scripts", "evals", "build"]) {
+    assert.match(
+      workflow,
+      new RegExp(`id: ${id}\\n\\s+if: always\\(\\) && steps\\.install\\.outcome == 'success'`),
+    );
+    assert.equal(workflow.split(`CI_STEP_${id.toUpperCase()}:`).length - 1, 2);
+  }
+  assert.match(workflow, /name: Write truthful functional CI receipt\n\s+if: always\(\)/);
+  assert.match(workflow, /name: Package validated build and its evidence\n\s+if: success\(\)/);
+  assert.match(
+    workflow,
+    /rm -f test-results\/e2e\.json test-results\/e2e\.xml\n\s+pnpm exec playwright install/,
+  );
+  assert.ok(
+    workflow.indexOf("ci-validation-report.mjs --assert-ready") <
+      workflow.indexOf("node scripts/package-release.mjs"),
+  );
+  assert.doesNotMatch(workflow, /writeFileSync\([^\n]*checks\.json/);
+  assert.match(workflow, /test-results\/\*\.json/);
+});

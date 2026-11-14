@@ -13,10 +13,11 @@ export default defineConfig({
     ["list"],
     ["html", { open: "never" }],
     ["junit", { outputFile: "test-results/e2e.xml" }],
+    ["json", { outputFile: "test-results/e2e.json" }],
   ],
   use: {
     baseURL: origin,
-    trace: "retain-on-failure",
+    trace: process.env.PW_TRACE_MODE === "off" ? "off" : "retain-on-failure",
     screenshot: "only-on-failure",
   },
   projects: [

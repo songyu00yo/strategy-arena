@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:display": "playwright test --config=playwright.display.config.ts",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "format": "prettier --write src prompts scripts tests config",
     "format:check": "prettier --check src prompts scripts tests config"

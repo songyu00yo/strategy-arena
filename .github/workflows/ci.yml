@@ -13,7 +13,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       MODEL_API_KEY: ""
       DEEPSEEK_API_KEY: ""
@@ -27,27 +27,79 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare artifacts
+        id: prepare
+        run: mkdir -p artifacts test-results
       - uses: actions/setup-node@v4
         with:
           node-version: 24.19.0
-      - run: npm install --global pnpm@11.19.0
-      - run: pnpm install --frozen-lockfile
-      - run: node scripts/scan-secrets.mjs
-      - run: mkdir -p artifacts test-results
-      - run: pnpm typecheck 2>&1 | tee artifacts/typecheck.log
-      - run: pnpm lint 2>&1 | tee artifacts/lint.log
-      - run: |
-          pnpm test 2>&1 | tee artifacts/unit.log
-          node --test scripts/*.test.mjs 2>&1 | tee artifacts/release-integrity.log
-      - run: node scripts/validate-evals.mjs
-      - run: pnpm build 2>&1 | tee artifacts/build.log
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e 2>&1 | tee artifacts/e2e.log
-      - name: Package validated build and its evidence
+      - name: Install dependencies
+        id: install
         run: |
+          npm install --global pnpm@11.19.0
+          pnpm install --frozen-lockfile
+      - name: Scan secrets
+        id: secrets
+        if: always() && steps.install.outcome == 'success'
+        run: node scripts/scan-secrets.mjs 2>&1 | tee artifacts/secrets.log
+      - name: Typecheck
+        id: typecheck
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm typecheck 2>&1 | tee artifacts/typecheck.log
+      - name: Lint
+        id: lint
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm lint 2>&1 | tee artifacts/lint.log
+      - name: Unit tests
+        id: unit
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm test 2>&1 | tee artifacts/unit.log
+      - name: Script tests
+        id: scripts
+        if: always() && steps.install.outcome == 'success'
+        run: node --test scripts/*.test.mjs 2>&1 | tee artifacts/release-integrity.log
+      - name: Evaluation checks
+        id: evals
+        if: always() && steps.install.outcome == 'success'
+        run: node scripts/validate-evals.mjs 2>&1 | tee artifacts/evals.log
+      - name: Production build
+        id: build
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm build 2>&1 | tee artifacts/build.log
+      - name: Browser tests
+        id: e2e
+        if: always() && steps.build.outcome == 'success'
+        run: |
+          rm -f test-results/e2e.json test-results/e2e.xml
+          pnpm exec playwright install --with-deps chromium
+          pnpm test:e2e 2>&1 | tee artifacts/e2e.log
+      - name: Write truthful functional CI receipt
+        if: always()
+        env:
+          CI_STEP_SECRETS: ${{ steps.secrets.outcome }}
+          CI_STEP_TYPECHECK: ${{ steps.typecheck.outcome }}
+          CI_STEP_LINT: ${{ steps.lint.outcome }}
+          CI_STEP_UNIT: ${{ steps.unit.outcome }}
+          CI_STEP_SCRIPTS: ${{ steps.scripts.outcome }}
+          CI_STEP_EVALS: ${{ steps.evals.outcome }}
+          CI_STEP_BUILD: ${{ steps.build.outcome }}
+          CI_STEP_E2E: ${{ steps.e2e.outcome }}
+        run: node scripts/ci-validation-report.mjs
+      - name: Package validated build and its evidence
+        if: success()
+        env:
+          CI_STEP_SECRETS: ${{ steps.secrets.outcome }}
+          CI_STEP_TYPECHECK: ${{ steps.typecheck.outcome }}
+          CI_STEP_LINT: ${{ steps.lint.outcome }}
+          CI_STEP_UNIT: ${{ steps.unit.outcome }}
+          CI_STEP_SCRIPTS: ${{ steps.scripts.outcome }}
+          CI_STEP_EVALS: ${{ steps.evals.outcome }}
+          CI_STEP_BUILD: ${{ steps.build.outcome }}
+          CI_STEP_E2E: ${{ steps.e2e.outcome }}
+        run: |
+          node scripts/ci-validation-report.mjs --assert-ready
           node scripts/package-release.mjs artifacts/strategy-arena-${{ github.sha }}.tar.gz
-          node -e "require('fs').writeFileSync('artifacts/checks.json', JSON.stringify({typecheck:'passed',lint:'passed',unit:'passed',build:'passed',e2e:'passed'}))"
-          node scripts/release-manifest.mjs --kind ci --checks artifacts/checks.json --artifact artifacts/strategy-arena-${{ github.sha }}.tar.gz --artifact artifacts/typecheck.log --artifact artifacts/lint.log --artifact artifacts/unit.log --artifact artifacts/release-integrity.log --artifact artifacts/build.log --artifact artifacts/e2e.log --artifact test-results/e2e.xml --output artifacts/manifest-${{ github.sha }}.json
+          node scripts/release-manifest.mjs --kind ci --checks artifacts/checks.json --receipt artifacts/ci-receipt.json --artifact artifacts/strategy-arena-${{ github.sha }}.tar.gz --artifact artifacts/ci-receipt.json --artifact artifacts/checks.json --artifact artifacts/secrets.log --artifact artifacts/typecheck.log --artifact artifacts/lint.log --artifact artifacts/unit.log --artifact artifacts/release-integrity.log --artifact artifacts/evals.log --artifact artifacts/build.log --artifact artifacts/e2e.log --artifact test-results/e2e.xml --artifact test-results/e2e.json --output artifacts/manifest-${{ github.sha }}.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -56,6 +108,7 @@ jobs:
             artifacts/
             playwright-report/
             test-results/*.xml
+            test-results/*.json
             test-results/**/*.zip
             test-results/**/*.png
           retention-days: 14

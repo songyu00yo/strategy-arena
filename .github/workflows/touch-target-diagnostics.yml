@@ -1,8 +1,7 @@
-name: Trusted touch target diagnostics
+name: Pro10 exact committed motion A-B-A
 on:
   push:
     branches: [codex/touch-target-diagnostic-334a487]
-  workflow_dispatch:
 permissions:
   contents: read
 defaults:
@@ -11,8 +10,9 @@ defaults:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
+      DIAGNOSTIC_COMMIT: 7f5d1f19b1ab5f2a18ddf5b08fcc25828d8e97dc
       MODEL_API_KEY: ""
       DEEPSEEK_API_KEY: ""
       OPENAI_API_KEY: ""
@@ -20,28 +20,38 @@ jobs:
       ARENA_BILLING_DATABASE_PATH: ""
       ARENA_WORKER_ENABLED: "false"
       NEXT_TELEMETRY_DISABLED: "1"
-      PLAYWRIGHT_HTML_OPEN: never
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 7f5d1f19b1ab5f2a18ddf5b08fcc25828d8e97dc
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24.19.0
-      - run: npm install --global pnpm@11.19.0
-      - run: pnpm install --frozen-lockfile
-      - run: mkdir -p artifacts test-results
-      - name: Build exact diagnostic source
-        run: pnpm build 2>&1 | tee artifacts/build.log
-      - run: pnpm exec playwright install --with-deps chromium
-      - name: Execute ten original five-tap sequences without retries
+      - name: Install frozen dependencies
         run: |
-          pnpm exec playwright test tests/e2e/route-entry-motion.spec.ts --project=chromium --workers=1 --retries=0 --max-failures=0 --repeat-each=10 --grep 'rapid touch selection releases its buffer and foreground details preserve the footprint' --trace=retain-on-failure 2>&1 | tee artifacts/touch-target.log
-      - name: Preserve every observed target and failure
+          set -euo pipefail
+          npm install --global pnpm@11.19.0
+          pnpm install --frozen-lockfile
+          mkdir -p artifacts test-results
+      - name: Build actual final committed source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DIAGNOSTIC_COMMIT"
+          pnpm build 2>&1 | tee artifacts/motion-build.log
+      - name: Install Chromium and runner libraries
+        run: |
+          set -euo pipefail
+          pnpm exec playwright install --with-deps chromium 2>&1 | tee artifacts/motion-browser-install.log
+      - name: Run original 135 serial A1 B A2 diagnostics against final checkout
+        run: |
+          set -euo pipefail
+          node scripts/diagnose-motion.mjs --sha "$DIAGNOSTIC_COMMIT" --groups 3 --output artifacts/motion-diagnostics 2>&1 | tee artifacts/motion-diagnostic-run.log
+      - name: Preserve actual checkout identities and every diagnostic outcome
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trusted-touch-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            artifacts/
-            test-results/
-            playwright-report/
+          name: pro10-exact-135-${{ env.DIAGNOSTIC_COMMIT }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
           retention-days: 14

@@ -11,6 +11,84 @@ type RouteWindow = Window & {
   __routeReveals: Array<{ t: number; transition: boolean }>;
 };
 
+type TrustedTimelineWindow = Window & {
+  __trustedTimelineEvents: Array<Record<string, unknown>>;
+  __trustedTimelineIntent: number | null;
+};
+
+async function observeTrustedTimelineTargets(page: Page) {
+  await page.addInitScript(() => {
+    const state = window as unknown as TrustedTimelineWindow;
+    state.__trustedTimelineEvents = [];
+    state.__trustedTimelineIntent = null;
+    const ids = new WeakMap<Element, number>();
+    let identity = 0;
+    const id = (node: Element | null) => {
+      if (!node) return null;
+      if (!ids.has(node)) ids.set(node, ++identity);
+      return ids.get(node)!;
+    };
+    const currentStep = () =>
+      document.querySelector('.c-time [aria-current="step"]')?.getAttribute("aria-label") ?? null;
+    const record = (event: Event) => {
+      if (!event.isTrusted) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const pointer = event instanceof MouseEvent ? event : null;
+      const touch = event instanceof TouchEvent ? event.changedTouches[0] : null;
+      const x = pointer?.clientX ?? touch?.clientX ?? null;
+      const y = pointer?.clientY ?? touch?.clientY ?? null;
+      const hit = x === null || y === null ? null : document.elementFromPoint(x, y);
+      const button =
+        target?.closest<HTMLButtonElement>('.c-time button[aria-label^="第 "]') ?? null;
+      const entry: Record<string, unknown> = {
+        type: event.type,
+        at: performance.now(),
+        eventTimeStamp: event.timeStamp,
+        trusted: event.isTrusted,
+        intendedStep: state.__trustedTimelineIntent,
+        pointerType: event instanceof PointerEvent ? event.pointerType : touch ? "touch" : null,
+        pointerId: event instanceof PointerEvent ? event.pointerId : null,
+        x,
+        y,
+        targetTag: target?.tagName ?? null,
+        targetClass: target?.getAttribute("class") ?? null,
+        targetLabel: target?.closest("button")?.getAttribute("aria-label") ?? null,
+        targetId: id(target),
+        targetConnected: target?.isConnected ?? false,
+        timelineTarget: button?.getAttribute("aria-label") ?? null,
+        timelineTargetId: id(button),
+        hitTag: hit?.tagName ?? null,
+        hitLabel: hit?.closest("button")?.getAttribute("aria-label") ?? null,
+        hitId: id(hit),
+        currentStep: currentStep(),
+        scrollX,
+        scrollY,
+        railBox: document.querySelector(".c-time")?.getBoundingClientRect().toJSON() ?? null,
+        pointerCaptured:
+          event instanceof PointerEvent && !!target?.hasPointerCapture(event.pointerId),
+        defaultPrevented: event.defaultPrevented,
+      };
+      state.__trustedTimelineEvents.push(entry);
+      if (event.type === "click")
+        requestAnimationFrame(() => {
+          entry.nextFrameAt = performance.now();
+          entry.nextFrameStep = currentStep();
+          entry.nextFrameScrollY = scrollY;
+        });
+    };
+    for (const type of [
+      "pointerdown",
+      "pointerup",
+      "pointercancel",
+      "touchstart",
+      "touchend",
+      "touchcancel",
+      "click",
+    ])
+      document.addEventListener(type, record, true);
+  });
+}
+
 // Explicit synthetic records, intercepted APIs and trusted browser input.
 async function fixture(page: Page, longResult = false) {
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -295,55 +373,117 @@ test.describe("touch timeline footprint", () => {
   test.use({ hasTouch: true });
   test("rapid touch selection releases its buffer and foreground details preserve the footprint", async ({
     page,
-  }) => {
-    await fixture(page);
-    await page.goto("/");
-    await confirmFixtureIntake(page);
-    const region = page.locator(".c-result-region");
-    for (const step of [1, 6, 2, 8, 4]) {
-      const box = await page
-        .getByRole("button", { name: `第 ${step} 步`, exact: true })
-        .boundingBox();
-      expect(box).not.toBeNull();
-      await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
-    }
-    await expect(page.getByRole("button", { name: "第 4 步", exact: true })).toHaveAttribute(
-      "aria-current",
-      "step",
-    );
-    expect(
-      await region.evaluate((element) => element.getBoundingClientRect().height),
-    ).toBeGreaterThan(0);
-    await expect
-      .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
-      .toBe(0);
-    await page.getByRole("button", { name: /回到结果/ }).click();
-    await expect
-      .poll(() =>
-        region.evaluate((element) =>
-          element.getAnimations().some((a) => a.playState === "running"),
+  }, info) => {
+    await observeTrustedTimelineTargets(page);
+    const calls = await fixture(page);
+    const taps: Array<Record<string, unknown>> = [];
+    try {
+      await page.goto("/");
+      await confirmFixtureIntake(page);
+      const region = page.locator(".c-result-region");
+      for (const step of [1, 6, 2, 8, 4]) {
+        const before = await page
+          .getByRole("button", { name: `第 ${step} 步`, exact: true })
+          .evaluate((node, intended) => {
+            (window as unknown as TrustedTimelineWindow).__trustedTimelineIntent = intended;
+            return {
+              at: performance.now(),
+              connected: node.isConnected,
+              rect: node.getBoundingClientRect().toJSON(),
+              scrollX,
+              scrollY,
+              currentStep:
+                document
+                  .querySelector('.c-time [aria-current="step"]')
+                  ?.getAttribute("aria-label") ?? null,
+              rail: document.querySelector(".c-time")?.getBoundingClientRect().toJSON() ?? null,
+              animations:
+                document
+                  .querySelector(".c-result-region")
+                  ?.getAnimations()
+                  .map((animation) => ({
+                    state: animation.playState,
+                    time: animation.currentTime,
+                    duration: animation.effect?.getTiming().duration,
+                  })) ?? [],
+            };
+          }, step);
+        const box = await page
+          .getByRole("button", { name: `第 ${step} 步`, exact: true })
+          .boundingBox();
+        expect(box).not.toBeNull();
+        taps.push({ step, before, box });
+        await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      }
+      await expect(page.getByRole("button", { name: "第 4 步", exact: true })).toHaveAttribute(
+        "aria-current",
+        "step",
+      );
+      const rapidEvents = await page.evaluate(() =>
+        (window as unknown as TrustedTimelineWindow).__trustedTimelineEvents.filter(
+          (event) => event.type === "click" && event.intendedStep !== null,
         ),
-      )
-      .toBe(false);
-    const box = await page.getByRole("button", { name: "第 1 步", exact: true }).boundingBox();
-    await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
-    await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
-      "aria-current",
-      "step",
-    );
-    await page.getByRole("button", { name: "查看第 1 步", exact: true }).focus();
-    await expect(page.getByRole("button", { name: "查看第 1 步", exact: true })).toBeFocused();
-    await page.keyboard.press("Enter");
-    const details = page.getByRole("dialog", { name: "第 1 步 · 独立提案", exact: true });
-    await expect(details).toBeVisible();
-    await page.waitForTimeout(400);
-    expect(
-      await region.evaluate((element) => element.getBoundingClientRect().height),
-    ).toBeGreaterThan(0);
-    await page.keyboard.press("Escape");
-    await expect(details).not.toBeVisible();
-    await expect
-      .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
-      .toBe(0);
+      );
+      expect(rapidEvents.map((event) => event.timelineTarget)).toEqual(
+        [1, 6, 2, 8, 4].map((step) => `第 ${step} 步`),
+      );
+      await page.evaluate(() => {
+        (window as unknown as TrustedTimelineWindow).__trustedTimelineIntent = null;
+      });
+      expect(
+        await region.evaluate((element) => element.getBoundingClientRect().height),
+      ).toBeGreaterThan(0);
+      await expect
+        .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
+        .toBe(0);
+      await page.getByRole("button", { name: /回到结果/ }).click();
+      await expect
+        .poll(() =>
+          region.evaluate((element) =>
+            element.getAnimations().some((a) => a.playState === "running"),
+          ),
+        )
+        .toBe(false);
+      const box = await page.getByRole("button", { name: "第 1 步", exact: true }).boundingBox();
+      await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+        "aria-current",
+        "step",
+      );
+      await page.getByRole("button", { name: "查看第 1 步", exact: true }).focus();
+      await expect(page.getByRole("button", { name: "查看第 1 步", exact: true })).toBeFocused();
+      await page.keyboard.press("Enter");
+      const details = page.getByRole("dialog", { name: "第 1 步 · 独立提案", exact: true });
+      await expect(details).toBeVisible();
+      await page.waitForTimeout(400);
+      expect(
+        await region.evaluate((element) => element.getBoundingClientRect().height),
+      ).toBeGreaterThan(0);
+      await page.keyboard.press("Escape");
+      await expect(details).not.toBeVisible();
+      await expect
+        .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
+        .toBe(0);
+    } finally {
+      const observed = await page.evaluate(() => ({
+        events: (window as unknown as TrustedTimelineWindow).__trustedTimelineEvents,
+        currentStep:
+          document.querySelector('.c-time [aria-current="step"]')?.getAttribute("aria-label") ??
+          null,
+        scrollX,
+        scrollY,
+        rail: document.querySelector(".c-time")?.getBoundingClientRect().toJSON() ?? null,
+      }));
+      await info.attach("trusted-touch-targets", {
+        body: JSON.stringify({
+          classification: "explicit-fixture-real-coordinate-touch-target-observation",
+          sequence: [1, 6, 2, 8, 4],
+          taps,
+          ...observed,
+          calls,
+        }),
+        contentType: "application/json",
+      });
+    }
   });
 });

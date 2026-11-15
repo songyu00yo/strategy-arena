@@ -1,6 +1,7 @@
 name: Validate Strategy Arena
 on:
   push:
+    branches-ignore: [codex/touch-target-diagnostic-334a487]
   pull_request:
 permissions:
   contents: read

@@ -433,6 +433,14 @@ test.describe("touch timeline footprint", () => {
       expect(
         await region.evaluate((element) => element.getBoundingClientRect().height),
       ).toBeGreaterThan(0);
+      // A touch reader leaves through an actual outside gesture, matching focus and hover lifetimes.
+      const outside = await page.locator(".c-slate h1").boundingBox();
+      expect(outside).not.toBeNull();
+      await page.touchscreen.tap(outside!.x + outside!.width / 2, outside!.y + outside!.height / 2);
+      await expect(page.getByRole("button", { name: "第 4 步", exact: true })).toHaveAttribute(
+        "aria-current",
+        "step",
+      );
       await expect
         .poll(() => region.evaluate((element) => element.getBoundingClientRect().height))
         .toBe(0);

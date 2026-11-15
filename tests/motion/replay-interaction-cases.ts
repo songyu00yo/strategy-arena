@@ -203,7 +203,8 @@ export function registerReplayInteractionTests(mode: "functional" | "display") {
         });
       });
       await page.goto(`/?arena=${snapshot.id}`);
-      await expect(page.locator(".c-root")).toBeVisible();
+      await page.getByRole("button", { name: "回放历史过程", exact: true }).click();
+      await expect(page.locator(".clarification-replay")).toBeVisible();
       await go(page, 1);
       await expect(page.locator('.c-time [data-round="1"]')).toHaveAttribute(
         "data-state",

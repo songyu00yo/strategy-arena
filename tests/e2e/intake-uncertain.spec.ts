@@ -186,10 +186,12 @@ test("explicit UI fixture: a newly uncertain analysis cannot be replayed after r
   await expect(recovery.getByRole("alert")).toContainText("本次分析是否完成还待确认");
   await recovery.getByRole("button", { name: "查看调用与费用说明", exact: true }).click();
   await expect(recovery).toContainText("等待核账");
+  await page.getByRole("button", { name: "目标与材料", exact: true }).click();
   await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeDisabled();
   expect(analyzes).toBe(1);
   await page.locator(".gi-composer").dispatchEvent("submit");
   await page.reload();
+  await page.getByRole("button", { name: "目标与材料", exact: true }).click();
   await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeDisabled();
   await expect(page.locator(".guided-intake")).toContainText("USD $0.0800");
   await page.locator(".gi-composer").dispatchEvent("submit");

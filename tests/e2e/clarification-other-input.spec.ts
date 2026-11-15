@@ -42,7 +42,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     const snapshot = configureFixtureModels(fixtureSnapshot());
-    const draft = fixtureIntake({
+    let draft = fixtureIntake({
       status: "questions",
       questions,
       round: 1,
@@ -63,7 +63,11 @@ for (const width of [1440, 390]) {
         },
       ],
     });
-    const mutations: string[] = [];
+    const mutations: {
+      method: string;
+      path: string;
+      body: { revision: number; answerMode: string; answers: IntakeAnswer[] };
+    }[] = [];
     await page.addInitScript(({ key, id }) => localStorage.setItem(key, id), {
       key: intakeStorageKey,
       id: draft.id,
@@ -71,11 +75,29 @@ for (const width of [1440, 390]) {
     await page.route("**/api/**", (route) => {
       const path = new URL(route.request().url()).pathname;
       if (route.request().method() !== "GET") {
-        mutations.push(path);
-        return route.fulfill({
-          status: 500,
-          json: { error: "This input fixture does not accept server mutations" },
-        });
+        const body = route.request().postDataJSON();
+        mutations.push({ method: route.request().method(), path, body });
+        expect(route.request().method()).toBe("PATCH");
+        expect(path).toBe(`/api/intakes/${draft.id}`);
+        expect(body.answerMode).toBe("draft");
+        expect(body.revision).toBe(draft.revision);
+        const accepted = body.answers.map((answer: IntakeAnswer) => ({
+          ...answer,
+          question: questions.find((question) => question.id === answer.questionId)!,
+          confirmation: "pending" as const,
+        }));
+        draft = {
+          ...draft,
+          revision: draft.revision + 1,
+          answers: [
+            ...draft.answers.filter(
+              (answer) =>
+                !accepted.some((entry: IntakeAnswer) => entry.questionId === answer.questionId),
+            ),
+            ...accepted,
+          ],
+        };
+        return route.fulfill({ json: draft });
       }
       if (path === "/api/health")
         return route.fulfill({
@@ -130,6 +152,7 @@ for (const width of [1440, 390]) {
     await dialog.getByRole("button", { name: "暂存并退出", exact: true }).click();
     await page.getByRole("button", { name: "继续回答", exact: true }).click();
     await expect(detail).toHaveValue("本地补充内容");
+    expect(mutations).toEqual([]);
     await other.uncheck();
     await expect(detail).toHaveCount(0);
     await expect(optionA).toBeChecked();
@@ -183,7 +206,49 @@ for (const width of [1440, 390]) {
     await dialog.getByRole("checkbox", { name: "其他费用", exact: true }).check();
     await expect(dialog.locator(".gi-other-answer textarea")).toHaveCount(1);
     await expect(dialog.getByRole("checkbox", { name: "A", exact: true })).toBeChecked();
-    expect(mutations).toEqual([]);
+    await expect.poll(() => mutations.length).toBe(3);
+    expect(mutations).toEqual([
+      {
+        method: "PATCH",
+        path: `/api/intakes/${draft.id}`,
+        body: {
+          revision: 0,
+          answerMode: "draft",
+          answers: [{ questionId: "multiple_other", state: "answered", value: ["A", "B"] }],
+        },
+      },
+      {
+        method: "PATCH",
+        path: `/api/intakes/${draft.id}`,
+        body: {
+          revision: 1,
+          answerMode: "draft",
+          answers: [{ questionId: "multiple_other", state: "answered", value: ["A", "B"] }],
+        },
+      },
+      {
+        method: "PATCH",
+        path: `/api/intakes/${draft.id}`,
+        body: {
+          revision: 2,
+          answerMode: "draft",
+          answers: [
+            {
+              questionId: "single_other",
+              state: "answered",
+              value: "默认方式",
+              question: questions[1],
+              confirmation: "pending",
+            },
+          ],
+        },
+      },
+    ]);
+    expect(draft.answers.every((answer) => answer.confirmation === "pending")).toBe(true);
+    expect(draft.answers.find((answer) => answer.questionId === "legacy_other")?.value).toEqual([
+      "A",
+      "其他，下一步由我描述:old detail",
+    ]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(
       false,
     );

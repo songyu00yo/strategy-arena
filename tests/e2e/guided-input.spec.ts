@@ -206,7 +206,7 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
   snapshot.versions[0].status = "paused";
   let draft = fixtureIntake();
   const analysis: { finish: boolean; operationId: string }[] = [];
-  const answers: IntakeAnswer[][] = [];
+  const answers: { answerMode: string; answers: IntakeAnswer[] }[] = [];
   let submitted: { challenge: Challenge; assumptions: string[] } | undefined;
   await page.route(/\/api\/intakes(?:\/.*)?$/, async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -222,7 +222,7 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
       draft = fixtureIntake({ goal: body.goal, modelMode: body.modelMode });
     } else if (method === "PATCH") {
       const body = route.request().postDataJSON();
-      if (body.answers) answers.push(body.answers);
+      if (body.answers) answers.push({ answerMode: body.answerMode, answers: body.answers });
       draft = {
         ...draft,
         revision: draft.revision + 1,
@@ -230,10 +230,18 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
           ? { challenge: body.summary.challenge, assumptions: body.summary.assumptions }
           : {}),
         answers: body.answers
-          ? body.answers.map((answer: IntakeAnswer) => ({
-              ...answer,
-              question: draft.questions.find((question) => question.id === answer.questionId)!,
-            }))
+          ? [
+              ...draft.answers.filter(
+                (answer) =>
+                  !body.answers.some(
+                    (entry: IntakeAnswer) => entry.questionId === answer.questionId,
+                  ),
+              ),
+              ...body.answers.map((answer: IntakeAnswer) => ({
+                ...answer,
+                question: draft.questions.find((question) => question.id === answer.questionId)!,
+              })),
+            ]
           : draft.answers,
       };
     } else if (path.endsWith("/analyze")) {
@@ -297,20 +305,46 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
     .getByRole("group", { name: questions[2].title, exact: true })
     .getByRole("button", { name: "跳过", exact: true })
     .click();
-  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+  await page.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
   await expect(
     page
       .getByRole("dialog", { name: "需求梳理", exact: true })
       .getByText("第 2 轮", { exact: false }),
   ).toBeVisible();
-  expect(answers[0]).toEqual([
+  expect(answers.map((patch) => patch.answerMode)).toEqual(["draft", "draft", "draft", "complete"]);
+  expect(answers.slice(0, 3).map((patch) => patch.answers)).toEqual([
+    [{ questionId: "direction", state: "answered", value: "完成作品" }],
+    [{ questionId: "limits", state: "answered", value: ["不买设备", "独立完成"] }],
+    [{ questionId: "hours", state: "skipped", value: "" }],
+  ]);
+  expect(answers[3].answers).toEqual([
     { questionId: "direction", state: "answered", value: "完成作品" },
     { questionId: "limits", state: "answered", value: ["不买设备", "独立完成"] },
     { questionId: "hours", state: "skipped", value: "" },
   ]);
-  await page.getByRole("button", { name: "跳过本轮，整理摘要", exact: true }).click();
+  for (const [index, question] of questions.entries()) {
+    await page
+      .getByRole("group", { name: `后续：${question.title}`, exact: true })
+      .getByRole("button", { name: "跳过", exact: true })
+      .click();
+    await page
+      .getByRole("button", {
+        name: index < questions.length - 1 ? "下一题" : "提交本轮并继续",
+        exact: true,
+      })
+      .click();
+  }
   await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
-  expect(analysis.map((call) => call.finish)).toEqual([false, false, true]);
+  const skippedFollowups = questions.map((question) => ({
+    questionId: `${question.id}_followup`,
+    state: "skipped",
+    value: question.type === "multiple" ? [] : "",
+  }));
+  expect(answers.slice(4)).toEqual([
+    ...skippedFollowups.map((answer) => ({ answerMode: "draft", answers: [answer] })),
+    { answerMode: "complete", answers: skippedFollowups },
+  ]);
+  expect(analysis.map((call) => call.finish)).toEqual([false, false, false]);
   expect(new Set(analysis.map((call) => call.operationId)).size).toBe(3);
   await expect(page.getByText("暂定假设 · 请逐条核对")).toBeVisible();
   const submit = page.getByRole("button", { name: "确认摘要并开始推演", exact: true });
@@ -345,15 +379,34 @@ test("explicit UI fixture: refresh restores questions and a late pre-refresh res
     releaseOld = resolve;
   });
   let analyses = 0;
+  const answerPatches: { revision: number; answerMode: string; answers: IntakeAnswer[] }[] = [];
   await page.route(/\/api\/intakes(?:\/.*)?$/, async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (route.request().method() === "PATCH") draft = { ...draft, revision: 5 };
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON();
+      expect(body.revision).toBe(draft.revision);
+      answerPatches.push(body);
+      draft = {
+        ...draft,
+        revision: draft.revision + 1,
+        answers: [
+          ...draft.answers.filter(
+            (answer) =>
+              !body.answers.some((entry: IntakeAnswer) => entry.questionId === answer.questionId),
+          ),
+          ...body.answers.map((answer: IntakeAnswer) => ({
+            ...answer,
+            question: questions.find((question) => question.id === answer.questionId)!,
+          })),
+        ],
+      };
+    }
     if (path.endsWith("/analyze")) {
       analyses++;
       const stale = structuredClone(draft);
       draft = {
         ...draft,
-        revision: 7,
+        revision: draft.revision + 1,
         status: "summary",
         questions: [],
         challenge: fixtureChallenge,
@@ -373,9 +426,31 @@ test("explicit UI fixture: refresh restores questions and a late pre-refresh res
       .getByRole("radio", { name: "学会基础" })
       .check();
     await page.getByRole("button", { name: "下一题", exact: true }).click();
+    await page
+      .getByRole("group", { name: questions[1].title, exact: true })
+      .getByRole("button", { name: "暂时不知道", exact: true })
+      .click();
     await page.getByRole("button", { name: "下一题", exact: true }).click();
-    await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+    await page
+      .getByRole("group", { name: questions[2].title, exact: true })
+      .getByRole("button", { name: "暂时不知道", exact: true })
+      .click();
+    await page.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
     await started;
+    const entered = [
+      { questionId: "direction", state: "answered", value: "学会基础" },
+      { questionId: "limits", state: "unknown", value: [] },
+      { questionId: "hours", state: "unknown", value: "" },
+    ];
+    expect(answerPatches).toEqual([
+      ...entered.map((answer, index) => ({
+        revision: 4 + index,
+        answerMode: "draft",
+        answers: [answer],
+      })),
+      { revision: 7, answerMode: "complete", answers: entered },
+    ]);
+    expect(draft.revision).toBe(9);
     await page.reload();
     await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
     releaseOld();
@@ -541,7 +616,7 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
   await expect(page.getByText("测试替身：PDF 已损坏，请重新导出。")).toBeVisible();
   await page.getByRole("button", { name: "开始梳理", exact: true }).click();
   await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
-  // Explicit browser-state fixture: the story clock sees a hidden document; interaction animation remains live.
+  // Explicit browser-state fixture: presentation pauses while the paper inputs remain usable.
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -551,6 +626,10 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByLabel("可投入金额（人民币）", { exact: true })).toBeVisible();
   await page.getByLabel("可投入金额（人民币）", { exact: true }).fill("120");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
   await page
     .getByRole("dialog", { name: "需求梳理", exact: true })
     .getByRole("button", { name: "暂存并退出", exact: true })

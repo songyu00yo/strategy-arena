@@ -421,16 +421,20 @@ export function registerInteractionCoverageTests(mode: "functional" | "display")
       if (path === `/api/intakes/${draft.id}` && method === "PATCH") {
         const body = request.postDataJSON();
         const { summary, ...fields } = body;
+        const accepted = body.answers?.map((answer: { questionId: string }) => ({
+          ...answer,
+          question: draft.questions.find((question) => question.id === answer.questionId),
+        }));
+        const answerIds = new Set<string>(
+          accepted?.map((answer: { questionId: string }) => answer.questionId) ?? [],
+        );
         draft = {
           ...draft,
           ...fields,
           ...(summary ? { challenge: summary.challenge, assumptions: summary.assumptions } : {}),
           revision: draft.revision + 1,
-          answers: body.answers
-            ? body.answers.map((answer: { questionId: string }) => ({
-                ...answer,
-                question: draft.questions.find((question) => question.id === answer.questionId),
-              }))
+          answers: accepted
+            ? [...draft.answers.filter((answer) => !answerIds.has(answer.questionId)), ...accepted]
             : draft.answers,
         };
         return route.fulfill({ json: draft });
@@ -598,7 +602,7 @@ export function registerInteractionCoverageTests(mode: "functional" | "display")
         await activate(page.getByRole("button", { name: "下一题", exact: true }));
         await page.getByRole("spinbutton", { name: "测试时间", exact: false }).fill("3");
         await runtimeCheckpoint(page, testInfo, "questions-filled");
-        await activate(page.getByRole("button", { name: "确认本轮回答并继续", exact: true }));
+        await activate(page.getByRole("button", { name: "提交本轮并继续", exact: true }));
         await expect(
           page.getByRole("heading", { name: "这是我们理解的任务。", exact: true }),
         ).toBeVisible();
@@ -1366,6 +1370,13 @@ export function registerInteractionCoverageTests(mode: "functional" | "display")
         );
         await runtimeCheckpoint(page, testInfo, "question-skipped");
         await page.reload();
+        await expect(
+          page
+            .locator('[data-question-id="time-skip"]')
+            .getByRole("button", { name: "跳过", exact: true }),
+        ).toHaveAttribute("aria-pressed", "true");
+        await activate(page.getByRole("button", { name: "上一题", exact: true }));
+        await activate(page.getByRole("button", { name: "上一题", exact: true }));
         await expect(page.getByRole("radio", { name: "授权这一项", exact: true })).toBeChecked();
         await activate(page.getByRole("button", { name: "下一题", exact: true }));
         await activate(page.getByRole("button", { name: "下一题", exact: true }));

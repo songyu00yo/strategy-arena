@@ -1330,7 +1330,8 @@ export function registerReplayActionTransitionTests(mode: "functional" | "displa
       });
     });
     await page.goto(`/?arena=${snapshot.id}`);
-    await page.locator(".c-root").waitFor();
+    await page.getByRole("button", { name: "回放历史过程", exact: true }).click();
+    await expect(page.locator(".clarification-replay")).toBeVisible();
     await seek(page, unknown);
     await startSampling(page);
     await playThrough(page, unknown + 2);

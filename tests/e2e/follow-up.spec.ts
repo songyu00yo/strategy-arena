@@ -160,7 +160,7 @@ for (const width of [1440, 390]) {
     await page
       .getByRole("textbox", { name: draft.questions[0].title, exact: true })
       .fill("简洁正式");
-    await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+    await page.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
     await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
     await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
     await expect(page.locator(".c-board")).toHaveCount(3);

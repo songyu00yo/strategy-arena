@@ -1,5 +1,6 @@
 // Saved real-model simulation record with explicit health fixtures. No model providers are contacted.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test as baseTest, type Page } from "@playwright/test";
+import { displayTest } from "../display/display-validation";
 
 type NativeOverlayDriver = {
   id: number;
@@ -24,12 +25,21 @@ type OverlayFrame = {
     height: number;
     snapshot: boolean;
     native: NativeOverlayDriver | null;
+    heightEffects: Array<{
+      id: number;
+      time: number | null;
+      duration: number;
+      rate: number;
+      state: string;
+      keyframes: ComputedKeyframe[];
+    }>;
   }>;
   held: boolean;
   scrollY: number;
 };
 
 export function registerOverlayContinuityTests(mode: "functional" | "display") {
+  const test = mode === "display" ? displayTest : baseTest;
   const check = expect.configure({ soft: true });
   const requestsByPage = new WeakMap<Page, string[]>();
   test.afterEach(async ({ page }) => {
@@ -133,6 +143,22 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
             height: box.height,
             snapshot: !!node.querySelector(".overlay-handoff-snapshot"),
             native: nativeDriver(node),
+            heightEffects: node.getAnimations({ subtree: true }).flatMap((animation) => {
+              if (!(animation.effect instanceof KeyframeEffect)) return [];
+              const keyframes = animation.effect.getKeyframes();
+              if (!keyframes.some((key) => "height" in key)) return [];
+              if (!animationIds.has(animation)) animationIds.set(animation, ++nextAnimationId);
+              return [
+                {
+                  id: animationIds.get(animation)!,
+                  time: typeof animation.currentTime === "number" ? animation.currentTime : null,
+                  duration: Number(animation.effect.getTiming().duration),
+                  rate: animation.playbackRate,
+                  state: animation.playState,
+                  keyframes,
+                },
+              ];
+            }),
           };
         });
         state.frames.push({
@@ -225,7 +251,7 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
             body: JSON.stringify(frames),
             contentType: "application/json",
           });
-          check(frames.length).toBeGreaterThan(20);
+          check(frames.length).toBeGreaterThan(mode === "display" ? 20 : 0);
           check(frames.every((frame) => frame.held)).toBe(true);
           check(
             frames.every((frame) => frame.dialogs.some((dialog) => dialog.opacity > 0.02)),
@@ -256,9 +282,9 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
                 : [],
             )
             .sort((a, b) => a - b);
-          check(movingIntervals.length).toBeGreaterThan(10);
           expectNativeHandoffs(frames);
           if (mode === "display") {
+            check(movingIntervals.length).toBeGreaterThan(10);
             check(movingIntervals[Math.floor(movingIntervals.length * 0.95)]).toBeLessThanOrEqual(
               20,
             );
@@ -397,15 +423,14 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
     const samples = frames.flatMap((frame) => {
       const paper = frame.dialogs.find((dialog) => dialog.name === "调整条件");
       return paper && frame.at >= click.at && frame.at < until
-        ? [{ at: frame.at, height: paper.height }]
+        ? [{ at: frame.at, height: paper.height, native: paper.heightEffects }]
         : [];
     });
     const moving = samples.filter(
       (sample, index) => index > 0 && Math.abs(sample.height - samples[index - 1].height) > 0.1,
     );
     const reached = samples.find((sample) => Math.abs(sample.height - target) <= 1);
-    expect(moving.length).toBeGreaterThan(0);
-    const motionSpanMs = moving.at(-1)!.at - moving[0].at;
+    const motionSpanMs = moving.length ? moving.at(-1)!.at - moving[0].at : 0;
     const intermediate = samples.filter(
       (sample) =>
         sample.height > Math.min(click.height, target) + 2 &&
@@ -413,13 +438,40 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
     );
     expect(click.trusted).toBe(true);
     expect(Math.abs(target - click.height)).toBeGreaterThan(100);
-    expect(intermediate.length).toBeGreaterThan(0);
     expect(reached).toBeDefined();
-    expect(reached!.at - click.at).toBeGreaterThanOrEqual(80);
-    expect(motionSpanMs).toBeGreaterThanOrEqual(140);
-    expect(
-      samples.some((sample) => sample.at - click.at < 80 && Math.abs(sample.height - target) <= 1),
-    ).toBe(false);
+    const native = samples.flatMap((sample) => sample.native);
+    check(native.length).toBeGreaterThan(0);
+    check(native.some((effect) => effect.time !== null && effect.time > 0)).toBe(true);
+    check(
+      native.some(
+        (effect) =>
+          Math.sign(
+            parseFloat(String(effect.keyframes.at(-1)?.height)) -
+              parseFloat(String(effect.keyframes[0]?.height)),
+          ) === Math.sign(target - click.height),
+      ),
+    ).toBe(true);
+    const times = new Map<number, number>();
+    for (const effect of native) {
+      check(effect.duration).toBe(click.expanded ? 180 : 220);
+      check(effect.rate).toBe(1);
+      check(effect.keyframes.length).toBeGreaterThan(1);
+      check(effect.time).not.toBeNull();
+      check(effect.time!).toBeGreaterThanOrEqual(times.get(effect.id) ?? 0);
+      check(effect.time!).toBeLessThanOrEqual(effect.duration);
+      times.set(effect.id, effect.time!);
+    }
+    if (mode === "display") {
+      check(moving.length).toBeGreaterThan(0);
+      check(intermediate.length).toBeGreaterThan(0);
+      check(reached!.at - click.at).toBeGreaterThanOrEqual(80);
+      check(motionSpanMs).toBeGreaterThanOrEqual(140);
+      check(
+        samples.some(
+          (sample) => sample.at - click.at < 80 && Math.abs(sample.height - target) <= 1,
+        ),
+      ).toBe(false);
+    }
     return { samples, motionSpanMs, firstAtTargetMs: reached!.at - click.at };
   }
 
@@ -530,11 +582,72 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
       const scrollRange = await body.evaluate((node) => node.scrollHeight - node.clientHeight);
       expect(scrollRange).toBeGreaterThan(100);
       const bodyBox = (await body.boundingBox())!;
-      await page.mouse.move(bodyBox.x + bodyBox.width - 2, bodyBox.y + bodyBox.height / 2);
-      await page.mouse.wheel(0, 5000);
-      await expect
-        .poll(async () => Math.abs(scrollRange - (await body.evaluate((node) => node.scrollTop))))
-        .toBeLessThanOrEqual(1);
+      await page.evaluate(() => {
+        const events: unknown[] = [];
+        const geometry = (node: Element) => ({
+          target: `${node.tagName}.${node.className}`,
+          top: node.scrollTop,
+          range: node.scrollHeight - node.clientHeight,
+          box: node.getBoundingClientRect().toJSON(),
+        });
+        const wheel = (event: WheelEvent) => {
+          const chain = [];
+          for (
+            let node = event.target instanceof Element ? event.target : null;
+            node;
+            node = node.parentElement
+          )
+            chain.push(geometry(node));
+          events.push({
+            type: "wheel",
+            trusted: event.isTrusted,
+            x: event.clientX,
+            y: event.clientY,
+            deltaY: event.deltaY,
+            chain,
+          });
+          requestAnimationFrame(() =>
+            events.push({
+              type: "after-wheel",
+              prevented: event.defaultPrevented,
+              body: geometry(document.querySelector(".condition-editor-body")!),
+            }),
+          );
+        };
+        const scroll = (event: Event) => {
+          if (event.target instanceof Element)
+            events.push({ type: "scroll", ...geometry(event.target) });
+        };
+        document.addEventListener("wheel", wheel, { capture: true, passive: true });
+        document.addEventListener("scroll", scroll, true);
+        Object.assign(window, {
+          __conditionScrollProbe: {
+            events,
+            stop: () => {
+              document.removeEventListener("wheel", wheel, true);
+              document.removeEventListener("scroll", scroll, true);
+              return { events, final: geometry(document.querySelector(".condition-editor-body")!) };
+            },
+          },
+        });
+      });
+      try {
+        await page.mouse.move(bodyBox.x + bodyBox.width - 2, bodyBox.y + bodyBox.height / 2);
+        await page.mouse.wheel(0, 5000);
+        await expect
+          .poll(async () => Math.abs(scrollRange - (await body.evaluate((node) => node.scrollTop))))
+          .toBeLessThanOrEqual(1);
+      } finally {
+        const scrollEvents = await page.evaluate(() =>
+          (
+            window as unknown as { __conditionScrollProbe: { stop: () => unknown } }
+          ).__conditionScrollProbe.stop(),
+        );
+        await info.attach("trusted-condition-wheel-targets", {
+          body: JSON.stringify({ expectedRange: scrollRange, intendedBox: bodyBox, scrollEvents }),
+          contentType: "application/json",
+        });
+      }
       const previousScroll = await body.evaluate((node) => node.scrollTop);
       await info.attach("native-scroll-range-and-offset", {
         body: JSON.stringify({ scrollRange, scrollTop: previousScroll }),

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { build } from "./build.mjs";
+import { modelEvidenceComponents } from "./assert-acceptance-equivalence.mjs";
 import { VALIDATION_STEPS, writeCiValidationReceipt } from "./ci-validation-report.mjs";
 
 const manifestScript = resolve("scripts/release-manifest.mjs");
@@ -35,6 +36,20 @@ function fixture(t) {
   writeFileSync(join(root, "migrations/001_fixture.sql"), "-- explicit synthetic migration\n");
   mkdirSync(join(root, "app"));
   writeFileSync(join(root, "app/source.txt"), "explicit original fixture source\n");
+  writeFileSync(join(root, "pnpm-workspace.yaml"), "packages: []\n");
+  mkdirSync(join(root, "prompts"));
+  writeFileSync(
+    join(root, "prompts/clarification.ts"),
+    'export const CLARIFICATION_PROTOCOL = "fixture" as const; export const CLARIFICATION_SYSTEM = "explicit fixture"; export const CLARIFICATION_ROLES = { A: "A", B: "B", C: "C" };',
+  );
+  mkdirSync(join(root, "src/lib/server"), { recursive: true });
+  for (const file of [
+    "clarification-contracts.ts",
+    "intake-contracts.ts",
+    "contracts.ts",
+    "server/strict-schema.ts",
+  ])
+    writeFileSync(join(root, "src/lib", file), "// Explicit synthetic model schema fixture\n");
   git("add", ".");
   git("commit", "--quiet", "-m", "Synthetic manifest fixture only");
   const info = build({
@@ -54,6 +69,10 @@ function fixture(t) {
     },
   });
   mkdirSync(join(root, "test-results"));
+  writeFileSync(
+    join(root, "test-results/e2e.xml"),
+    '<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite name="synthetic" tests="1" failures="0" errors="0" skipped="0"><testcase name="synthetic"/></testsuite></testsuites>',
+  );
   const report = {
     stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
     errors: [],
@@ -84,11 +103,31 @@ function fixture(t) {
   const displayFile = join(root, "artifacts/display-receipt.json");
   const modelFile = join(root, "artifacts/model-receipt.json");
   const display = { status: "passed", source: { commit: info.commit, workingTreeDirty: false } };
+  const components = modelEvidenceComponents(info.commit, { directory: root });
+  const rawEvidenceFile = join(root, "artifacts/model-raw.json");
+  writeFileSync(
+    rawEvidenceFile,
+    JSON.stringify({
+      source: { commit: info.commit, workingTreeDirty: false },
+      promptHashes: [components.protocolHash],
+    }),
+  );
   const model = {
     ...display,
     humanAcceptance: "not_claimed",
     publicCasePublished: false,
     simulationOnly: true,
+    scenarios: ["negative-conflict", "paper-story-circle", "reading-club"].map((id) => ({
+      id,
+      status: "passed",
+      rawModelCalls: {
+        testedRuntimeCommit: info.commit,
+        protocolHash: components.protocolHash,
+        schemaFingerprint: components.schemaFingerprint,
+        dependencyFingerprint: components.dependencyFingerprint,
+        evidence: { path: rawEvidenceFile, sha256: digest(readFileSync(rawEvidenceFile)) },
+      },
+    })),
   };
   const write = (file, value) => writeFileSync(file, JSON.stringify(value));
   write(displayFile, display);
@@ -105,7 +144,15 @@ function fixture(t) {
     const args = Object.entries(fields)
       .filter(([key]) => !omit.includes(key))
       .flat();
-    args.push("--artifact", archive, "--artifact", join(root, "test-results/e2e.json"), ...extra);
+    args.push(
+      "--artifact",
+      archive,
+      "--artifact",
+      join(root, "test-results/e2e.json"),
+      "--artifact",
+      join(root, "test-results/e2e.xml"),
+      ...extra,
+    );
     return spawnSync(process.execPath, [manifestScript, ...args], { cwd: root, encoding: "utf8" });
   };
   const repack = (overrides) => {
@@ -393,3 +440,14 @@ for (const receiptFile of ["displayFile", "modelFile"]) {
     });
   }
 }
+
+test("manifest rejects a changed JUnit report despite a matching passing JSON", (t) => {
+  const f = fixture(t);
+  writeFileSync(
+    join(f.root, "test-results/e2e.xml"),
+    '<testsuites tests="0" failures="0" errors="0" skipped="0"/>',
+  );
+  const result = f.run();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /JUnit/);
+});

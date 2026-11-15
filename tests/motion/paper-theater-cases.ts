@@ -1,11 +1,18 @@
 // Saved real-model simulation data. All API requests are blocked, with no provider calls.
 import { readFileSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test as baseTest, type Page } from "@playwright/test";
+import { displayTest } from "../display/display-validation";
+import {
+  expectNativeSealLifecycle,
+  installNativeSealProbe,
+  readNativeSealProbe,
+} from "./native-seal-probe";
 import type { RecordedExamplePayload } from "../../src/lib/recorded-examples";
 import { beatsOf } from "../../src/components/console/beats";
 import { playbackDuration } from "../../src/components/console/use-playback-progress";
 
 export function registerPaperTheaterTests(mode: "functional" | "display") {
+  const test = mode === "display" ? displayTest : baseTest;
   const check = expect.configure({ soft: true });
   const requestsByPage = new WeakMap<Page, string[]>();
   test.afterEach(async ({ page }) => {
@@ -26,7 +33,9 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
               const probe = window as unknown as {
                 __paperReturnDrivers?: Animation[];
                 __nativeReturnProbe?: { parts: Animation[] };
+                __nativeReturnCaptureStop?: () => void;
               };
+              probe.__nativeReturnCaptureStop?.();
               return [
                 ...(probe.__paperReturnDrivers ?? []),
                 ...(probe.__nativeReturnProbe?.parts ?? []),
@@ -88,6 +97,14 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
     progressAfter: number | null;
   };
   type NativeReturnFrame = NativePoseWindow & {
+    nativeTiming: {
+      currentTime: number | null;
+      duration: number;
+      rate: number;
+      state: string;
+      timing: EffectTiming;
+      keyframes: ComputedKeyframe[];
+    } | null;
     at: number;
     fold: number;
     semanticFold: number;
@@ -277,6 +294,17 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
                       nativeState: native?.playState ?? null,
                       nativeTime: pose.timeAfter,
                       nativeDuration,
+                      nativeTiming:
+                        native && native.effect instanceof KeyframeEffect
+                          ? {
+                              currentTime: pose.timeAfter,
+                              duration: nativeDuration!,
+                              rate: native.playbackRate,
+                              state: native.playState,
+                              timing: native.effect.getTiming(),
+                              keyframes: native.effect.getKeyframes(),
+                            }
+                          : null,
                       nativeRate: native?.playbackRate ?? null,
                       nativeTransformCount: nativeAnimations.length,
                       portalTransformCount: portalAnimations.length,
@@ -313,16 +341,48 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
             contentType: "application/json",
           });
           const returning = sample.frames.filter((frame) => frame.fold > 0 && frame.fold < 1);
-          check(returning.length).toBeGreaterThanOrEqual(8);
+          check(returning.length).toBeGreaterThanOrEqual(mode === "display" ? 8 : 1);
+          const native = sample.frames.flatMap((frame) =>
+            frame.nativeTiming ? [frame.nativeTiming] : [],
+          );
+          check(native.length).toBeGreaterThan(0);
+          for (const state of native) {
+            check(state.rate).toBe(1);
+            check(state.duration).toBe(kind === "handoff" ? 480 : 300);
+            check(state.currentTime).not.toBeNull();
+            check(state.currentTime!).toBeGreaterThanOrEqual(0);
+            check(state.currentTime!).toBeLessThanOrEqual(state.duration);
+            check(["running", "finished"]).toContain(state.state);
+            check(state.timing.direction).toBe("normal");
+            check(state.timing.fill).toBe("both");
+            check(state.timing.iterations).toBe(1);
+            check(state.keyframes.map((key) => key.computedOffset)).toEqual([0, 1]);
+            const easing = state.timing.easing?.match(/[\d.]+/g)?.map(Number) ?? [];
+            check(easing).toHaveLength(4);
+            check(easing[0]).toBeCloseTo(1 / 3, 6);
+            check(easing[1]).toBe(0);
+            check(easing[2]).toBeCloseTo(2 / 3, 6);
+            check(easing[3]).toBe(1);
+          }
+          await testInfo.attach(`complete-native-return-definition-${kind}-${width}`, {
+            body: JSON.stringify({
+              first: native.at(0),
+              last: native.at(-1),
+              coverage: "real WAAPI timing and complete keyframes",
+            }),
+            contentType: "application/json",
+          });
           check(returning.every((frame) => frame.nativeState === "running")).toBe(true);
           check(returning.every((frame) => frame.nativeTime !== null && frame.nativeTime > 0)).toBe(
             true,
           );
           check(returning.every((frame) => frame.nativeRate === 1)).toBe(true);
           check(returning.every((frame) => frame.nativeTransformCount === 1)).toBe(true);
-          check(returning[0].fold).toBeLessThan(0.2);
-          check(returning.at(-1)!.fold).toBeGreaterThan(0.85);
-          check(returning.some((frame) => frame.fold >= 0.45 && frame.fold <= 0.65)).toBe(true);
+          if (mode === "display") {
+            check(returning[0].fold).toBeLessThan(0.2);
+            check(returning.at(-1)!.fold).toBeGreaterThan(0.85);
+            check(returning.some((frame) => frame.fold >= 0.45 && frame.fold <= 0.65)).toBe(true);
+          }
           check(sample.keyframes).not.toBeNull();
           check(sample.destination).not.toBeNull();
           const keys = sample.keyframes!;
@@ -333,11 +393,14 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
           // Compare native endpoints with independent receiver geometry, including near-coincident centers.
           check(Math.abs(keys.to.x - sample.destination!.x)).toBeLessThan(distance * 0.004 + 0.01);
           check(Math.abs(keys.to.y - sample.destination!.y)).toBeLessThan(distance * 0.004 + 0.01);
-          const early = returning.find((frame) => frame.fold >= 0.15 && frame.fold < 0.35);
-          check(early).toBeDefined();
-          check(Math.hypot(early!.x - keys.from.x, early!.y - keys.from.y)).toBeGreaterThan(
-            distance * 0.05,
-          );
+          if (mode === "display") {
+            const early = returning.find((frame) => frame.fold >= 0.15 && frame.fold < 0.35);
+            check(early).toBeDefined();
+            if (early)
+              check(Math.hypot(early.x - keys.from.x, early.y - keys.from.y)).toBeGreaterThan(
+                distance * 0.05,
+              );
+          }
           const gaps: number[] = [];
           for (let at = 0; at < returning.length; at++) {
             const frame = returning[at];
@@ -365,6 +428,7 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
             }
             if (at > 0) {
               const previous = returning[at - 1];
+              check(frame.nativeTime!).toBeGreaterThanOrEqual(previous.nativeTime!);
               check(frame.fold).toBeGreaterThanOrEqual(previous.fold);
               check(frame.sx).toBeLessThanOrEqual(previous.sx + 0.001);
               check(
@@ -421,57 +485,134 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
     }
   }
 
+  type NativeLoadSample = {
+    before: { at: number; time: number; transform: string };
+    after: { at: number; time: number; transform: string; state: string };
+    blockedFor: number;
+    callbacksDuringBlock: number;
+    duration: number;
+    rate: number;
+    sameAnimation: boolean;
+    samplingMode: string;
+  };
+
   type NativeReturnProbe = {
     animation: Animation;
     parts: Animation[];
     node: HTMLElement;
+    acquisition: { time: number; pending: boolean; state: string };
   };
 
   async function captureNativeReturn(page: Page, step: number, pause: boolean) {
-    await page.waitForFunction(
-      ({ step, pause }) => {
-        const root = document.querySelector<HTMLElement>(".c-root");
-        if (
-          root?.querySelector('.c-time [aria-current="step"]')?.getAttribute("aria-label") !==
-          `第 ${step} 步`
-        )
-          return false;
-        const paper = root.querySelector<HTMLElement>(".replay-question-scene");
-        const portal = document.querySelector<HTMLElement>(".replay-handoff-strip");
-        const node = portal ?? paper;
-        const animation = node
-          ?.getAnimations()
-          .find(
-            (entry) =>
-              entry.effect instanceof KeyframeEffect &&
-              entry.effect.getKeyframes().some((frame) => typeof frame.transform === "string"),
-          );
-        const time = animation?.currentTime;
-        const duration = Number(animation?.effect?.getTiming().duration);
-        if (
-          !node ||
-          !animation ||
-          animation.playState !== "running" ||
-          animation.pending ||
-          typeof time !== "number" ||
-          time <= 0 ||
-          time >= duration * 0.2
-        )
-          return false;
-        const parts = [
-          ...new Set([
-            ...(paper?.getAnimations({ subtree: true }) ?? []),
-            ...(portal?.getAnimations({ subtree: true }) ?? []),
-          ]),
-        ].filter((entry) => entry.constructor.name === "Animation");
-        Object.assign(window, { __nativeReturnProbe: { animation, parts, node } });
-        if (pause)
-          [...root.querySelectorAll("button")]
-            .find((button) => button.textContent?.trim() === "暂停放映")
-            ?.click();
-        return true;
+    await page.evaluate(
+      ({ step, pause, mode }) => {
+        const capture = () => {
+          const root = document.querySelector<HTMLElement>(".c-root");
+          if (
+            root?.querySelector('.c-time [aria-current="step"]')?.getAttribute("aria-label") !==
+            `第 ${step} 步`
+          )
+            return false;
+          const paper = root.querySelector<HTMLElement>(".replay-question-scene");
+          const portal = document.querySelector<HTMLElement>(".replay-handoff-strip");
+          const node = portal ?? paper;
+          const animation = node
+            ?.getAnimations()
+            .find(
+              (entry) =>
+                entry.effect instanceof KeyframeEffect &&
+                entry.effect.getKeyframes().some((frame) => typeof frame.transform === "string"),
+            );
+          const time = animation?.currentTime;
+          const duration = Number(animation?.effect?.getTiming().duration);
+          if (
+            !node ||
+            !animation ||
+            animation.playState !== "running" ||
+            typeof time !== "number" ||
+            time < 0 ||
+            time > duration ||
+            (mode === "display" && (animation.pending || time === 0 || time >= duration * 0.2))
+          )
+            return false;
+          const parts = [
+            ...new Set([
+              ...(paper?.getAnimations({ subtree: true }) ?? []),
+              ...(portal?.getAnimations({ subtree: true }) ?? []),
+            ]),
+          ].filter((entry) => entry.constructor.name === "Animation");
+          Object.assign(window, {
+            __nativeReturnProbe: {
+              animation,
+              parts,
+              node,
+              acquisition: { time, pending: animation.pending, state: animation.playState },
+            },
+          });
+          if (!pause) {
+            const sampleLoad = async () => {
+              const probe = (window as unknown as { __nativeReturnProbe: NativeReturnProbe })
+                .__nativeReturnProbe;
+              await probe.animation.ready;
+              const before = {
+                at: performance.now(),
+                time: Number(probe.animation.currentTime),
+                transform: getComputedStyle(probe.node).transform,
+              };
+              let callbacks = 0;
+              requestAnimationFrame(() => callbacks++);
+              // Explicit synthetic load. JavaScript cannot observe compositor frames during this task.
+              const began = performance.now();
+              while (performance.now() - began < 180) {
+                /* Deliberate browser-test load. */
+              }
+              const blockedFor = performance.now() - began;
+              const callbacksDuringBlock = callbacks;
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+              );
+              const after = {
+                at: performance.now(),
+                time: Number(probe.animation.currentTime),
+                transform: getComputedStyle(probe.node).transform,
+                state: probe.animation.playState,
+              };
+              return {
+                before,
+                after,
+                blockedFor,
+                callbacksDuringBlock,
+                duration: Number(probe.animation.effect?.getTiming().duration),
+                rate: probe.animation.playbackRate,
+                sameAnimation: probe.node.getAnimations().includes(probe.animation),
+                samplingMode:
+                  mode === "functional"
+                    ? "actual-native-ready-callback"
+                    : "display-remote-observation",
+              };
+            };
+            Object.assign(window, {
+              __nativeReturnLoadStart: sampleLoad,
+              __nativeReturnLoad: mode === "functional" ? sampleLoad() : null,
+            });
+          }
+          if (pause)
+            [...root.querySelectorAll("button")]
+              .find((button) => button.textContent?.trim() === "暂停放映")
+              ?.click();
+          observer.disconnect();
+        };
+        const observer = new MutationObserver(capture);
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+        Object.assign(window, { __nativeReturnCaptureStop: () => observer.disconnect() });
+        capture();
       },
-      { step, pause },
+      { step, pause, mode },
+    );
+    await page.getByRole("button", { name: "继续放映", exact: true }).click();
+    await page.waitForFunction(
+      () =>
+        !!(window as unknown as { __nativeReturnProbe?: NativeReturnProbe }).__nativeReturnProbe,
     );
   }
 
@@ -492,11 +633,12 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
         pose: { x: pose.m41, y: pose.m42, sx: pose.m11, sy: pose.m22 },
         sameAnimation: probe.node.getAnimations().includes(probe.animation),
         partCount: probe.parts.length,
+        acquisition: probe.acquisition,
       };
     });
   }
 
-  for (const kind of ["round_confirm", "handoff"] as const) {
+  for (const kind of ["round_confirm", "summary_submit", "handoff"] as const) {
     test(`paper theater: native ${kind} preserves pause and speed changes and cancels on seek`, async ({
       page,
     }, testInfo) => {
@@ -504,7 +646,6 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
       const blocked = await openReplay(page);
       const index = steps.findIndex((step) => step.replayAction?.kind === kind);
       await page.getByRole("button", { name: `第 ${index} 步`, exact: true }).click();
-      await page.getByRole("button", { name: "继续放映", exact: true }).click();
       await captureNativeReturn(page, index + 1, true);
       await page.waitForFunction(() => {
         const probe = (window as unknown as { __nativeReturnProbe: NativeReturnProbe })
@@ -512,6 +653,14 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
         return probe.animation.playState === "paused" && !probe.animation.pending;
       });
       const paused = await nativeReturnSnapshot(page);
+      expect(paused.acquisition.time).toBeGreaterThanOrEqual(0);
+      expect(paused.acquisition.time).toBeLessThanOrEqual(paused.duration);
+      expect(paused.time).toBeGreaterThanOrEqual(0);
+      expect(paused.time).toBeLessThanOrEqual(paused.duration);
+      if (mode === "display") {
+        expect(paused.acquisition.time).toBeLessThan(paused.duration * 0.2);
+        expect(paused.time).toBeLessThan(paused.duration * 0.2);
+      }
       expect(paused.sameAnimation).toBe(true);
       expect(paused.partCount).toBeGreaterThanOrEqual(4);
       await page.evaluate(
@@ -642,43 +791,13 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
     const blocked = await openReplay(page);
     const index = steps.findIndex((step) => step.replayAction?.kind === "handoff");
     await page.getByRole("button", { name: `第 ${index} 步`, exact: true }).click();
-    await page.getByRole("button", { name: "继续放映", exact: true }).click();
     await captureNativeReturn(page, index + 1, false);
     const sample = await page.evaluate(async () => {
-      const probe = (window as unknown as { __nativeReturnProbe: NativeReturnProbe })
-        .__nativeReturnProbe;
-      const before = {
-        at: performance.now(),
-        time: Number(probe.animation.currentTime),
-        transform: getComputedStyle(probe.node).transform,
+      const probe = window as unknown as {
+        __nativeReturnLoad: Promise<NativeLoadSample> | null;
+        __nativeReturnLoadStart: () => Promise<NativeLoadSample>;
       };
-      let callbacks = 0;
-      requestAnimationFrame(() => callbacks++);
-      // Explicit synthetic load. JavaScript cannot observe compositor frames during this task.
-      const began = performance.now();
-      while (performance.now() - began < 180) {
-        /* Deliberate browser-test load. */
-      }
-      const blockedFor = performance.now() - began;
-      const callbacksDuringBlock = callbacks;
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      );
-      const after = {
-        at: performance.now(),
-        time: Number(probe.animation.currentTime),
-        transform: getComputedStyle(probe.node).transform,
-        state: probe.animation.playState,
-      };
-      return {
-        before,
-        after,
-        blockedFor,
-        callbacksDuringBlock,
-        duration: Number(probe.animation.effect?.getTiming().duration),
-        rate: probe.animation.playbackRate,
-        sameAnimation: probe.node.getAnimations().includes(probe.animation),
-      };
+      return probe.__nativeReturnLoad ?? probe.__nativeReturnLoadStart();
     });
     await testInfo.attach("explicit-artificial-load-native-clock", {
       body: JSON.stringify(sample),
@@ -895,6 +1014,7 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
     await page.getByRole("button", { name: "开始回看", exact: true }).click();
     await page.getByRole("button", { name: `第 ${steps.length - 1} 步`, exact: true }).click();
     await expect(page.locator(".initial-paper-transfer")).toHaveCount(0);
+    await installNativeSealProbe(page);
     const sampling = page.evaluate(
       () =>
         new Promise<{
@@ -945,8 +1065,14 @@ export function registerPaperTheaterTests(mode: "functional" | "display") {
       body: JSON.stringify(sample),
       contentType: "application/json",
     });
+    const nativeSeal = await readNativeSealProbe(page);
+    await testInfo.attach("mobile-conclusion-seal-native-lifecycle", {
+      body: JSON.stringify(nativeSeal),
+      contentType: "application/json",
+    });
+    expectNativeSealLifecycle(nativeSeal);
     const visible = sample.frames.filter((frame) => frame.opacity > 0.6);
-    expect(visible.length).toBeGreaterThanOrEqual(3);
+    if (mode === "display") check(visible.length).toBeGreaterThanOrEqual(3);
     for (const frame of visible) {
       expect(frame.left).toBeGreaterThanOrEqual(0);
       expect(frame.top).toBeGreaterThanOrEqual(0);

@@ -136,6 +136,97 @@ export function summarizePlaywright(report) {
   };
 }
 
+/** Read the generated JUnit structure without evaluating DTDs or embedded document content. */
+export function summarizeJUnit(xml) {
+  try {
+    const content = xml.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g, "");
+    if (/<!|<\?/.test(content)) throw new Error("Unsupported or incomplete JUnit XML declaration.");
+    const tags = /<(\/?)([A-Za-z_][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
+    const stack = [];
+    const suites = [];
+    const cases = [];
+    let root = null;
+    let end = 0;
+    for (const match of content.matchAll(tags)) {
+      const between = content.slice(end, match.index);
+      if (between.includes("<") || (!stack.length && between.trim()))
+        throw new Error("Malformed JUnit XML content.");
+      end = match.index + match[0].length;
+      const [, closing, name, rawAttributes, selfClosing] = match;
+      if (closing) {
+        if (selfClosing || rawAttributes.trim() || stack.pop()?.name !== name)
+          throw new Error("Unbalanced JUnit XML tags.");
+        continue;
+      }
+      const attributes = {};
+      for (const attribute of rawAttributes.matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+        if (Object.hasOwn(attributes, attribute[1])) throw new Error("Duplicate JUnit attribute.");
+        attributes[attribute[1]] = attribute[2] ?? attribute[3];
+      }
+      const node = { name, attributes, cases: [] };
+      if (!stack.length) {
+        if (root || !["testsuites", "testsuite"].includes(name))
+          throw new Error("Missing single JUnit suite root.");
+        root = node;
+      }
+      if (name === "testsuite") suites.push(node);
+      if (name === "testcase") {
+        const entry = { failed: false, error: false, skipped: false };
+        node.testCase = entry;
+        cases.push(entry);
+        for (const parent of stack) parent.cases.push(entry);
+      }
+      if (["failure", "error", "skipped"].includes(name)) {
+        const testCase = stack.findLast((parent) => parent.testCase)?.testCase;
+        if (!testCase) throw new Error("JUnit outcome has no test case.");
+        if (name === "failure") testCase.failed = true;
+        else if (name === "error") testCase.error = true;
+        else testCase.skipped = true;
+      }
+      if (!selfClosing) stack.push(node);
+    }
+    if (!root || stack.length || content.slice(end).trim())
+      throw new Error("Incomplete JUnit XML document.");
+    const counts = (entries) => ({
+      tests: entries.length,
+      failures: entries.filter((entry) => entry.failed).length,
+      errors: entries.filter((entry) => entry.error).length,
+      skipped: entries.filter((entry) => entry.skipped).length,
+    });
+    let declaredCountsMatch = true;
+    for (const suite of new Set([root, ...suites])) {
+      const measured = counts(suite.cases);
+      for (const key of ["tests", "failures", "errors", "skipped"]) {
+        const raw = suite.attributes[key];
+        if (!/^\d+$/.test(raw ?? "") || Number(raw) !== measured[key]) declaredCountsMatch = false;
+      }
+    }
+    return {
+      status: declaredCountsMatch ? "valid" : "invalid",
+      ...counts(cases),
+      declaredCountsMatch,
+    };
+  } catch (error) {
+    return { status: "invalid", reason: error.message };
+  }
+}
+
+export function comparePlaywrightJUnit(report, xml) {
+  const summary = summarizePlaywright(report);
+  const junit = summarizeJUnit(xml);
+  const countsMatch =
+    junit.status === "valid" &&
+    junit.tests === summary.testsDiscovered &&
+    junit.failures === summary.failed - summary.expectedFailures &&
+    junit.skipped === summary.skipped &&
+    junit.errors === summary.errors;
+  return {
+    status: countsMatch && summary.status === "passed" ? "passed" : "failed",
+    countsMatch,
+    summary: junit,
+  };
+}
+
 export function writeCiValidationReceipt({ directory = process.cwd(), env = process.env } = {}) {
   const root = resolve(directory);
   const steps = Object.fromEntries(
@@ -165,12 +256,15 @@ export function writeCiValidationReceipt({ directory = process.cwd(), env = proc
   let reportEvidence = null;
   let playwrightError = null;
   let playwright;
+  let junit;
+  let rawReport = null;
   const reportPresent = existsSync(join(root, reportPath));
   if (["success", "failure", "cancelled"].includes(steps.e2e.outcome)) {
     try {
       const bytes = readFileSync(join(root, reportPath));
       reportEvidence = { path: reportPath, sha256: hash(bytes) };
-      playwright = summarizePlaywright(JSON.parse(bytes));
+      rawReport = JSON.parse(bytes);
+      playwright = summarizePlaywright(rawReport);
     } catch (error) {
       playwrightError = error.message;
       playwright = {
@@ -181,11 +275,27 @@ export function writeCiValidationReceipt({ directory = process.cwd(), env = proc
   } else {
     playwright = { status: "not_run", reason: "E2E was not executed in this invocation." };
   }
+  if (["success", "failure", "cancelled"].includes(steps.e2e.outcome)) {
+    try {
+      const path = "test-results/e2e.xml";
+      const bytes = readFileSync(join(root, path));
+      junit = {
+        ...comparePlaywrightJUnit(rawReport, bytes.toString("utf8")),
+        report: { path, sha256: hash(bytes) },
+      };
+    } catch (error) {
+      junit = { status: "invalid", report: null, reason: error.message };
+    }
+  } else junit = { status: "not_run", report: null };
   const checks = Object.fromEntries(
     Object.entries(steps).map(([name, step]) => [name, step.status]),
   );
   if (steps.build.outcome === "success" && !buildIdentity) checks.build = "failed";
-  if (steps.e2e.outcome === "success" && playwright.status !== "passed") checks.e2e = "failed";
+  if (
+    steps.e2e.outcome === "success" &&
+    (playwright.status !== "passed" || junit.status !== "passed")
+  )
+    checks.e2e = "failed";
   const sourceClean = source?.workingTreeDirty === false;
   const functionalReady =
     sourceClean && !!buildIdentity && Object.values(checks).every((status) => status === "passed");
@@ -215,6 +325,7 @@ export function writeCiValidationReceipt({ directory = process.cwd(), env = proc
     playwright: {
       outcome: steps.e2e.outcome,
       summary: playwright,
+      junit,
       report: reportEvidence,
       ignoredExistingReport: reportPresent && steps.e2e.status === "not_run",
       error: playwrightError,
@@ -246,6 +357,7 @@ export function writeCiValidationReceipt({ directory = process.cwd(), env = proc
         buildIdentity,
         playwright,
         playwrightReport: reportEvidence,
+        junit,
         receiptVersion: 1,
       },
       null,

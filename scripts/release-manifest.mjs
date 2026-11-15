@@ -4,7 +4,12 @@ import { resolve, dirname, isAbsolute } from "node:path";
 import { execFileSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 import { sourceIdentity } from "./build.mjs";
-import { summarizePlaywright, VALIDATION_STEPS } from "./ci-validation-report.mjs";
+import { verifyModelAcceptanceLineage } from "./assert-acceptance-equivalence.mjs";
+import {
+  summarizePlaywright,
+  comparePlaywrightJUnit,
+  VALIDATION_STEPS,
+} from "./ci-validation-report.mjs";
 
 const args = process.argv.slice(2);
 const values = (key) => args.flatMap((arg, index) => (arg === key ? [args[index + 1]] : []));
@@ -98,6 +103,25 @@ if (
   !isDeepStrictEqual(checks.playwrightReport, reportEvidence)
 )
   throw new Error("E2E report is incomplete, inconsistent or contains unstable tests.");
+const junitEvidence = receipt.playwright?.junit?.report;
+if (!junitEvidence || !isFingerprint(junitEvidence.sha256))
+  throw new Error("CI receipt lacks the original JUnit XML hash.");
+const junitFile = artifacts.find((file) => hash(file).sha256 === junitEvidence.sha256);
+if (!junitFile) throw new Error("The original JUnit report is missing or its hash differs.");
+const junit = {
+  ...comparePlaywrightJUnit(
+    JSON.parse(readFileSync(reportFile, "utf8")),
+    readFileSync(junitFile, "utf8"),
+  ),
+  report: junitEvidence,
+};
+if (
+  junit.status !== "passed" ||
+  !junit.countsMatch ||
+  !isDeepStrictEqual(junit, receipt.playwright.junit) ||
+  !isDeepStrictEqual(junit, checks.junit)
+)
+  throw new Error("Playwright JSON and JUnit evidence differ or are incomplete.");
 const archives = artifacts.filter((file) => file.endsWith(".tar.gz"));
 if (archives.length !== 1) throw new Error("Exactly one standalone .tar.gz artifact is required.");
 const releaseInfo = JSON.parse(
@@ -185,6 +209,7 @@ if (
     releaseInfo.outputFingerprint !== ciBuild.outputFingerprint)
 )
   throw new Error("CI receipt and packaged CI build output identities differ.");
+let modelEvidenceLineage = null;
 function acceptance(file, name) {
   if (!file) return { status: "not_run" };
   const accepted = JSON.parse(readFileSync(file, "utf8"));
@@ -201,6 +226,8 @@ function acceptance(file, name) {
       accepted.simulationOnly !== true)
   )
     throw new Error("Model acceptance must identify unpublished technical simulation evidence.");
+  if (name === "Model")
+    modelEvidenceLineage = verifyModelAcceptanceLineage(accepted, { finalCommit: commit });
   return hash(file);
 }
 const displayAcceptance = acceptance(displayReceiptFile, "Physical display");
@@ -245,6 +272,7 @@ const manifest = {
     playwright: receipt.playwright,
     displayAcceptance,
     modelAcceptance,
+    modelEvidenceLineage,
   },
   releaseReady: kind !== "ci",
   artifacts: artifacts.map(hash),

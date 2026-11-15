@@ -139,25 +139,17 @@ export function ArenaConsole({
   const [seekRevision, setSeekRevision] = useState(0);
   const [railInteraction, setRailInteraction] = useState(false);
   const railState = useRef({ hover: false, keyboard: false, pressing: false, touch: false });
-  const railRelease = useRef<ReturnType<typeof createMotionScope> | null>(null);
   const seekIntent = useRef({ epoch: 0, pending: 0 });
   const pausedOnPointerDown = useRef(false);
   const [stageTransition, setStageTransition] = useState<StageTextTransition | null>(null);
   const renderedEpoch = seekIntent.current.epoch;
   const paused = useMotionPaused();
-  useEffect(() => () => railRelease.current?.dispose(), []);
   const updateRailInteraction = () => {
     const state = railState.current;
     setRailInteraction(state.hover || state.keyboard || state.touch);
   };
-  const cancelRailRelease = () => {
-    railRelease.current?.dispose();
-    railRelease.current = null;
-    railState.current.touch = false;
-  };
   const beginRailPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.isPrimary || event.button !== 0) return;
-    cancelRailRelease();
     const state = railState.current;
     state.pressing = true;
     state.keyboard = false;
@@ -169,19 +161,10 @@ export function ArenaConsole({
     if (!event.isPrimary) return;
     const state = railState.current;
     state.pressing = false;
-    if (event.type === "pointercancel") state.hover = false;
-    if (event.pointerType === "touch") {
-      cancelRailRelease();
-      state.touch = true;
-      const scope = createMotionScope("interaction");
-      railRelease.current = scope;
-      scope.later(160, () => {
-        state.touch = false;
-        railRelease.current = null;
-        scope.dispose();
-        updateRailInteraction();
-      });
-    }
+    if (event.type === "pointercancel") {
+      state.hover = false;
+      state.touch = false;
+    } else if (event.pointerType === "touch") state.touch = true;
     updateRailInteraction();
   };
   const nowPanel = useRef<HTMLElement>(null);
@@ -623,6 +606,25 @@ export function ArenaConsole({
 
   const timeline = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const leaveTouchReader = (event: Event) => {
+      const state = railState.current;
+      if (
+        !state.touch ||
+        (event.target instanceof Node && timeline.current?.contains(event.target))
+      )
+        return;
+      state.touch = false;
+      state.pressing = false;
+      setRailInteraction(state.hover || state.keyboard);
+    };
+    document.addEventListener("pointerdown", leaveTouchReader, true);
+    document.addEventListener("focusin", leaveTouchReader, true);
+    return () => {
+      document.removeEventListener("pointerdown", leaveTouchReader, true);
+      document.removeEventListener("focusin", leaveTouchReader, true);
+    };
+  }, []);
+  useEffect(() => {
     if (!clarification) return;
     const track = timeline.current;
     const selected = track?.querySelector<HTMLElement>('[aria-current="step"]');
@@ -879,7 +881,7 @@ export function ArenaConsole({
             aria-label={clarification ? "需求梳理回放步骤" : "推演步骤"}
             onPointerEnter={(event) => {
               if (event.pointerType === "touch") return;
-              cancelRailRelease();
+              railState.current.touch = false;
               railState.current.hover = true;
               updateRailInteraction();
             }}
@@ -895,6 +897,7 @@ export function ArenaConsole({
             onFocusCapture={(event) => {
               if (railState.current.pressing) return;
               railState.current.keyboard = event.target.matches(":focus-visible");
+              if (railState.current.keyboard) railState.current.touch = false;
               updateRailInteraction();
             }}
             onBlurCapture={(event) => {
@@ -904,10 +907,11 @@ export function ArenaConsole({
               )
                 return;
               railState.current.keyboard = false;
+              railState.current.touch = false;
               updateRailInteraction();
             }}
             onKeyDownCapture={() => {
-              cancelRailRelease();
+              railState.current.touch = false;
               railState.current.keyboard = true;
               updateRailInteraction();
             }}

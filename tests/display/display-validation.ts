@@ -1,53 +1,144 @@
-import { execFileSync } from "node:child_process";
-import { expect, test, type Page } from "@playwright/test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, test as baseTest, type Page } from "@playwright/test";
+import { checkDisplayPower } from "../../scripts/check-display-power.mjs";
+export { currentDisplayModes } from "../../scripts/check-display-power.mjs";
+export type { CurrentDisplayMode } from "../../scripts/check-display-power.mjs";
 
-type SystemDisplay = {
-  _name?: string;
-  _spdisplays_displayID?: string;
-  _spdisplays_resolution?: string;
-  spdisplays_refreshRate?: string;
-  spdisplays_main?: string;
-  spdisplays_online?: string;
-  spdisplays_asleep?: string;
-};
-
-export type CurrentDisplayMode = {
-  displayId: string | null;
-  name: string | null;
-  main: boolean;
-  online: boolean;
-  asleep: boolean;
-  currentResolution: string | null;
-  refreshRate: number | null;
-  refreshRateSource: string | null;
-};
-
-export function currentDisplayModes(report: {
-  SPDisplaysDataType?: Array<{ spdisplays_ndrvs?: SystemDisplay[] }>;
-}): CurrentDisplayMode[] {
-  return (report.SPDisplaysDataType ?? []).flatMap((adapter) =>
-    (adapter.spdisplays_ndrvs ?? []).map((display) => {
-      const resolution = display._spdisplays_resolution ?? "";
-      const resolutionRate = resolution.match(/@\s*(\d+(?:\.\d+)?)\s*Hz\b/i);
-      const explicitRate = display.spdisplays_refreshRate?.match(/^(\d+(?:\.\d+)?)\s*Hz$/i);
-      const rate = resolutionRate?.[1] ?? explicitRate?.[1];
-      return {
-        displayId: display._spdisplays_displayID ?? null,
-        name: display._name ?? null,
-        main: display.spdisplays_main === "spdisplays_yes",
-        online: display.spdisplays_online === "spdisplays_yes",
-        asleep: display.spdisplays_asleep === "spdisplays_yes",
-        currentResolution: resolution || null,
-        refreshRate: rate === undefined ? null : Number(rate),
-        refreshRateSource: resolutionRate
-          ? "_spdisplays_resolution"
-          : explicitRate
-            ? "spdisplays_refreshRate"
-            : null,
-      };
-    }),
-  );
-}
+// A persistent, freshly allocated profile is required for Chrome Settings.
+// The base page fixture still creates the application page in this context.
+export const displayTest = baseTest.extend({
+  context: async (
+    {
+      playwright,
+      browserName,
+      launchOptions,
+      contextOptions,
+      baseURL,
+      viewport,
+      reducedMotion,
+      hasTouch,
+      isMobile,
+      deviceScaleFactor,
+      locale,
+      colorScheme,
+      screen,
+      timezoneId,
+      acceptDownloads,
+      bypassCSP,
+      extraHTTPHeaders,
+      forcedColors,
+      geolocation,
+      httpCredentials,
+      ignoreHTTPSErrors,
+      javaScriptEnabled,
+      offline,
+      permissions,
+      serviceWorkers,
+      userAgent,
+      contrast,
+      actionTimeout,
+      navigationTimeout,
+    },
+    provideContext,
+    info,
+  ) => {
+    expect(browserName).toBe("chromium");
+    expect(launchOptions.args ?? []).not.toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /--(?:disable-frame-rate-limit|disable-gpu-vsync|enable-begin-frame-control|user-data-dir)(?:=|$)/,
+        ),
+      ]),
+    );
+    expect(contextOptions.recordVideo).toBeUndefined();
+    const profile = await mkdtemp(join(tmpdir(), "strategy-arena-display-"));
+    let context;
+    try {
+      context = await playwright.chromium.launchPersistentContext(profile, {
+        ...launchOptions,
+        ...contextOptions,
+        channel: "chrome",
+        headless: false,
+        baseURL,
+        viewport,
+        reducedMotion,
+        hasTouch,
+        isMobile,
+        deviceScaleFactor,
+        locale,
+        colorScheme,
+        screen,
+        timezoneId,
+        acceptDownloads,
+        bypassCSP,
+        extraHTTPHeaders,
+        forcedColors,
+        geolocation,
+        httpCredentials,
+        ignoreHTTPSErrors,
+        javaScriptEnabled,
+        offline,
+        permissions,
+        serviceWorkers,
+        userAgent,
+        contrast,
+      });
+      context.setDefaultTimeout(actionTimeout);
+      context.setDefaultNavigationTimeout(navigationTimeout);
+      const setup = context.pages()[0] ?? (await context.newPage());
+      await setup.bringToFront();
+      await setup.goto("chrome://settings/performance");
+      const energy = setup.getByRole("switch", { name: /^(?:节能模式|Energy Saver)$/i });
+      await info.attach("display-owned-settings-before-toggle", {
+        body: JSON.stringify({
+          profile,
+          switchCount: await energy.count(),
+          settingsText: await setup.locator("body").innerText(),
+        }),
+        contentType: "application/json",
+      });
+      await expect(energy).toHaveCount(1);
+      const before = await energy.getAttribute("aria-checked");
+      if (before === "true") await energy.click();
+      await expect(energy).toHaveAttribute("aria-checked", "false");
+      const after = await energy.getAttribute("aria-checked");
+      await info.attach("display-owned-energy-settings", {
+        body: JSON.stringify({
+          profile,
+          profileAllocation: "mkdtemp-owned-for-this-test",
+          userProfileChanged: false,
+          frameRateFlagsAdded: false,
+          before,
+          after,
+          url: setup.url(),
+          settingsText: await setup.locator("body").innerText(),
+        }),
+        contentType: "application/json",
+      });
+      await setup.goto("about:blank");
+      await provideContext(context);
+    } finally {
+      let contextClosed = false;
+      try {
+        await context?.close();
+        contextClosed = true;
+      } finally {
+        await rm(profile, { recursive: true, force: true });
+        await info.attach("display-owned-profile-cleanup", {
+          body: JSON.stringify({
+            profile,
+            contextClosed,
+            profileRemoved: true,
+            userProfileChanged: false,
+          }),
+          contentType: "application/json",
+        });
+      }
+    }
+  },
+});
 
 export type DisplaySessionFrame = {
   at: number;
@@ -102,31 +193,20 @@ export function assertDisplaySession(frames: readonly DisplaySessionFrame[]) {
 }
 
 export function enableDisplayValidation() {
+  const test = displayTest;
   const qualified = new WeakSet<Page>();
   test.beforeEach(async ({ page }, info) => {
     await page.bringToFront();
-    expect(process.platform, "OS refresh-mode capture currently supports macOS.").toBe("darwin");
-    const raw = execFileSync("system_profiler", ["SPDisplaysDataType", "-json"], {
-      encoding: "utf8",
-      timeout: 20_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    const modes = currentDisplayModes(JSON.parse(raw));
-    await info.attach("display-system-profiler", { body: raw, contentType: "application/json" });
-    await info.attach("display-current-modes", {
-      body: JSON.stringify({ capturedAt: new Date().toISOString(), modes }),
+    const power = checkDisplayPower();
+    await info.attach("display-power-qualification", {
+      body: JSON.stringify(power),
       contentType: "application/json",
     });
-    const current = modes.find((mode) => mode.main && mode.online && !mode.asleep);
-    expect(
-      current,
-      "An awake online main display must report its current refresh mode.",
-    ).toBeDefined();
-    expect(
-      current!.refreshRate,
-      "The current OS mode must explicitly report a refresh rate.",
-    ).not.toBeNull();
-    expect(current!.refreshRate!).toBeGreaterThanOrEqual(120);
+    expect(power.status).toBe("eligible");
+    expect(power.powerConnected).toBe(true);
+    expect(power.lowPowerMode).toBe(false);
+    const current = power.currentMode;
+    expect(current?.refreshRate).toBeGreaterThanOrEqual(120);
 
     const calibration = await page.evaluate(
       () =>

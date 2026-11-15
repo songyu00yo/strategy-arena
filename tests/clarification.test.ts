@@ -1415,6 +1415,73 @@ describe("explicit clarification workflow with model test doubles", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("uses a neutral implementation path for a paper activity while preserving unknown resources", () => {
+    const draft = create("【技术模拟】策划60分钟纸本故事圈，筹备工时、预算和日期未知");
+    const summary = ChallengeSchema.parse({ goal: draft.goal });
+    const state = emptyClarification();
+    state.draftOnly = true;
+    formatClarification(draft, state, summary);
+    expect(state.specification).toContain("## 实施路径与方案取舍（AI 分析，非用户确认）");
+    expect(state.specification).toContain(
+      "根据已确认目标、活动或产品流程、资源约束和交付环境选择实施方式",
+    );
+    expect(state.specification).toContain(
+      "只有在确实涉及软件系统时，才进一步讨论技术栈、部署、数据模型和第三方依赖",
+    );
+    expect(state.specification).toContain("C 角色尚未提供有依据的候选实施路径比较");
+    expect(state.specification).not.toContain(
+      "具体技术栈、部署拓扑、数据模型和第三方依赖须结合现有代码",
+    );
+    expect(state.specification).not.toContain("优先复用现有系统");
+    expect(state.specification).toContain("60分钟纸本故事圈");
+    expect(state.specification).toContain("预算上限**：未知");
+    expect(state.specification).toContain("可投入时间**：未知");
+    expect(summary.budget).toBeNull();
+    expect(summary.timeHours).toBeNull();
+    expect(summary).not.toHaveProperty("date");
+    expect(fixture.generate).not.toHaveBeenCalled();
+  });
+
+  it("retains evidence-bounded software tradeoffs under the neutral report heading", () => {
+    const draft = create("【技术模拟】比较本地报名工具的两种已授权实现方案");
+    const state = emptyClarification();
+    state.draftOnly = true;
+    state.review = {
+      summary: "测试替身软件方案比较",
+      ready: false,
+      coverage: [],
+      gaps: [],
+      conflicts: [],
+      feasibility: [],
+      implementationPlan: [],
+      risks: [],
+      tradeoffs: [
+        {
+          decision: "保存方式",
+          options: [
+            { option: "本地SQLite", benefit: "离线保存", cost: "需要备份" },
+            { option: "现有后端服务", benefit: "多端共享", cost: "需要部署和访问控制" },
+          ],
+          recommendation: "先验证本地SQLite",
+          basis: "已确认离线优先",
+          uncertainty: "部署环境尚待验证",
+        },
+      ],
+      fingerprint: "explicit-test-double",
+      basedOnRevision: draft.revision,
+    };
+    formatClarification(draft, state, ChallengeSchema.parse({ goal: draft.goal }));
+    expect(state.specification).toContain("## 实施路径与方案取舍");
+    expect(state.specification).toContain("本地SQLite（收益：离线保存；代价：需要备份）");
+    expect(state.specification).toContain(
+      "现有后端服务（收益：多端共享；代价：需要部署和访问控制）",
+    );
+    expect(state.specification).toContain(
+      "AI 暂定建议：先验证本地SQLite；依据：已确认离线优先；不确定性：部署环境尚待验证",
+    );
+    expect(state.executionPrompt).toContain("先验证本地SQLite");
+  });
+
   it("keeps report suggestions, conflicts and unread materials visible outside confirmed facts", () => {
     const draft = create();
     draft.attachments = [

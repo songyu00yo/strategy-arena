@@ -1,5 +1,12 @@
 import { readFileSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test as baseTest, type Page } from "@playwright/test";
+import { displayTest } from "../display/display-validation";
+import {
+  assertNativeMotion,
+  cleanupNativeMotionProbe,
+  installNativeMotionProbe,
+  readNativeMotionProbe,
+} from "./native-motion-probe";
 import type { RecordedExamplePayload } from "../../src/lib/recorded-examples";
 import { beatsOf } from "../../src/components/console/beats";
 import { advanceFixture, fixtureSnapshot } from "../e2e/ui.fixture";
@@ -97,6 +104,7 @@ type BoardFrame = {
   fromHeight: number | null;
   toHeight: number | null;
   nativeTime: number | null;
+  heightNative: NativeDepth | null;
   nativeRate: number | null;
   nativePending: boolean;
   nativeState: string | null;
@@ -146,6 +154,10 @@ function depthProgress(time: number, duration: number) {
 }
 
 export function registerAutomaticBoardContinuityTests(mode: "functional" | "display") {
+  const test = mode === "display" ? displayTest : baseTest;
+  test.afterEach(async ({ page }) => {
+    await cleanupNativeMotionProbe(page);
+  });
   test.beforeEach(async ({ browserName }, info) => {
     info.annotations.push({
       type: "motion-validation",
@@ -156,6 +168,116 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
       }),
     });
   });
+  if (mode === "functional")
+    test("automatic A body: held native height follows its declared cubic curve and restores before resume", async ({
+      page,
+    }, info) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const requests = await prepare(page, "慢速");
+      await page.addStyleTag({
+        content:
+          '.c-stage3 [data-board="A"].enter > .c-board-body { min-height: 560px !important; }',
+      });
+      await page.getByRole("button", { name: "继续放映", exact: true }).click();
+      await page.waitForFunction(
+        ({ target, summary }) => {
+          const step = Number(
+            document
+              .querySelector('.c-time [aria-current="step"]')
+              ?.getAttribute("aria-label")
+              ?.match(/\d+/)?.[0],
+          );
+          const board = document.querySelector<HTMLElement>('.c-stage3 [data-board="A"]');
+          const native = board
+            ?.getAnimations()
+            .find(
+              (animation) =>
+                animation.effect instanceof KeyframeEffect &&
+                animation.effect.getKeyframes().some((key) => typeof key.height === "string"),
+            );
+          if (step !== target || !board?.textContent?.includes(summary) || !native) return false;
+          const pause = [...document.querySelectorAll("button")].find(
+            (node) => node.textContent?.trim() === "暂停放映",
+          );
+          if (!pause) return false;
+          pause.click();
+          return true;
+        },
+        { target: targetStep, summary: nextRun.summary },
+      );
+      await expect(page.locator(".c-root")).toHaveClass(/held/);
+      await page.waitForFunction(() =>
+        document
+          .querySelector<HTMLElement>('.c-stage3 [data-board="A"]')
+          ?.getAnimations()
+          .filter(
+            (animation) =>
+              animation.effect instanceof KeyframeEffect &&
+              animation.effect.getKeyframes().some((key) => typeof key.height === "string"),
+          )
+          .some((animation) => animation.playState === "paused" && !animation.pending),
+      );
+      const curve = await page.evaluate(() => {
+        const board = document.querySelector<HTMLElement>('.c-stage3 [data-board="A"]')!;
+        const animation = board
+          .getAnimations()
+          .find(
+            (entry) =>
+              entry.effect instanceof KeyframeEffect &&
+              entry.effect.getKeyframes().some((key) => typeof key.height === "string"),
+          )!;
+        if (animation.playState !== "paused" || animation.pending)
+          throw new Error("Actual replay height must already be held.");
+        const effect = animation.effect as KeyframeEffect;
+        const keys = effect.getKeyframes();
+        const timing = effect.getTiming();
+        const before = {
+          time: Number(animation.currentTime),
+          state: animation.playState,
+          rate: animation.playbackRate,
+        };
+        const samples = [0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+          animation.currentTime = Number(timing.duration) * fraction;
+          return {
+            time: Number(animation.currentTime),
+            height: parseFloat(getComputedStyle(board).height),
+            state: animation.playState,
+          };
+        });
+        animation.currentTime = before.time;
+        return {
+          samplingMode: "controlled-native",
+          keys,
+          timing,
+          before,
+          samples,
+          restored: {
+            time: Number(animation.currentTime),
+            state: animation.playState,
+            rate: animation.playbackRate,
+          },
+        };
+      });
+      await info.attach("held-native-height-curve", {
+        body: JSON.stringify(curve),
+        contentType: "application/json",
+      });
+      expect(curve.timing.duration).toBe(220);
+      expect(curve.before.rate).toBe(0.6);
+      expect(curve.restored).toEqual(curve.before);
+      const from = parseFloat(String(curve.keys[0].height));
+      const to = parseFloat(String(curve.keys.at(-1)!.height));
+      expect(Math.abs(from - to)).toBeGreaterThan(1);
+      for (const sample of curve.samples) {
+        expect(sample.state).toBe("paused");
+        expect(
+          Math.abs(sample.height - (from + (to - from) * depthProgress(sample.time, 220))),
+        ).toBeLessThanOrEqual(1);
+      }
+      await page.getByRole("button", { name: "继续放映", exact: true }).click();
+      await expect(page.locator("[data-stage-retiring=true]")).toHaveCount(0);
+      expect(requests).toEqual([]);
+    });
   for (const width of [1440, 390]) {
     for (const speed of ["常速", "慢速", "快速"] as const) {
       test(`automatic A body preserves paper and following board at ${width}px ${speed}`, async ({
@@ -171,6 +293,7 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
               '.c-stage3 [data-board="A"].enter > .c-board-body { min-height: 560px !important; }',
           });
         }
+        await installNativeMotionProbe(page);
         const sampling = page.evaluate(
           (target) =>
             new Promise<BoardFrame[]>((resolve) => {
@@ -195,6 +318,13 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
                           .some((frame) => typeof frame.height === "string"),
                     );
                   const keys = (heightMotion?.effect as KeyframeEffect | null)?.getKeyframes();
+                  const heightTimeBefore =
+                    typeof heightMotion?.currentTime === "number" ? heightMotion.currentTime : null;
+                  const height = parseFloat(getComputedStyle(a).height);
+                  const heightTime =
+                    typeof heightMotion?.currentTime === "number" ? heightMotion.currentTime : null;
+                  if (heightMotion && !animationIds.has(heightMotion))
+                    animationIds.set(heightMotion, nextAnimationId++);
                   const depth = (board: HTMLElement) => {
                     const motion = board
                       .getAnimations()
@@ -245,7 +375,18 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
                   frames.push({
                     at,
                     step,
-                    height: parseFloat(getComputedStyle(a).height),
+                    height,
+                    heightNative: heightMotion
+                      ? {
+                          id: animationIds.get(heightMotion)!,
+                          timeBefore: heightTimeBefore,
+                          time: heightTime,
+                          duration: Number(heightMotion.effect?.getTiming().duration),
+                          rate: heightMotion.playbackRate,
+                          state: heightMotion.playState,
+                          easing: heightMotion.effect?.getTiming().easing ?? "",
+                        }
+                      : null,
                     visibleHeight: a.getBoundingClientRect().height,
                     bFlowOffset: b.offsetTop - a.offsetTop,
                     opacity: Number(getComputedStyle(body).opacity),
@@ -293,15 +434,40 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
         );
         await page.getByRole("button", { name: "继续放映", exact: true }).click();
         const frames = await sampling;
+        const native = await readNativeMotionProbe(page, true);
         await info.attach("automatic-body-geometry-before-assertions", {
-          body: JSON.stringify({ width, speed, targetStep, frames, requests }),
+          body: JSON.stringify({ width, speed, targetStep, frames, native, requests }),
           contentType: "application/json",
         });
         const previous = frames.filter((frame) => frame.step === targetStep - 1).at(-1);
         const active = frames.filter((frame) => frame.step === targetStep);
         const animated = active.filter((frame) => frame.copy && frame.fromHeight !== null);
         expect(previous).toBeDefined();
-        expect(animated.length).toBeGreaterThanOrEqual(3);
+        expect(animated.length).toBeGreaterThanOrEqual(mode === "display" ? 3 : 1);
+        const rate = { 常速: 1, 慢速: 0.6, 快速: 1.8 }[speed];
+        const heightEffects = native.filter(
+          (entry) =>
+            entry.target.includes(".c-board-A") &&
+            entry.text.includes(nextRun.summary) &&
+            entry.keys.some((key) => typeof key.height === "string"),
+        );
+        assertNativeMotion(heightEffects);
+        for (const entry of heightEffects) {
+          expect(entry.duration).toBe(220);
+          expect(entry.easing.replaceAll(" ", "")).toBe("cubic-bezier(0.22,1,0.3,1)");
+          const clocks = entry.samples.filter((sample) => sample.time !== null);
+          expect(Math.max(...clocks.map((sample) => sample.time!))).toBeGreaterThanOrEqual(220);
+          expect(
+            clocks
+              .filter((sample) => sample.reason !== "created")
+              .every((sample) => sample.rate === rate),
+          ).toBe(true);
+          expect(
+            entry.samples.some(
+              (sample) => sample.reason === "before-cancel" || sample.reason === "finish",
+            ),
+          ).toBe(true);
+        }
         expect(Math.abs(animated[0].fromHeight! - previous!.height)).toBeLessThanOrEqual(1);
         expect(
           animated.every(
@@ -312,9 +478,26 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
         expect(animated.every((frame) => frame.currentText.includes(nextRun.summary))).toBe(true);
         expect(animated.some((frame) => frame.copy!.text.includes(previousRun.summary))).toBe(true);
         expect(animated.every((frame) => frame.opacity + frame.copy!.opacity >= 0.98)).toBe(true);
-        const rate = { 常速: 1, 慢速: 0.6, 快速: 1.8 }[speed];
         expect(animated.every((frame) => frame.nativeRate === rate)).toBe(true);
         expect(animated.every((frame) => frame.depthRate === rate)).toBe(true);
+        for (const frame of animated) {
+          const height = frame.heightNative;
+          expect(height).not.toBeNull();
+          expect(height!.duration).toBe(220);
+          expect(height!.rate).toBe(rate);
+          expect(height!.state).toMatch(/^(?:running|finished)$/);
+          expect(height!.timeBefore).not.toBeNull();
+          expect(height!.time).not.toBeNull();
+          const before =
+            frame.fromHeight! +
+            (frame.toHeight! - frame.fromHeight!) *
+              depthProgress(height!.timeBefore!, height!.duration);
+          const after =
+            frame.fromHeight! +
+            (frame.toHeight! - frame.fromHeight!) * depthProgress(height!.time!, height!.duration);
+          expect(frame.height).toBeGreaterThanOrEqual(Math.min(before, after) - 1);
+          expect(frame.height).toBeLessThanOrEqual(Math.max(before, after) + 1);
+        }
         if (width === 1440) {
           expect(animated[0].aDepthFrom).not.toBeNull();
           expect(animated[0].bDepthFrom).not.toBeNull();
@@ -348,7 +531,7 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
               expect(frame[axis]).toBeLessThanOrEqual(Math.max(before, after) + 1);
             }
             for (const times of tracks.values()) {
-              expect(times.at(-1)!).toBeGreaterThan(times[0]);
+              if (mode === "display") expect(times.at(-1)!).toBeGreaterThan(times[0]);
               for (let index = 1; index < times.length; index++)
                 expect(times[index]).toBeGreaterThanOrEqual(times[index - 1]);
             }
@@ -372,17 +555,21 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
           (frame) =>
             frame.height > Math.min(from, to) + 0.5 && frame.height < Math.max(from, to) - 0.5,
         );
-        if (Math.abs(from - to) > 1)
+        if (mode === "display" && Math.abs(from - to) > 1)
           expect(
             new Set(between.map((frame) => frame.height.toFixed(2))).size,
           ).toBeGreaterThanOrEqual(3);
-        expect(animated.some((frame) => frame.opacity > 0 && frame.opacity < 1)).toBe(true);
+        if (mode === "display")
+          expect(animated.some((frame) => frame.opacity > 0 && frame.opacity < 1)).toBe(true);
         const settled = active.at(-1)!;
         expect(Math.abs(settled.height - to)).toBeLessThanOrEqual(1);
         if (width === 390) {
           const offsets = animated.map((frame) => frame.bFlowOffset - frame.height);
           expect(Math.max(...offsets) - Math.min(...offsets)).toBeLessThanOrEqual(1);
-          expect(new Set(between.map((frame) => frame.bFlowOffset)).size).toBeGreaterThanOrEqual(3);
+          if (mode === "display")
+            expect(new Set(between.map((frame) => frame.bFlowOffset)).size).toBeGreaterThanOrEqual(
+              3,
+            );
         }
         expect(requests).toEqual([]);
         await info.attach("automatic-body-geometry", {

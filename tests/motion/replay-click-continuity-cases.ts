@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test as baseTest, type Page } from "@playwright/test";
+import { displayTest } from "../display/display-validation";
 import { beatsOf } from "../../src/components/console/beats";
 import {
   playbackCommitAt,
@@ -37,6 +38,10 @@ type PressEvent = {
   nodeId: number;
   pressed: boolean;
   amount: number;
+  activeTarget: string | null;
+  activeAmount: number;
+  step: number;
+  progress: number;
   ring: number;
   paper: Box | null;
   box: Box;
@@ -105,6 +110,7 @@ async function openPausedReplay(page: Page, slug: string, speed: string) {
 }
 
 export function registerReplayClickContinuityTests(mode: "functional" | "display") {
+  const test = mode === "display" ? displayTest : baseTest;
   test.beforeEach(async ({ browserName }, info) => {
     info.annotations.push({
       type: "motion-validation",
@@ -223,6 +229,9 @@ export function registerReplayClickContinuityTests(mode: "functional" | "display
                   const paper = document.querySelector<HTMLElement>(".replay-question-scene");
                   const body = paper?.querySelector<HTMLElement>(".replay-question-body");
                   const cursor = paper?.querySelector<HTMLElement>(".replay-question-pointer");
+                  const activeControl = [
+                    ...(paper?.querySelectorAll<HTMLElement>("[data-replay-pressed=true]") ?? []),
+                  ].find((control) => !control.closest('[inert], [aria-hidden="true"]'));
                   const pointer = cursor?.getBoundingClientRect();
                   const origin = body ? layoutPoint(body) : { x: 0, y: 0 };
                   const targetLayout = layoutPoint(target);
@@ -234,6 +243,21 @@ export function registerReplayClickContinuityTests(mode: "functional" | "display
                     amount:
                       Number.parseFloat(target.style.getPropertyValue("--replay-control-press")) ||
                       0,
+                    activeTarget: activeControl ? identity(activeControl) : null,
+                    activeAmount: activeControl
+                      ? Number.parseFloat(
+                          activeControl.style.getPropertyValue("--replay-control-press"),
+                        ) || 0
+                      : 0,
+                    step: Number(
+                      document
+                        .querySelector('.c-time [aria-current="step"]')
+                        ?.getAttribute("aria-label")
+                        ?.match(/\d+/)?.[0] ?? 0,
+                    ),
+                    progress: Number(
+                      document.querySelector<HTMLElement>(".c-root")?.dataset.replayProgress ?? 0,
+                    ),
                     ring: cursor ? Number(getComputedStyle(cursor, "::before").opacity) : 0,
                     paper: paper ? box(paper) : null,
                     box: box(target),
@@ -367,120 +391,167 @@ export function registerReplayClickContinuityTests(mode: "functional" | "display
         contentType: "application/json",
       });
 
-      expect(observed.timedOut).toBe(false);
-      expect(forbidden).toEqual([]);
-      const frames = observed.frames.filter((frame) => frame.step === index + 1);
-      expect(frames.length).toBeGreaterThan(5);
-      const expectedRate = { 常速: 1, 慢速: 0.6, 快速: 1.8 }[scenario.speed];
-      expect(frames.every((frame) => frame.rate === expectedRate)).toBe(true);
-      const baseline = observed.frames.find((frame) => frame.step === index && frame.legend);
-      expect(baseline?.legend).toBeTruthy();
-      for (const frame of frames) {
-        expect(frame.legend).toEqual(baseline!.legend);
-        expect(frame.options).toEqual(baseline!.options);
-        for (const target of frame.targets.filter((target) => target !== null)) {
-          expect(target!.transformTransitions).toBe(0);
-          expect(
-            target!.transitionProperty.split(",").map((property) => property.trim()),
-          ).not.toContain("transform");
+      const check = expect.soft;
+      try {
+        check(observed.timedOut).toBe(false);
+        const frames = observed.frames.filter((frame) => frame.step === index + 1);
+        if (mode === "display") check(frames.length).toBeGreaterThan(5);
+        else check(frames.length).toBeGreaterThan(0);
+        const expectedRate = { 常速: 1, 慢速: 0.6, 快速: 1.8 }[scenario.speed];
+        check(frames.every((frame) => frame.rate === expectedRate)).toBe(true);
+        const baseline = observed.frames.find((frame) => frame.step === index && frame.legend);
+        check(baseline?.legend).toBeTruthy();
+        for (const frame of frames) {
+          check(frame.paper).not.toBeNull();
+          check(frame.legend).toEqual(baseline?.legend);
+          check(frame.options).toEqual(baseline?.options);
+          for (const target of frame.targets.filter((target) => target !== null)) {
+            check(target!.transformTransitions).toBe(0);
+            check(
+              target!.transitionProperty.split(",").map((property) => property.trim()),
+            ).not.toContain("transform");
+          }
+          check(frame.pointer).not.toBeNull();
+          if (!frame.pointer) continue;
+          check(Math.abs(frame.pointer!.ring - frame.pointer!.amount)).toBeLessThan(0.03);
+          const progress =
+            frame.progress <= 0.8
+              ? (frame.progress / 0.8) * commitAt
+              : commitAt + ((frame.progress - 0.8) / 0.2) * (1 - commitAt);
+          const elapsed = progress * duration;
+          const expectedOpacity =
+            smooth(elapsed / 120) *
+            smooth((duration - elapsed) / 120) *
+            (1 - smooth((frame.fold - 0.1) / 0.15));
+          check(Math.abs(frame.pointer!.opacity - expectedOpacity)).toBeLessThan(0.04);
         }
-        expect(frame.pointer).not.toBeNull();
-        expect(Math.abs(frame.pointer!.ring - frame.pointer!.amount)).toBeLessThan(0.03);
-        const progress =
-          frame.progress <= 0.8
-            ? (frame.progress / 0.8) * commitAt
-            : commitAt + ((frame.progress - 0.8) / 0.2) * (1 - commitAt);
-        const elapsed = progress * duration;
-        const expectedOpacity =
-          smooth(elapsed / 120) *
-          smooth((duration - elapsed) / 120) *
-          (1 - smooth((frame.fold - 0.1) / 0.15));
-        expect(Math.abs(frame.pointer!.opacity - expectedOpacity)).toBeLessThan(0.04);
-      }
-      expect(
-        frames.some((frame) => frame.pointer!.opacity > 0.02 && frame.pointer!.opacity < 0.95),
-      ).toBe(true);
-      expect(baseline!.pointer?.opacity).toBe(0);
-      // rAF need not land on the exact terminal millisecond. The equation above
-      // checks the captured endpoint approach at each actual active-clock sample.
-      expect(frames.at(-1)!.pointer!.opacity).toBeLessThan(0.95);
-
-      for (let targetIndex = 0; targetIndex < Math.max(1, values.length); targetIndex++) {
-        const pressed = frames.filter((frame) => frame.targets[targetIndex]?.pressed);
-        const target = frames
-          .map((frame) => frame.targets[targetIndex])
-          .find((target) => target !== null)!;
-        expect(target).toBeTruthy();
-        const events = observed.pressEvents.filter((event) => event.target === target.identity);
-        const pressEvents = events.filter((event) => event.pressed);
-        expect(pressEvents.length).toBeGreaterThan(0);
-        expect(events.some((event) => !event.pressed && event.at >= pressEvents[0].at)).toBe(true);
-        expect(new Set(events.map((event) => event.nodeId))).toEqual(new Set([target.nodeId]));
-        if (mode === "display") {
-          expect(pressed.length).toBeGreaterThanOrEqual(2);
-          expect(
-            pressed.some((frame) => frame.pointer!.ring > 0.2 && frame.pointer!.ring < 0.99),
+        if (mode === "display")
+          check(
+            frames.some(
+              (frame) =>
+                frame.pointer && frame.pointer.opacity > 0.02 && frame.pointer.opacity < 0.95,
+            ),
           ).toBe(true);
+        check(baseline?.pointer?.opacity).toBe(0);
+        // rAF need not land on the exact terminal millisecond. The equation above
+        // checks the captured endpoint approach at each actual active-clock sample.
+        if (mode === "display") check(frames.at(-1)?.pointer?.opacity).toBeLessThan(0.95);
+
+        for (let targetIndex = 0; targetIndex < Math.max(1, values.length); targetIndex++) {
+          const pressed = frames.filter((frame) => frame.targets[targetIndex]?.pressed);
+          const target = frames
+            .map((frame) => frame.targets[targetIndex])
+            .find((target) => target !== null)!;
+          check(target).toBeTruthy();
+          if (!target) continue;
+          check(frames.every((frame) => !!frame.targets[targetIndex])).toBe(true);
+          const events = observed.pressEvents.filter((event) => event.target === target.identity);
+          const pressEvents = events.filter((event) => event.pressed);
+          check(pressEvents.length).toBeGreaterThan(0);
+          if (!pressEvents.length) continue;
+          check(events.some((event) => !event.pressed && event.at >= pressEvents[0].at)).toBe(true);
+          check(events.at(-1)?.pressed).toBe(false);
+          check(new Set(events.map((event) => event.nodeId))).toEqual(new Set([target.nodeId]));
+          if (mode === "display") {
+            check(pressed.length).toBeGreaterThanOrEqual(2);
+            check(
+              pressed.some((frame) => frame.pointer!.ring > 0.2 && frame.pointer!.ring < 0.99),
+            ).toBe(true);
+          }
+          for (const event of events) {
+            check(event.pointer).not.toBeNull();
+            check(event.paper).not.toBeNull();
+            check(Math.abs(event.ring - event.activeAmount / 1.5)).toBeLessThan(0.03);
+            if (event.pressed) check(event.activeTarget).toBe(event.target);
+            else check(event.amount).toBe(0);
+            if (event.step === index + 1) {
+              const progress =
+                event.progress <= 0.8
+                  ? (event.progress / 0.8) * commitAt
+                  : commitAt + ((event.progress - 0.8) / 0.2) * (1 - commitAt);
+              const elapsed = progress * duration;
+              const clickTimes =
+                values.length > 1
+                  ? values.map((_, at) => 0.22 + (at * 0.52) / (values.length - 1))
+                  : [scenario.kind === "confirm" ? 0.4 : 0.45];
+              const gaps = clickTimes
+                .slice(1)
+                .map((at, key) => (at - clickTimes[key]) * duration * 0.6);
+              const pressDuration = Math.max(1, Math.min(120, ...gaps));
+              const active = clickTimes.findLastIndex(
+                (at) => elapsed >= at * duration && elapsed < at * duration + pressDuration,
+              );
+              const phase =
+                active < 0 ? 0 : (elapsed - clickTimes[active] * duration) / pressDuration;
+              const expectedRing = active < 0 ? 0 : Math.sin(phase * Math.PI) ** 2;
+              check(Math.abs(event.ring - expectedRing)).toBeLessThan(0.03);
+            }
+          }
+          const ended = events.find((event) => !event.pressed && event.at >= pressEvents[0].at)!;
+          if (!ended) continue;
+          const first = pressed.length
+            ? frames.indexOf(pressed[0])
+            : frames.findIndex((frame) => frame.at > pressEvents[0].at);
+          const last = pressed.length
+            ? frames.indexOf(pressed.at(-1)!)
+            : frames.findLastIndex((frame) => frame.at < ended.at);
+          const before = pressed.length
+            ? first - 1
+            : frames.findLastIndex((frame) => frame.at <= pressEvents[0].at);
+          const after = pressed.length
+            ? last + 1
+            : frames.findIndex((frame) => frame.at >= ended.at);
+          if (mode === "display") {
+            check(before).toBeGreaterThanOrEqual(0);
+            check(after).toBeLessThan(frames.length);
+            check(after).toBeGreaterThan(before);
+          }
+          if (mode === "display" && before >= 0 && after < frames.length && after > before) {
+            check(frames[before].pointer?.ring).toBeLessThan(0.01);
+            check(frames[after].pointer?.ring).toBeLessThan(0.01);
+          }
+          const relative = [
+            ...pressed
+              .filter((frame) => frame.pointer && frame.targets[targetIndex])
+              .map((frame) => ({
+                x: frame.pointer!.x - frame.targets[targetIndex]!.box.x,
+                y: frame.pointer!.y - frame.targets[targetIndex]!.box.y,
+              })),
+            ...pressEvents
+              .filter((event) => event.pointer)
+              .map((event) => ({
+                x: event.pointer!.x - event.box.x,
+                y: event.pointer!.y - event.box.y,
+              })),
+          ];
+          check(extent(relative.map((position) => position.x))).toBeLessThan(0.35);
+          check(extent(relative.map((position) => position.y))).toBeLessThan(0.35);
+          const around = before >= 0 && after > before ? frames.slice(before, after + 1) : [];
+          const paperPoses = [
+            ...around.map((frame) => frame.paper!),
+            ...events.map((event) => event.paper),
+          ].filter((paper) => paper !== null);
+          const targetPoses = [
+            ...around
+              .map((frame) => frame.targets[targetIndex]?.layout)
+              .filter((pose) => pose !== undefined),
+            ...events.map((event) => event.layout),
+          ];
+          check(extent(paperPoses.map((paper) => paper.width))).toBeLessThanOrEqual(1);
+          check(extent(paperPoses.map((paper) => paper.height))).toBeLessThanOrEqual(1);
+          check(extent(paperPoses.map((paper) => paper.x))).toBeLessThanOrEqual(1);
+          check(extent(paperPoses.map((paper) => paper.y))).toBeLessThanOrEqual(1);
+          for (const axis of ["x", "y", "width", "height"] as const)
+            check(extent(targetPoses.map((pose) => pose[axis]))).toBeLessThanOrEqual(1);
         }
-        const rings = [
-          ...pressed.map((frame) => frame.pointer!.ring),
-          ...pressEvents.map((event) => event.ring),
-        ];
-        expect(rings.some((ring) => ring > 0.2 && ring < 0.99)).toBe(true);
-        for (const event of pressEvents) {
-          expect(event.pointer).not.toBeNull();
-          expect(event.paper).not.toBeNull();
-          expect(Math.abs(event.ring - event.amount / 1.5)).toBeLessThan(0.03);
-        }
-        const ended = events.find((event) => !event.pressed && event.at >= pressEvents[0].at)!;
-        const first = pressed.length
-          ? frames.indexOf(pressed[0])
-          : frames.findIndex((frame) => frame.at > pressEvents[0].at);
-        const last = pressed.length
-          ? frames.indexOf(pressed.at(-1)!)
-          : frames.findLastIndex((frame) => frame.at < ended.at);
-        const before = pressed.length
-          ? first - 1
-          : frames.findLastIndex((frame) => frame.at <= pressEvents[0].at);
-        const after = pressed.length ? last + 1 : frames.findIndex((frame) => frame.at >= ended.at);
-        expect(before).toBeGreaterThanOrEqual(0);
-        expect(after).toBeLessThan(frames.length);
-        expect(after).toBeGreaterThan(before);
-        expect(frames[before].pointer!.ring).toBeLessThan(0.01);
-        expect(frames[after].pointer!.ring).toBeLessThan(0.01);
-        const relative = [
-          ...pressed.map((frame) => ({
-            x: frame.pointer!.x - frame.targets[targetIndex]!.box.x,
-            y: frame.pointer!.y - frame.targets[targetIndex]!.box.y,
-          })),
-          ...pressEvents.map((event) => ({
-            x: event.pointer!.x - event.box.x,
-            y: event.pointer!.y - event.box.y,
-          })),
-        ];
-        expect(extent(relative.map((position) => position.x))).toBeLessThan(0.35);
-        expect(extent(relative.map((position) => position.y))).toBeLessThan(0.35);
-        const around = frames.slice(before, after + 1);
-        const paperPoses = [
-          ...around.map((frame) => frame.paper!),
-          ...events.map((event) => event.paper!),
-        ];
-        const targetPoses = [
-          ...around.map((frame) => frame.targets[targetIndex]!.layout),
-          ...events.map((event) => event.layout),
-        ];
-        expect(extent(paperPoses.map((paper) => paper.width))).toBeLessThanOrEqual(1);
-        expect(extent(paperPoses.map((paper) => paper.height))).toBeLessThanOrEqual(1);
-        expect(extent(paperPoses.map((paper) => paper.x))).toBeLessThanOrEqual(1);
-        expect(extent(paperPoses.map((paper) => paper.y))).toBeLessThanOrEqual(1);
-        for (const axis of ["x", "y", "width", "height"] as const)
-          expect(extent(targetPoses.map((pose) => pose[axis]))).toBeLessThanOrEqual(1);
+      } finally {
+        check(forbidden).toEqual([]);
+        check(
+          (inputs as Array<{ trusted: boolean; key?: string }>).some(
+            (input) => input.trusted && input.key === "Enter",
+          ),
+        ).toBe(true);
       }
-      expect(
-        (inputs as Array<{ trusted: boolean; key?: string }>).some(
-          (input) => input.trusted && input.key === "Enter",
-        ),
-      ).toBe(true);
     });
   }
 

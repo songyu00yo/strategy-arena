@@ -8,6 +8,8 @@ import test from "node:test";
 import { build } from "./build.mjs";
 import {
   summarizePlaywright,
+  summarizeJUnit,
+  comparePlaywrightJUnit,
   VALIDATION_STEPS,
   writeCiValidationReceipt,
 } from "./ci-validation-report.mjs";
@@ -59,6 +61,10 @@ function fixture(t, compile = true) {
       },
     });
   mkdirSync(join(root, "test-results"));
+  writeFileSync(
+    join(root, "test-results/e2e.xml"),
+    '<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite name="synthetic" tests="1" failures="0" errors="0" skipped="0"><testcase name="synthetic"/></testsuite></testsuites>',
+  );
   const writeReport = (value) =>
     writeFileSync(
       join(root, "test-results/e2e.json"),
@@ -256,3 +262,47 @@ for (const status of ["interrupted", "timedOut"])
     assert.equal(summary.notRun, 0);
     assert.equal(summary.failedAttempts, 1);
   });
+
+const onePassJUnit =
+  '<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="synthetic"/></testsuite></testsuites>';
+test("JUnit cross-check counts real cases and ignores outcome-like text in CDATA", () => {
+  const xml = onePassJUnit.replace(
+    '<testcase name="synthetic"/>',
+    '<testcase name="synthetic"><system-out><![CDATA[<failure/><skipped/>]]></system-out></testcase>',
+  );
+  assert.equal(comparePlaywrightJUnit(report(), xml).status, "passed");
+  assert.deepEqual(summarizeJUnit(xml), {
+    status: "valid",
+    tests: 1,
+    failures: 0,
+    errors: 0,
+    skipped: 0,
+    declaredCountsMatch: true,
+  });
+});
+for (const [name, xml] of [
+  ["missing case", onePassJUnit.replace('<testcase name="synthetic"/>', "")],
+  ["truncated XML", onePassJUnit.slice(0, -13)],
+  ["extra root", onePassJUnit + onePassJUnit],
+  ["wrong suite count", onePassJUnit.replace('tests="1"', 'tests="2"')],
+  ["DTD", '<!DOCTYPE testsuites SYSTEM "file:///never-read">' + onePassJUnit],
+  ["duplicate attribute", onePassJUnit.replace('tests="1"', 'tests="1" tests="1"')],
+])
+  test(`rejects ${name} JUnit evidence`, () => {
+    assert.equal(comparePlaywrightJUnit(report(), xml).status, "failed");
+  });
+test("a JUnit failure cannot accompany an all-passing JSON report", () => {
+  const xml =
+    '<testsuites tests="1" failures="1" errors="0" skipped="0"><testsuite tests="1" failures="1" errors="0" skipped="0"><testcase><failure message="synthetic"/></testcase></testsuite></testsuites>';
+  assert.equal(summarizeJUnit(xml).status, "valid");
+  assert.equal(comparePlaywrightJUnit(report(), xml).countsMatch, false);
+});
+test("missing JUnit creates a failed gate even when JSON and step outcome passed", (t) => {
+  const f = fixture(t);
+  rmSync(join(f.root, "test-results/e2e.xml"));
+  const receipt = f.receipt();
+  assert.equal(receipt.playwright.summary.status, "passed");
+  assert.equal(receipt.playwright.junit.status, "invalid");
+  assert.equal(receipt.checks.e2e, "failed");
+  assert.equal(receipt.functionalReady, false);
+});

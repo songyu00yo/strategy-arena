@@ -726,21 +726,15 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
     }, info) => {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
       const unexpected = await openDetail(page);
-      const supplement = await openSupplement(page);
       await beginProbe(page);
-      await waitForMovingPaper(page, "补充这一步", 0.42, 0.68);
       await page.evaluate(() => {
-        const probe = (
-          window as unknown as {
-            __movingPaper: { dialog: HTMLElement; animation: Animation; duration: number };
-          }
-        ).__movingPaper;
-        const button = [...probe.dialog.querySelectorAll("button")].find(
-          (node) => node.textContent?.trim() === "调整条件",
-        )!;
+        let probe: { dialog: HTMLElement; animation: Animation; duration: number } | null = null;
+        let button: HTMLButtonElement | null = null;
+        let frame = 0;
         const inputs: unknown[] = [];
         Object.assign(window, { __retargetInputs: inputs });
         const sample = (event: MouseEvent) => {
+          if (!probe || !button) return;
           const target = event.target instanceof Element ? event.target : null;
           const control = target?.closest("button");
           const rect = button.getBoundingClientRect();
@@ -767,10 +761,9 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
             phase: probe.dialog.dataset.overlayMotionPhase,
           });
         };
-        for (const type of ["pointerdown", "pointerup", "click"] as const)
-          document.addEventListener(type, sample, { capture: true, passive: true });
         const record = (event: MouseEvent) => {
-          if ((event.target as Element | null)?.closest("button") !== button) return;
+          if (!probe || !button || (event.target as Element | null)?.closest("button") !== button)
+            return;
           Object.assign(window, {
             __retargetClick: {
               trusted: event.isTrusted,
@@ -781,15 +774,88 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
           });
           document.removeEventListener("click", record, true);
         };
+        for (const type of ["pointerdown", "pointerup", "click"] as const)
+          document.addEventListener(type, sample, { capture: true, passive: true });
         document.addEventListener("click", record, true);
+        Object.assign(window, {
+          __retargetCapturePoint: () =>
+            new Promise((resolve) => {
+              const tick = () => {
+                const dialog = [...document.querySelectorAll<HTMLElement>("dialog[open]")].find(
+                  (node) =>
+                    node.querySelector(".modal-heading h2")?.textContent?.trim() === "补充这一步",
+                );
+                const animation = dialog
+                  ?.getAnimations()
+                  .find(
+                    (entry) =>
+                      entry.effect instanceof KeyframeEffect &&
+                      entry.effect.getKeyframes().some((key) => typeof key.transform === "string"),
+                  );
+                const time = animation?.currentTime;
+                const duration = Number(animation?.effect?.getTiming().duration);
+                const intended = [...(dialog?.querySelectorAll("button") ?? [])].find(
+                  (node) => node.textContent?.trim() === "调整条件",
+                );
+                if (
+                  dialog &&
+                  animation &&
+                  intended &&
+                  dialog.dataset.overlayMotionPhase === "handoff" &&
+                  animation.playState === "running" &&
+                  !animation.pending &&
+                  typeof time === "number" &&
+                  time >= duration * 0.42 &&
+                  time <= duration * 0.68
+                ) {
+                  probe = { dialog, animation, duration };
+                  button = intended;
+                  const rect = button.getBoundingClientRect();
+                  const intent = {
+                    at: performance.now(),
+                    animationTime: animation.currentTime,
+                    animationState: animation.playState,
+                    animationPending: animation.pending,
+                    duration,
+                    phase: dialog.dataset.overlayMotionPhase,
+                    buttonRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                  };
+                  Object.assign(window, {
+                    __movingPaper: {
+                      ...probe,
+                      parts: dialog.getAnimations({ subtree: true }),
+                      time,
+                    },
+                    __retargetIntent: intent,
+                  });
+                  resolve(intent);
+                  return;
+                }
+                frame = requestAnimationFrame(tick);
+              };
+              tick();
+            }),
+          __retargetStop: () => {
+            cancelAnimationFrame(frame);
+            for (const type of ["pointerdown", "pointerup", "click"] as const)
+              document.removeEventListener(type, sample, true);
+            document.removeEventListener("click", record, true);
+          },
+        });
       });
       try {
-        // Direct mouse coordinates avoid Playwright waiting for a deliberately moving button to settle.
-        const box = await supplement
-          .getByRole("button", { name: "调整条件", exact: true })
-          .boundingBox();
-        expect(box).not.toBeNull();
-        await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+        await openSupplement(page);
+        const intent = await page.evaluate(() => {
+          const target = window as unknown as {
+            __retargetCapturePoint: () => Promise<{
+              buttonRect: { x: number; y: number; width: number; height: number };
+            }>;
+          };
+          return target.__retargetCapturePoint();
+        });
+        // The phase check and live center are one browser observation, followed immediately by real input.
+        const box = intent.buttonRect;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
         await expect(conditions).toBeVisible();
         const click = await page.evaluate(
@@ -830,8 +896,12 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
             const target = window as unknown as {
               __retargetInputs?: unknown[];
               __retargetClick?: unknown;
+              __retargetIntent?: unknown;
+              __retargetStop?: () => void;
             };
+            target.__retargetStop?.();
             return {
+              intent: target.__retargetIntent ?? null,
               inputs: target.__retargetInputs ?? [],
               click: target.__retargetClick ?? null,
             };

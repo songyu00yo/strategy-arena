@@ -6,6 +6,8 @@ export default defineConfig({
   testDir: "./tests/display",
   fullyParallel: false,
   forbidOnly: true,
+  // Cold-profile navigation and environment qualification share this deadline.
+  timeout: 60_000,
   retries: 0,
   workers: 1,
   reporter: [["list"], ["json", { outputFile: "artifacts/display-e2e.json" }]],

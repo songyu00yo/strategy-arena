@@ -15,6 +15,7 @@ type NativeOverlayDriver = {
 };
 type OverlayFrame = {
   at: number;
+  observedAt: number;
   dialogs: Array<{
     name: string;
     phase: string;
@@ -130,6 +131,7 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
       };
       Object.assign(window, { __overlayProbe: state });
       const tick = (at: number) => {
+        const observedAt = performance.now();
         const dialogs = [...document.querySelectorAll<HTMLElement>("dialog[open]")].map((node) => {
           const box = node.getBoundingClientRect();
           const style = getComputedStyle(node);
@@ -163,6 +165,7 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
         });
         state.frames.push({
           at,
+          observedAt,
           dialogs,
           held: document.querySelector(".c-root")?.classList.contains("held") ?? false,
           scrollY,
@@ -422,7 +425,7 @@ export function registerOverlayContinuityTests(mode: "functional" | "display") {
   ) {
     const samples = frames.flatMap((frame) => {
       const paper = frame.dialogs.find((dialog) => dialog.name === "调整条件");
-      return paper && frame.at >= click.at && frame.at < until
+      return paper && frame.observedAt >= click.at && frame.observedAt < until
         ? [{ at: frame.at, height: paper.height, native: paper.heightEffects }]
         : [];
     });

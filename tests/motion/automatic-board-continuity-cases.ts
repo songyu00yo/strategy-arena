@@ -448,6 +448,7 @@ export function registerAutomaticBoardContinuityTests(mode: "functional" | "disp
         const heightEffects = native.filter(
           (entry) =>
             entry.target.includes(".c-board-A") &&
+            entry.step === targetStep &&
             entry.text.includes(nextRun.summary) &&
             entry.keys.some((key) => typeof key.height === "string"),
         );

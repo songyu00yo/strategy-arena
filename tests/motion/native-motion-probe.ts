@@ -17,6 +17,9 @@ export type NativeMotionEntry = {
   ancestors: string[];
   duration: number | string;
   easing: string;
+  delay: number | null;
+  direction: PlaybackDirection | null;
+  fill: FillMode | null;
   keys: Record<string, unknown>[];
   samples: NativeMotionSample[];
   slots: string[];
@@ -91,6 +94,9 @@ export async function installNativeMotionProbe(page: Page, selectors: Record<str
         duration:
           typeof timing.duration === "number" ? timing.duration : String(timing.duration ?? "auto"),
         easing: timing.easing ?? "linear",
+        delay: timing.delay ?? null,
+        direction: timing.direction ?? null,
+        fill: timing.fill ?? null,
         keys: effect.getKeyframes(),
         samples: [],
         slots: Object.entries(selectors)
@@ -180,7 +186,14 @@ export function assertNativeMotion(entries: NativeMotionEntry[]) {
       true,
     );
     for (const sample of entry.samples.filter((sample) => sample.time !== null)) {
-      expect(sample.time!).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(sample.time)).toBe(true);
+      if (
+        entry.direction === "normal" &&
+        entry.delay !== null &&
+        entry.delay >= 0 &&
+        sample.time! < 0
+      )
+        expect(sample.progress === null || sample.progress === 0).toBe(true);
       expect(sample.progress === null || (sample.progress >= 0 && sample.progress <= 1)).toBe(true);
     }
   }

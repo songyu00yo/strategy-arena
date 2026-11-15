@@ -97,6 +97,7 @@ type ContentClockEffect = {
   id: number;
   kind: "opacity" | "height";
   state: string;
+  pending: boolean;
   time: number;
   writes: number;
 };
@@ -107,6 +108,9 @@ type ContentClockWindow = Window & {
     read: () => ContentClockFrame;
     pauseAfterPlay: "opacity" | "height" | null;
     excludedPlayId: number | null;
+    readyFrames: { id: number; frame: ContentClockFrame }[];
+    pauseTriggers: { id: number; frame: ContentClockFrame }[];
+    readyErrors: string[];
     stopped: boolean;
   };
 };
@@ -156,7 +160,14 @@ async function observeContentClock(page: Page) {
       effects: [...entries].flatMap(([animation, value]) =>
         animation.playState === "idle"
           ? []
-          : [{ ...value, state: animation.playState, time: Number(animation.currentTime) }],
+          : [
+              {
+                ...value,
+                state: animation.playState,
+                pending: animation.pending,
+                time: Number(animation.currentTime),
+              },
+            ],
       ),
     });
     const probe = {
@@ -164,6 +175,9 @@ async function observeContentClock(page: Page) {
       read,
       pauseAfterPlay: null as "opacity" | "height" | null,
       excludedPlayId: null as number | null,
+      readyFrames: [] as { id: number; frame: ContentClockFrame }[],
+      pauseTriggers: [] as { id: number; frame: ContentClockFrame }[],
+      readyErrors: [] as string[],
       stopped: false,
     };
     target.__contentClock = probe;
@@ -188,7 +202,34 @@ async function observeContentClock(page: Page) {
       const observed = entry(this);
       if (observed?.kind === probe.pauseAfterPlay && observed?.id !== probe.excludedPlayId) {
         probe.pauseAfterPlay = null;
-        setTimeout(pause, 35);
+        void this.ready
+          .then(() => {
+            if (probe.stopped) return;
+            probe.readyFrames.push({ id: observed.id, frame: read() });
+            const pauseAfterNativeAdvance = () => {
+              if (probe.stopped) return;
+              const active = [...entries.keys()].filter(
+                (animation) => animation.playState !== "idle",
+              );
+              if (
+                active.includes(this) &&
+                active.every(
+                  (animation) =>
+                    animation.playState === "running" &&
+                    !animation.pending &&
+                    typeof animation.currentTime === "number" &&
+                    animation.currentTime > 0,
+                )
+              ) {
+                probe.pauseTriggers.push({ id: observed.id, frame: read() });
+                pause();
+              } else requestAnimationFrame(pauseAfterNativeAdvance);
+            };
+            pauseAfterNativeAdvance();
+          })
+          .catch((error: Error) => {
+            probe.readyErrors.push(error.message);
+          });
       }
     };
     const sample = () => {
@@ -1084,6 +1125,28 @@ export function registerReplayActionTransitionTests(mode: "functional" | "displa
             ),
         );
         held = await snapshot();
+        const phaseEvidence = await page.evaluate(() => {
+          const probe = (window as ContentClockWindow).__contentClock!;
+          return {
+            readyFrames: probe.readyFrames,
+            pauseTriggers: probe.pauseTriggers,
+            readyErrors: probe.readyErrors,
+          };
+        });
+        await info.attach(`content-clock-${boundary}-native-phase-before-assertions`, {
+          body: JSON.stringify({ initial, held, ...phaseEvidence }),
+          contentType: "application/json",
+        });
+        expect(phaseEvidence.readyErrors).toEqual([]);
+        expect(phaseEvidence.pauseTriggers).toHaveLength(1);
+        expect(phaseEvidence.pauseTriggers[0].frame.effects.map((effect) => effect.id)).toEqual(
+          held.effects.map((effect) => effect.id),
+        );
+        expect(
+          phaseEvidence.pauseTriggers[0].frame.effects.every(
+            (effect) => !effect.pending && effect.state === "running" && effect.time > 0,
+          ),
+        ).toBe(true);
         expect(held.effects.length).toBe(initial.effects.length);
         expect(held.effects.every((effect) => effect.state === "paused" && effect.time > 0)).toBe(
           true,

@@ -19,6 +19,9 @@ import {
   clarificationReviewConfig,
   formatClarification,
   runClarification,
+  derivePlanningReadiness,
+  hasBlockingUnconfirmedItems,
+  isCurrentClarificationReview,
 } from "../src/lib/server/clarification";
 import { ChallengeSchema } from "../src/lib/contracts";
 
@@ -710,7 +713,6 @@ describe("explicit clarification workflow with model test doubles", () => {
     });
     expect(fixture.generate.mock.calls.slice(prior).map(([request]) => request.name)).toEqual([
       "clarification_decompose",
-      "clarification_options",
       "clarification_review",
     ]);
     expect(db().prepare("SELECT count(*) AS count FROM arenas").get()).toMatchObject({ count: 0 });
@@ -773,7 +775,9 @@ describe("explicit clarification workflow with model test doubles", () => {
       assumptions: draft.assumptions,
     });
     expect("versions" in delivered).toBe(true);
-    expect(fixture.generate.mock.calls.length - before).toBe(3);
+    expect(fixture.generate.mock.calls.slice(before).map(([request]) => request.name)).toEqual([
+      "clarification_review",
+    ]);
     expect(
       JSON.parse(
         (
@@ -1410,7 +1414,7 @@ describe("explicit clarification workflow with model test doubles", () => {
     ])
       expect(state.specification).toContain(`## ${heading}`);
     expect(state.specification).toContain("需求确认只代表用户同意该要求，不证明技术上可实现");
-    expect(state.specification).toContain("5. 发布复盘");
+    expect(state.specification).toContain("5. 交接复盘");
     expect(fixture.generate).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -1961,7 +1965,7 @@ describe("explicit clarification workflow with model test doubles", () => {
   );
 
   it("keeps an invalidated answer unresolved on new-summary submission until the user answers again", async () => {
-    let draft = await answeredDraft();
+    let draft: IntakeDraft = await answeredDraft();
     draft = updateIntake(draft.id, owner, {
       revision: draft.revision,
       summary: {
@@ -2505,7 +2509,7 @@ describe("explicit clarification workflow with model test doubles", () => {
     let draft = await next(create("【真实输出复现用测试替身】我想做一个个人网站，具体没想好。"));
     expect(draft.status).toBe("questions");
     expect(draft.questions.map((entry) => entry.id)).toEqual([scope.id]);
-    expect(draft.clarification?.runs.map((run) => run.role)).toEqual(["A", "B", "C", "B"]);
+    expect(draft.clarification?.runs.map((run) => run.role)).toEqual(["A", "C", "B"]);
     expect(
       draft.clarification?.items.find((entry) => entry.id === scope.id)?.provided,
     ).toBeUndefined();
@@ -2780,7 +2784,7 @@ describe("explicit clarification workflow with model test doubles", () => {
     expect(
       result.clarification?.items.find((item) => item.id === scope.id)?.provided,
     ).toBeUndefined();
-    expect(result.clarification?.runs.map((run) => run.role)).toEqual(["A", "B", "C", "B"]);
+    expect(result.clarification?.runs.map((run) => run.role)).toEqual(["A", "C", "B"]);
     expect(result.clarification?.review?.ready).toBe(false);
   });
 
@@ -2982,5 +2986,678 @@ describe("explicit clarification workflow with model test doubles", () => {
     ]);
     expect(fixture.generate).toHaveBeenCalledTimes(2);
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it("previews with only C while preserving draft answers, questions, queues and confirmation", async () => {
+    let draft = await next(create());
+    draft = updateIntake(draft.id, owner, {
+      revision: draft.revision,
+      answerMode: "draft",
+      answers: [{ questionId: "purpose", state: "answered", value: "仅做界面演示" }],
+    });
+    const before = structuredClone(draft);
+    const calls = fixture.generate.mock.calls.length;
+    const preview = await analyzeIntake(draft.id, owner, {
+      ...operation(draft),
+      intent: "preview",
+    });
+    expect(fixture.generate.mock.calls.slice(calls).map(([request]) => request.name)).toEqual([
+      "clarification_review",
+    ]);
+    expect(preview.questions).toEqual(before.questions);
+    expect(preview.queuedQuestions).toEqual(before.queuedQuestions);
+    expect(preview.round).toBe(before.round);
+    expect(preview.clarification?.rounds).toEqual(before.clarification?.rounds);
+    expect(preview.answers).toEqual(before.answers);
+    expect(preview.confirmation).toEqual(before.confirmation);
+    expect(preview.clarification?.draftOnly).toBe(true);
+    expect(preview.clarification?.specification).toContain("需求草稿 / 预览");
+    expect(preview.answers[0].confirmation).not.toBe("confirmed");
+    expect(db().prepare("SELECT count(*) AS count FROM versions").get()).toMatchObject({
+      count: 0,
+    });
+    const againCalls = fixture.generate.mock.calls.length;
+    const again = await analyzeIntake(preview.id, owner, {
+      ...operation(preview),
+      intent: "preview",
+    });
+    expect(fixture.generate.mock.calls.length).toBe(againCalls);
+    expect(again.clarification?.runs).toEqual(preview.clarification?.runs);
+    expect(again.questions).toEqual(before.questions);
+  });
+
+  it("recovers a failed preview C explicitly without charging A or B again", async () => {
+    const draft = await next(create());
+    const rounds = structuredClone(draft.clarification!.rounds);
+    const before = fixture.generate.mock.calls.length;
+    fixture.generate.mockImplementationOnce(async (request) => {
+      expect(request.name).toBe("clarification_review");
+      expect(request.allowRepair).toBe(false);
+      throw new ModelCallError("明确测试替身：C输出截断", false, response(null).usage);
+    });
+    const failed = await analyzeIntake(draft.id, owner, { ...operation(draft), intent: "preview" });
+    expect(failed.status).toBe("failed");
+    expect(failed.clarification?.runs.at(-1)).toMatchObject({ role: "C", status: "failed" });
+    expect(failed.clarification?.review).toBeNull();
+    expect(failed.questions).toEqual(draft.questions);
+    const restored = await analyzeIntake(failed.id, owner, {
+      ...operation(failed),
+      intent: "preview",
+    });
+    expect(fixture.generate.mock.calls.slice(before).map(([request]) => request.name)).toEqual([
+      "clarification_review",
+      "clarification_review",
+    ]);
+    expect(
+      restored.clarification?.runs.filter((run) => run.role === "C").map((run) => run.status),
+    ).toEqual(["failed", "completed"]);
+    expect(restored.clarification?.rounds).toEqual(rounds);
+    expect(restored.clarification?.specification).toContain("需求草稿");
+  });
+
+  it("reports stale confirmed analysis as a recoverable preview gap without automatic A or B", async () => {
+    let draft = await next(create());
+    draft = answer(draft, { purpose: "仅做界面演示" });
+    const call = vi.fn();
+    await expect(
+      runClarification(draft, {
+        operationId: randomUUID(),
+        revision: draft.revision,
+        finish: false,
+        intent: "preview",
+        config: resolveModelConfig("gpt-6.1-terra"),
+        call,
+        record: vi.fn(),
+      }),
+    ).rejects.toMatchObject({ code: "CLARIFICATION_ANALYSIS_STALE" });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("keeps optional unanswered preferences visible while required facts can be requirement-ready", async () => {
+    const scope = {
+      ...item("local_scope", "scope", "本地活动"),
+      provided: { sourceRef: "original_goal", quote: "纸质故事交流会" },
+    };
+    const optional = { ...item("minor_style", "style", "次要装饰偏好"), required: false };
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_decompose")
+        return response({
+          summary: "明确测试替身",
+          items: [scope, optional],
+          retired: [],
+          suggestions: [],
+        });
+      if (request.name === "clarification_options")
+        return response({
+          summary: "可选偏好",
+          questions: [question(optional, ["无装饰", "细线边框"])],
+          conflicts: [],
+        });
+      return response({
+        summary: "非关键偏好可后调",
+        ready: true,
+        coverage: ["function", "content", "flow", "style"].map((topic) => ({
+          topic,
+          applicable: false,
+          reason: "此项不影响纸质活动核心交付",
+          decisionIds: [],
+        })),
+        gaps: [optional],
+        conflicts: [],
+      });
+    });
+    const draft = await next(create("仅策划纸质故事交流会，不实际举办或支出"));
+    expect(hasBlockingUnconfirmedItems(draft)).toBe(false);
+    expect(draft.questions.map((entry) => entry.id)).toContain(optional.id);
+    expect(draft.clarification?.specification).toContain("次要装饰偏好（未决）");
+    expect(draft.clarification?.review?.ready).toBe(true);
+    expect(isCurrentClarificationReview(draft)).toBe(true);
+    expect(derivePlanningReadiness(draft)).toBe("requirement_ready");
+  });
+
+  it.each([
+    ["同意发布报名信息", false],
+    ["我同意仅在本次活动使用", false],
+    ["拒绝对外公开", false],
+    ["不同意处理个人资料", false],
+    ["是的", false],
+    ["允许仅本人查看", false],
+    ["是否同意尚未决定", true],
+    ["同意与否待定", true],
+    ["我不确定", true],
+    ["不知道是否允许", true],
+    ["是一个以后再确定的问题", true],
+    ["也许同意", true],
+  ])(
+    "keeps explicit authorization decisions and pending wording distinct for %s",
+    (value, blocked) => {
+      const draft = create();
+      const decision = {
+        ...item("permission", "authorization", "是否允许本次发布"),
+        required: false,
+      };
+      const options = [value, "拒绝对外公开"];
+      const authorizationQuestion = {
+        ...question(decision, options),
+        authorization: "仅本次活动的指定报名信息发布",
+      };
+      draft.questions = [authorizationQuestion];
+      draft.answers = [
+        {
+          questionId: decision.id,
+          question: authorizationQuestion,
+          state: "answered",
+          value,
+          confirmation: "confirmed",
+        },
+      ];
+      draft.clarification = { ...emptyClarification(), items: [decision] };
+      expect(hasBlockingUnconfirmedItems(draft)).toBe(blocked);
+    },
+  );
+
+  it("blocks an unresolved optional upstream dependency of a required delivery", () => {
+    const draft = create();
+    const upstream = { ...item("upstream", "content", "前置资料"), required: false };
+    const delivery = {
+      ...item("delivery", "scope", "交付形式", [upstream.id]),
+      provided: { sourceRef: "original_goal", quote: "活动报名成果" },
+    };
+    draft.clarification = { ...emptyClarification(), items: [upstream, delivery] };
+    expect(hasBlockingUnconfirmedItems(draft)).toBe(true);
+  });
+
+  it("fingerprints the actual submitted requirements, assumptions and confirmation without revision noise", async () => {
+    const draft = await answeredDraft();
+    const submission = { challenge: draft.challenge!, assumptions: draft.assumptions };
+    expect(clarificationFingerprint(draft, submission)).not.toBe(clarificationFingerprint(draft));
+    const confirmedDraft = structuredClone(draft);
+    confirmedDraft.confirmation ??= { history: [] };
+    confirmedDraft.confirmation.summary = {
+      revision: draft.revision,
+      confirmedAt: "explicit-test-time",
+      challenge: draft.challenge!,
+    };
+    expect(clarificationFingerprint(confirmedDraft)).toBe(
+      clarificationFingerprint(draft, submission),
+    );
+    confirmedDraft.revision += 100;
+    confirmedDraft.confirmation!.summary.confirmedAt = "different-explicit-test-time";
+    expect(clarificationFingerprint(confirmedDraft)).toBe(
+      clarificationFingerprint(draft, submission),
+    );
+    expect(
+      clarificationFingerprint(draft, { ...submission, assumptions: ["不同的未验证假设"] }),
+    ).not.toBe(clarificationFingerprint(draft, submission));
+    confirmedDraft.answers[0].needsReconfirmation = true;
+    expect(clarificationFingerprint(confirmedDraft)).not.toBe(
+      clarificationFingerprint(draft, submission),
+    );
+  });
+
+  it("supports eight planning phases and renders optional overview and delivery fields", () => {
+    const legacy = {
+      summary: "明确测试替身的纸本策划",
+      ready: false,
+      coverage: [],
+      gaps: [],
+      conflicts: [],
+    };
+    const phase = {
+      phase: "策划阶段",
+      objective: "核对纸本交付",
+      tasks: Array(6).fill("核查已确认内容"),
+      dependencies: Array(6).fill("已确认材料"),
+      deliverables: Array(6).fill("纸本模板"),
+      acceptance: Array(6).fill("逐项核对"),
+      estimate: "待验证",
+      estimateBasis: "暂无筹备工时依据",
+      estimateUncertainty: "资源未知",
+    };
+    const review = HandoffReviewSchema.parse({
+      ...legacy,
+      projectOverview: "纸质活动的领域适配概述",
+      deliveryPlan: { deliverables: ["纸质主持流程表"], acceptanceStrategy: ["核对A4打印可读性"] },
+      implementationPlan: Array(8).fill(phase),
+    });
+    expect(
+      HandoffReviewSchema.safeParse({ ...review, implementationPlan: Array(9).fill(phase) })
+        .success,
+    ).toBe(false);
+    expect(
+      HandoffReviewSchema.safeParse({
+        ...review,
+        implementationPlan: [{ ...phase, tasks: Array(7).fill("超额任务") }],
+      }).success,
+    ).toBe(false);
+    expect(HandoffReviewSchema.parse(legacy).projectOverview).toBeUndefined();
+    const draft = create("策划纸本故事会，预算、筹备工时和日期未知");
+    const state = {
+      ...emptyClarification(),
+      review: { ...review, fingerprint: "explicit-test", basedOnRevision: draft.revision },
+      draftOnly: true,
+    };
+    formatClarification(draft, state, ChallengeSchema.parse({ goal: draft.goal }));
+    for (const text of [
+      "纸质活动的领域适配概述",
+      "纸质主持流程表",
+      "核对A4打印可读性",
+      "8. 策划阶段",
+    ]) {
+      expect(state.specification).toContain(text);
+      expect(state.executionPrompt).toContain(text);
+    }
+    expect(draft.challenge?.budget ?? null).toBeNull();
+    expect(draft.challenge?.timeHours ?? null).toBeNull();
+    expect(Object.hasOwn(draft.challenge ?? {}, "date")).toBe(false);
+    expect(fixture.generate).not.toHaveBeenCalled();
+  });
+  it("preserves an explicit negative C review without automatically questioning optional gaps or retrying", async () => {
+    const scope = {
+      ...item("scope", "scope", "纸本交流活动"),
+      provided: { sourceRef: "original_goal", quote: "纸质故事交流会" },
+    };
+    const optional = { ...item("decoration", "style", "后续可调装饰"), required: false };
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_decompose")
+        return response({ summary: "明确测试替身", items: [scope], retired: [], suggestions: [] });
+      if (request.name === "clarification_options")
+        throw new Error("No blocking option generation is necessary in this explicit fixture.");
+      return response({
+        summary: "C明确暂不认可交接，仍可查看草稿",
+        ready: false,
+        coverage: ["function", "content", "flow", "style"].map((topic) => ({
+          topic,
+          applicable: false,
+          reason: "可选细节未决定，C仍保留其独立负判断",
+          decisionIds: [],
+        })),
+        gaps: [optional],
+        conflicts: [],
+      });
+    });
+    const draft = await next(create("只策划纸质故事交流会，不实际举办或采购"));
+    expect(draft.questions).toEqual([]);
+    expect(hasBlockingUnconfirmedItems(draft)).toBe(false);
+    expect(draft.clarification?.review?.ready).toBe(false);
+    expect(draft.clarification?.specification).toContain("后续可调装饰（未决）");
+    expect(derivePlanningReadiness(draft)).toBe("previewable");
+    const prior = fixture.generate.mock.calls.length;
+    const preview = await analyzeIntake(draft.id, owner, {
+      ...operation(draft),
+      intent: "preview",
+    });
+    expect(fixture.generate.mock.calls.length).toBe(prior);
+    expect(preview.questions).toEqual([]);
+    expect(preview.clarification?.review?.ready).toBe(false);
+    expect(preview.clarification?.runs.findLast((run) => run.role === "C")?.output).toMatchObject({
+      ready: false,
+    });
+  });
+
+  it("preserves required authorization when A tries to lower the existing blocking flag", async () => {
+    let draft = await next(create());
+    const authorization = item("permission", "authorization", "是否允许对外发布");
+    const body = JSON.parse(
+      (db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as { body: string })
+        .body,
+    );
+    body.clarification.items.push(authorization);
+    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(body), draft.id);
+    fixture.generate.mockImplementation(async (request) => {
+      if (request.name === "clarification_decompose")
+        return response({
+          summary: "明确测试替身降级尝试",
+          items: [{ ...authorization, required: false }],
+          retired: [],
+          suggestions: [],
+        });
+      if (request.name === "clarification_options")
+        return response({
+          summary: "待本人决定",
+          questions: [
+            {
+              ...question(authorization, ["同意发布报名信息", "拒绝对外公开"]),
+              authorization: "本次指定内容发布",
+            },
+          ],
+          conflicts: [],
+        });
+      throw new Error("Required authorization must remain unresolved.");
+    });
+    draft = await next(getIntake(draft.id, owner));
+    expect(
+      draft.clarification?.items.find((entry) => entry.id === authorization.id)?.required,
+    ).toBe(true);
+    expect(hasBlockingUnconfirmedItems(draft)).toBe(true);
+  });
+
+  it("declares all Pro13 planning capacity bounds in the actual model schema", () => {
+    const schema = z.toJSONSchema(HandoffReviewSchema) as {
+      properties: Record<
+        string,
+        { maxItems?: number; items?: { properties?: Record<string, { maxItems?: number }> } }
+      >;
+    };
+    for (const [field, maximum] of [
+      ["feasibility", 8],
+      ["implementationPlan", 8],
+      ["tradeoffs", 6],
+      ["risks", 8],
+      ["gaps", 12],
+    ] as const)
+      expect(schema.properties[field].maxItems).toBe(maximum);
+    for (const field of ["tasks", "dependencies", "deliverables", "acceptance"])
+      expect(schema.properties.implementationPlan.items?.properties?.[field].maxItems).toBe(6);
+  });
+  it("rejects protected authorization retirement backed only by an unrelated confirmed answer", async () => {
+    const permission = item("publication", "authorization", "是否允许公开指定报名信息");
+    const style = item("visual_style", "style", "页面配色");
+    const draft = create();
+    draft.clarification = { ...emptyClarification(), items: [permission, style] };
+    draft.answers = [
+      {
+        questionId: style.id,
+        question: question(style, ["米白", "蓝色"]),
+        state: "answered",
+        value: "米白",
+        confirmation: "confirmed",
+      },
+    ];
+    let errorCode: string | undefined;
+    try {
+      await runClarification(draft, {
+        operationId: randomUUID(),
+        revision: draft.revision,
+        finish: false,
+        config: resolveModelConfig("gpt-6.1-terra"),
+        record: vi.fn(),
+        call: async <T>(role: "A" | "B" | "C") =>
+          (role === "A"
+            ? {
+                summary: "明确测试替身：试图用配色回答删除发布授权",
+                items: [style],
+                retired: [
+                  { id: permission.id, reason: "模型单方面认为不再需要", answerIds: [style.id] },
+                ],
+                suggestions: [],
+              }
+            : {
+                summary: "明确测试替身：授权被移除后的错误可交接判断",
+                ready: true,
+                coverage: ["function", "content", "flow", "style"].map((topic) => ({
+                  topic,
+                  applicable: false,
+                  reason: "测试退休后无阻塞的旧路径",
+                  decisionIds: [],
+                })),
+                gaps: [],
+                conflicts: [],
+              }) as T,
+      });
+    } catch (error) {
+      errorCode = (error as { code?: string }).code;
+    }
+    expect(errorCode).toBe("CLARIFICATION_RETIREMENT");
+    expect(draft.clarification.retiredIds).toEqual([]);
+  });
+  async function retiredAuthorizationFixture({
+    permission,
+    answers,
+    previousAnswers,
+    answerIds,
+    incomingPermission,
+    submission,
+    goalText,
+    priorAnalysisRevision,
+  }: {
+    permission: DecisionItem;
+    answers: RecordedAnswer[];
+    previousAnswers?: RecordedAnswer[];
+    answerIds: string[];
+    incomingPermission?: DecisionItem;
+    submission?: { challenge: ReturnType<typeof ChallengeSchema.parse>; assumptions: string[] };
+    goalText?: string;
+    priorAnalysisRevision?: number;
+  }) {
+    const draft = create(goalText);
+    const parent = item("purpose", "scope", "活动执行范围");
+    const style = item("visual_style", "style", "页面配色");
+    draft.answers = answers;
+    const state = { ...emptyClarification(), items: [permission, parent, style] };
+    if (previousAnswers)
+      state.rounds.push({
+        round: 1,
+        revision: 1,
+        questions: [],
+        answers: previousAnswers,
+        changes: { added: [], retired: [], changed: [], triggerAnswerIds: [] },
+        runIds: [],
+        createdAt: "explicit-test-before-confirmation",
+      });
+    if (priorAnalysisRevision !== undefined) {
+      draft.revision = priorAnalysisRevision + 2;
+      state.runs.push({
+        id: randomUUID(),
+        operationId: randomUUID(),
+        role: "A",
+        round: 1,
+        basedOnRevision: priorAnalysisRevision,
+        status: "completed",
+        summary: "明确旧记录测试替身",
+        output: {
+          summary: "明确旧记录测试替身",
+          items: [permission, parent, style],
+          retired: [],
+          suggestions: [],
+        },
+        usage: [],
+        createdAt: "explicit-test-older-analysis",
+      });
+    }
+    draft.clarification = state;
+    const result = await runClarification(draft, {
+      operationId: randomUUID(),
+      revision: draft.revision,
+      finish: false,
+      config: resolveModelConfig("gpt-6.1-terra"),
+      record: vi.fn(),
+      submit: submission,
+      call: async <T>(role: "A" | "B" | "C", request: { input: unknown }) => {
+        if (role === "A")
+          return {
+            summary: "明确测试替身：关联依据的事项退休",
+            items: [parent, style, ...(incomingPermission ? [incomingPermission] : [])],
+            retired: [{ id: permission.id, reason: "依照当前测试中的真实确认变更", answerIds }],
+            suggestions: [],
+          } as T;
+        if (role === "B")
+          return {
+            summary: "明确测试替身：其他未答事项",
+            questions: (request.input as { questionableItems: DecisionItem[] }).questionableItems
+              .slice(0, 3)
+              .map((entry) => question(entry, ["明确测试选择甲", "明确测试选择乙"])),
+            conflicts: [],
+          } as T;
+        return {
+          summary: "明确测试替身查漏",
+          ready: true,
+          coverage: ["function", "content", "flow", "style"].map((topic) => ({
+            topic,
+            applicable: false,
+            reason: "本测试仅核对退休来源约束",
+            decisionIds: [],
+          })),
+          gaps: [],
+          conflicts: [],
+        } as T;
+      },
+    });
+    return { draft, result };
+  }
+
+  function confirmedRetirementAnswer(
+    decision: DecisionItem,
+    value: string,
+    authorization?: string,
+  ): RecordedAnswer {
+    return {
+      questionId: decision.id,
+      question: {
+        ...question(decision, [value, "其他明确测试选择"]),
+        ...(authorization ? { authorization } : {}),
+      },
+      state: "answered",
+      value,
+      confirmation: "confirmed",
+    };
+  }
+
+  it("allows protected authorization retirement after its own explicit confirmed refusal", async () => {
+    const permission = item("publication", "authorization", "是否公开指定报名信息");
+    const answer = confirmedRetirementAnswer(
+      permission,
+      "拒绝对外公开",
+      "仅本次指定报名信息的发布",
+    );
+    const { draft, result } = await retiredAuthorizationFixture({
+      permission,
+      answers: [answer],
+      answerIds: [answer.questionId],
+    });
+    expect(result.state.retiredIds).toContain(permission.id);
+    expect(draft.answers).toEqual([answer]);
+    expect(draft.clarification?.retiredIds).toEqual([]);
+    expect(result.state.runs.find((run) => run.role === "A")?.output).toMatchObject({
+      retired: [{ id: permission.id, answerIds: [permission.id] }],
+    });
+  });
+
+  it("allows protected authorization retirement after a confirmed change of its known scope dependency", async () => {
+    const scope = item("purpose", "scope", "活动执行范围");
+    const permission = item("publication", "authorization", "是否公开指定报名信息", [scope.id]);
+    const previous = confirmedRetirementAnswer(scope, "对外公开报名");
+    const changed = confirmedRetirementAnswer(scope, "仅本地演示，不对外公开");
+    const { result } = await retiredAuthorizationFixture({
+      permission,
+      previousAnswers: [previous],
+      answers: [changed],
+      answerIds: [scope.id],
+    });
+    expect(result.state.retiredIds).toContain(permission.id);
+  });
+
+  it("rejects unchanged confirmed dependencies as evidence for deleting pending authorization", async () => {
+    const scope = item("purpose", "scope", "活动执行范围");
+    const permission = item("publication", "authorization", "是否公开指定报名信息", [scope.id]);
+    const previous = confirmedRetirementAnswer(scope, "对外公开报名");
+    await expect(
+      retiredAuthorizationFixture({
+        permission,
+        previousAnswers: [previous],
+        answers: [{ ...previous, confirmedAt: "new-time-without-scope-change" }],
+        answerIds: [scope.id],
+      }),
+    ).rejects.toMatchObject({ code: "CLARIFICATION_RETIREMENT" });
+  });
+
+  it("rejects a new dependency forged by the same A output that retires authorization", async () => {
+    const style = item("visual_style", "style", "页面配色");
+    const permission = item("publication", "authorization", "是否公开指定报名信息");
+    await expect(
+      retiredAuthorizationFixture({
+        permission,
+        answers: [confirmedRetirementAnswer(style, "米白")],
+        answerIds: [style.id],
+        incomingPermission: { ...permission, dependsOn: [style.id] },
+        previousAnswers: [],
+      }),
+    ).rejects.toMatchObject({ code: "CLARIFICATION_RETIREMENT" });
+  });
+
+  it("does not turn a confirmed permission grant into evidence for removing that authorization", async () => {
+    const permission = item("publication", "authorization", "是否公开指定报名信息");
+    await expect(
+      retiredAuthorizationFixture({
+        permission,
+        answers: [
+          confirmedRetirementAnswer(permission, "同意发布报名信息", "仅本次指定报名信息的发布"),
+        ],
+        answerIds: [permission.id],
+      }),
+    ).rejects.toMatchObject({ code: "CLARIFICATION_RETIREMENT" });
+  });
+
+  it("protects a user-mandatory requirement from retirement based on an unrelated answer", async () => {
+    const goalText = "本次活动必须交付离线说明，其他风格可以后续调整。";
+    const mandatory = {
+      ...item("offline_guide", "content", "离线说明"),
+      provided: { sourceRef: "original_goal", quote: "必须交付离线说明" },
+    };
+    const style = item("visual_style", "style", "页面配色");
+    await expect(
+      retiredAuthorizationFixture({
+        permission: mandatory,
+        goalText,
+        answers: [confirmedRetirementAnswer(style, "米白")],
+        answerIds: [style.id],
+      }),
+    ).rejects.toMatchObject({ code: "CLARIFICATION_RETIREMENT" });
+  });
+
+  it("allows the user to explicitly remove their own earlier mandatory requirement", async () => {
+    const goalText = "本次活动必须交付离线说明，其他风格可以后续调整。";
+    const mandatory = {
+      ...item("offline_guide", "content", "离线说明"),
+      provided: { sourceRef: "original_goal", quote: "必须交付离线说明" },
+    };
+    const { result } = await retiredAuthorizationFixture({
+      permission: mandatory,
+      goalText,
+      answers: [confirmedRetirementAnswer(mandatory, "删除这项交付要求")],
+      answerIds: [mandatory.id],
+    });
+    expect(result.state.retiredIds).toContain(mandatory.id);
+  });
+
+  it("does not infer protected scope deletion from an unlinked free-form submitted summary", async () => {
+    const permission = item("publication", "authorization", "是否公开指定报名信息");
+    await expect(
+      retiredAuthorizationFixture({
+        permission,
+        answers: [],
+        answerIds: ["confirmed_summary"],
+        submission: {
+          challenge: ChallengeSchema.parse({ goal: "改为仅本地演示，不对外公开报名信息" }),
+          assumptions: [],
+        },
+      }),
+    ).rejects.toMatchObject({ code: "CLARIFICATION_RETIREMENT" });
+  });
+  it("uses recorded confirmation revision for a linked legacy scope change when round snapshots are absent", async () => {
+    const scope = item("purpose", "scope", "活动执行范围");
+    const permission = item("publication", "authorization", "是否公开指定报名信息", [scope.id]);
+    const changed = {
+      ...confirmedRetirementAnswer(scope, "仅本地演示，不对外公开"),
+      confirmedRevision: 3,
+    };
+    const { result } = await retiredAuthorizationFixture({
+      permission,
+      priorAnalysisRevision: 2,
+      answers: [changed],
+      answerIds: [scope.id],
+    });
+    expect(result.state.retiredIds).toContain(permission.id);
+  });
+
+  it("does not invent a legacy scope-change baseline when confirmation history is missing", async () => {
+    const scope = item("purpose", "scope", "活动执行范围");
+    const permission = item("publication", "authorization", "是否公开指定报名信息", [scope.id]);
+    await expect(
+      retiredAuthorizationFixture({
+        permission,
+        answers: [confirmedRetirementAnswer(scope, "仅本地演示，不对外公开")],
+        answerIds: [scope.id],
+      }),
+    ).rejects.toMatchObject({ code: "CLARIFICATION_RETIREMENT" });
   });
 });

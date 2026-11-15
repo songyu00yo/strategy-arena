@@ -153,7 +153,7 @@ function longSnapshot() {
   return snapshot;
 }
 
-async function restoreLongReport(page: Page) {
+async function restoreLongReport(page: Page, replayHistory = true) {
   const snapshot = longSnapshot();
   const version = snapshot.versions[0];
   const replay = buildClarificationReplay(version);
@@ -173,6 +173,9 @@ async function restoreLongReport(page: Page) {
     return route.fulfill({ status: 500, json: { error: "Unexpected synthetic fixture request" } });
   });
   await page.goto(`/?arena=${snapshot.id}`);
+  await expect(page.locator('[data-experience-mode="result"]')).toBeVisible();
+  if (!replayHistory) return page.getByLabel("正式需求规划报告", { exact: true });
+  await page.getByRole("button", { name: "回放历史过程", exact: true }).click();
   await expect(page.locator(".c-root")).toHaveClass(/at-result/);
   const result = page.getByRole("region", { name: "结论", exact: true });
   await result.getByRole("button", { name: "看完整结论", exact: true }).click();
@@ -195,6 +198,32 @@ async function restoreLongReport(page: Page) {
     expect(selected).toBe(expected);
   }
   return result;
+}
+
+for (const width of [1440, 390]) {
+  test(`explicit UI fixture: formal long planning report opens as a document at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const report = await restoreLongReport(page, false);
+    await expect(page.locator(".live-agent-card")).toHaveCount(3);
+    await expect(page.locator(".replay-question-scene, .replay-pointer")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("formal-report-first-screen.png") });
+    await expect(report.locator(".planning-report-content")).toContainText(
+      "unbrokenspecification".repeat(40),
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(
+      false,
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(900);
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      report.getByRole("button", { name: "导出 Markdown", exact: true }).click(),
+    ]);
+    expect(await readFile((await download.path())!, "utf8")).toBe(
+      `${specification}\n\n---\n\n# 执行提示词\n\n${executionPrompt}`,
+    );
+  });
 }
 
 for (const height of [900, 720]) {

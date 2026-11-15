@@ -106,6 +106,22 @@ export interface IntakeDraft {
   link?: { arenaId: string; versionId: string };
   confirmation?: IntakeConfirmation;
 }
+export type ClarificationRole = "A" | "B" | "C";
+export interface IntakeActivity {
+  operationId: string | null;
+  calls: Array<{
+    callId: string;
+    operationId: string;
+    role: ClarificationRole;
+    state: "running" | "failed" | "uncertain";
+    startedAt: number;
+  }>;
+}
+export type PlanningReadiness = "not_ready" | "previewable" | "requirement_ready" | "handoff_ready";
+export type IntakeDraftResponse = IntakeDraft & {
+  readonly activity: IntakeActivity;
+  readonly readiness: PlanningReadiness;
+};
 export const CreateIntakeSchema = z.object({
   workflow: z.literal("clarification").optional(),
   goal: z.string().max(3000).default(""),
@@ -134,11 +150,21 @@ export const UpdateIntakeSchema = z
       path: ["answerMode"],
     },
   );
-export const AnalyzeIntakeSchema = z.object({
-  revision: z.number().int().nonnegative(),
-  operationId: z.string().uuid(),
-  finish: z.boolean().default(false),
-});
+export const AnalyzeIntakeSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    operationId: z.string().uuid(),
+    finish: z.boolean().default(false),
+    intent: z.enum(["continue", "preview"]).default("continue"),
+  })
+  .superRefine((value, context) => {
+    if (value.finish && value.intent === "preview")
+      context.addIssue({
+        code: "custom",
+        path: ["intent"],
+        message: "预览不能同时请求结束需求整理。",
+      });
+  });
 export const SubmitIntakeSchema = z.object({
   executionMode: ExecutionModeSchema.optional(),
   revision: z.number().int().nonnegative(),

@@ -22,18 +22,26 @@ import {
 import type {
   IntakeAnswer,
   IntakeDraft,
+  IntakeDraftResponse,
   IntakeQuestion,
   MaterialSource,
 } from "@/lib/intake-contracts";
+import { hasCompleteChoiceAnswer } from "@/lib/answer-options";
+import {
+  LiveClarificationWorkspace,
+  PlanningReport,
+  type LiveAnswerReceipt,
+} from "./LiveClarificationWorkspace";
+import { LiveQuestionPaper } from "./LiveQuestionPaper";
 import { DEFAULT_MODEL_ID } from "@/lib/model-catalog";
-import { clearExamplePickerRequest, examplePickerRequested } from "@/lib/example-navigation";
+import { clearExamplePickerRequest } from "@/lib/example-navigation";
 import { routeModel } from "@/lib/model-routing";
 import { DisclosureMotion } from "./disclosure-motion";
 import { ModelSelector } from "./model-selector";
 import { Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
 import { QuestionInput } from "./question-input";
-import { useIntakeSummary } from "./use-intake-summary";
+import { canEditSummary, useIntakeSummary } from "./use-intake-summary";
 import { useListMotion } from "./use-list-motion";
 import {
   ANSWER_JOURNAL_KEY,
@@ -43,11 +51,7 @@ import {
   readHistoricalAnswerJournal,
   readHistoricalAnswerConflict,
 } from "./intake-answer-journal";
-import {
-  clearIntakeDraftPointer,
-  readIntakeDraftPointer,
-  saveIntakeDraftPointer,
-} from "./intake-draft-pointer";
+import { clearIntakeDraftPointer, saveIntakeDraftPointer } from "./intake-draft-pointer";
 import "./guided-intake.css";
 
 const MIB = 1024 * 1024;
@@ -126,17 +130,33 @@ function answerOf(question: IntakeQuestion): IntakeAnswer {
   };
 }
 
+function isCompleteAnswer(question: IntakeQuestion, answer: IntakeAnswer) {
+  if (answer.state !== "answered") return true;
+  if (question.type === "single" || question.type === "multiple")
+    return hasCompleteChoiceAnswer(question.type, question.options, answer.value);
+  if (Array.isArray(answer.value) || !answer.value.trim()) return false;
+  return (
+    question.type !== "number" ||
+    (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(answer.value.trim()) &&
+      Number.isFinite(Number(answer.value)))
+  );
+}
+
 export function GuidedIntake({
   modelProviders,
   pending,
   disabled = false,
   restoreReady = true,
+  initialDraft = null,
+  onWorkspaceChange,
   onCreated,
 }: {
   modelProviders?: ModelOption[];
   pending: boolean;
   disabled?: boolean;
   restoreReady?: boolean;
+  initialDraft?: IntakeDraftResponse | null;
+  onWorkspaceChange?: (active: boolean) => void;
   onCreated: (snapshot: ArenaSnapshot) => void;
 }) {
   const id = useId();
@@ -146,7 +166,11 @@ export function GuidedIntake({
   const { ref: attachmentRoot, capture: captureAttachments } = useListMotion<HTMLUListElement>(
     JSON.stringify(draft?.attachments.map((file) => file.id) ?? []),
   );
+  const [workspaceActive, setWorkspaceActive] = useState(false);
+  const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(false);
+  const [receipt, setReceipt] = useState<LiveAnswerReceipt | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [paperSummaryMode, setPaperSummaryMode] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
   const dialogMotion = useRef<OverlayMotionHandle>(null);
   const [dialogTrigger, setDialogTrigger] = useState<HTMLButtonElement | null>(null);
@@ -178,6 +202,7 @@ export function GuidedIntake({
   const fileInput = useRef<HTMLInputElement>(null);
   const goalInput = useRef<HTMLTextAreaElement>(null);
   const current = useRef<IntakeDraft | null>(null);
+  const consumedInitialDrafts = useRef(new Set<string>());
   const alive = useRef(false);
   const generation = useRef(0);
   const locked = useRef(false);
@@ -185,7 +210,6 @@ export function GuidedIntake({
   const controllers = useRef(new Set<AbortController>());
   const applyDraftRef = useRef<(next: IntakeDraft) => void>(() => {});
   const flushSummaryRef = useRef<() => Promise<void>>(async () => {});
-  const onCreatedRef = useRef(onCreated);
   const goalRef = useRef(goal);
   const modeRef = useRef(modelMode);
   const answerValues = useRef<IntakeAnswer[]>([]);
@@ -193,10 +217,36 @@ export function GuidedIntake({
   const questionPane = useRef<HTMLDivElement>(null);
   const historyHeading = useRef<HTMLHeadingElement>(null);
   const answerUnsaved = useRef<"local" | "memory" | null>(null);
+  const mutationVersion = useRef(0);
+  const activeOperation = useRef<string | null>(null);
+  const answerQueue = useRef<Promise<void>>(Promise.resolve());
+  const presentation = useRef({
+    draftId: "",
+    autoOpened: false,
+    dismissed: false,
+    scope: "",
+    index: 0,
+  });
+  const persistPresentation = useCallback(() => {
+    if (!presentation.current.draftId) return;
+    try {
+      sessionStorage.setItem(
+        `live-question-presentation:${presentation.current.draftId}`,
+        JSON.stringify(presentation.current),
+      );
+    } catch {}
+  }, []);
+  useEffect(() => {
+    onWorkspaceChange?.(workspaceActive);
+  }, [workspaceActive, onWorkspaceChange]);
 
   const request = useCallback(
     async <T,>(url: string, method = "GET", body?: unknown): Promise<T> => {
       const epoch = generation.current;
+      if (method !== "GET") mutationVersion.current++;
+      const readVersion = mutationVersion.current;
+      const readOperation = activeOperation.current;
+      const readDraftId = current.current?.id;
       const controller = new AbortController();
       controllers.current.add(controller);
       try {
@@ -214,6 +264,14 @@ export function GuidedIntake({
           .catch(() => ({ error: "服务返回了无法读取的响应，请稍后重试。" }));
         if (!alive.current || epoch !== generation.current)
           throw new DOMException("Aborted", "AbortError");
+        if (
+          method === "GET" &&
+          (readVersion !== mutationVersion.current ||
+            readOperation !== activeOperation.current ||
+            (readDraftId && current.current?.id !== readDraftId))
+        )
+          throw new DOMException("Superseded", "AbortError");
+        if (method !== "GET") mutationVersion.current++;
         if (!response.ok)
           throw new Error(
             typeof data.error === "string" ? data.error : "操作没有完成，请稍后重试。",
@@ -293,12 +351,52 @@ export function GuidedIntake({
       setHistoryConflict(historyRecovered ? null : historicalEntry);
       if (historyRecovered || historicalEntry) setDialogOpen(true);
       const scope = answerJournalScope(next);
+      if (presentation.current.draftId !== next.id) {
+        presentation.current = {
+          draftId: next.id,
+          autoOpened: false,
+          dismissed: false,
+          scope: "",
+          index: 0,
+        };
+        try {
+          const stored = JSON.parse(
+            sessionStorage.getItem(`live-question-presentation:${next.id}`) ?? "null",
+          );
+          if (stored?.draftId === next.id)
+            presentation.current = {
+              draftId: next.id,
+              autoOpened: stored.autoOpened === true,
+              dismissed: stored.dismissed === true,
+              scope: typeof stored.scope === "string" ? stored.scope : "",
+              index: Number.isInteger(stored.index) ? Math.max(0, stored.index) : 0,
+            };
+        } catch {}
+      }
       if (
         (next.status === "questions" || next.status === "summary") &&
         (current.current?.status !== next.status || scope !== answerScope.current)
       ) {
-        setQuestionIndex(0);
-        setDialogOpen(true);
+        const live = next.workflow === "clarification";
+        const sameScope = presentation.current.scope === scope;
+        const index = sameScope
+          ? Math.min(presentation.current.index, Math.max(0, next.questions.length - 1))
+          : 0;
+        setQuestionIndex(index);
+        presentation.current.scope = scope;
+        presentation.current.index = index;
+        const realQuestions =
+          next.status === "questions" &&
+          next.questions.length > 0 &&
+          next.clarification?.runs.some((run) => run.role === "B" && run.status === "completed");
+        if (
+          !live ||
+          (!presentation.current.dismissed && (realQuestions || next.status === "summary"))
+        ) {
+          setDialogOpen(true);
+          presentation.current.autoOpened ||= !!realQuestions;
+        }
+        persistPresentation();
       }
       const memoryState = scope === answerScope.current ? answerUnsaved.current : null;
       const preferred = memoryState ? answerValues.current : (recovered ?? next.answers);
@@ -315,13 +413,12 @@ export function GuidedIntake({
       applySummaryServer(next);
       saveIntakeDraftPointer(next.id);
     },
-    [applySummaryServer],
+    [applySummaryServer, persistPresentation],
   );
   useLayoutEffect(() => {
     applyDraftRef.current = apply;
     flushSummaryRef.current = summary.flush;
-    onCreatedRef.current = onCreated;
-  }, [apply, summary.flush, onCreated]);
+  }, [apply, summary.flush]);
 
   const operate = useCallback(
     async (action: (epoch: number) => Promise<void>) => {
@@ -336,6 +433,7 @@ export function GuidedIntake({
       setError("");
       try {
         if (saving.current) await saving.current;
+        await answerQueue.current;
         await flushSummaryRef.current();
         await action(epoch);
       } catch (failure) {
@@ -357,62 +455,54 @@ export function GuidedIntake({
   );
 
   useEffect(() => {
-    if (!restoreReady) return;
     alive.current = true;
-    const epoch = ++generation.current;
-    let saved: string | null = null;
-    try {
-      // Opening free examples must not restore a submitted or running model task.
-      // Keep its pointer intact so ordinary navigation can still restore it later.
-      const explicitArena = new URL(window.location.href).searchParams.has("arena");
-      if (!examplePickerRequested() && !explicitArena) saved = readIntakeDraftPointer();
-    } catch {
-      /* Storage is optional. */
-    }
-    if (saved && /^[a-zA-Z0-9_-]+$/.test(saved)) {
-      request<IntakeDraft>(`/api/intakes/${saved}`)
-        .then(async (next) => {
-          if (!alive.current || epoch !== generation.current) return;
-          saveIntakeDraftPointer(next.id);
-          if (next.status === "submitted") {
-            if (!next.arenaId) throw new Error("草稿已提交，但暂时找不到对应的擂台，请稍后重试。");
-            const snapshot = await request<ArenaSnapshot>(`/api/arenas/${next.arenaId}`);
-            if (!alive.current || epoch !== generation.current) return;
-            onCreatedRef.current(snapshot);
-            resetSummary();
-            clearIntakeDraftPointer(next.id);
-            return;
-          }
-          apply(next);
-          recoverSummary(next);
-          setGoal(next.goal);
-          goalRef.current = next.goal;
-          setModelMode(next.modelMode);
-          modeRef.current = next.modelMode;
-        })
-        .catch((failure) => {
-          if (alive.current && epoch === generation.current && failure.name !== "AbortError")
-            setError(`未能恢复上次的草稿：${failure.message}`);
-        })
-        .finally(() => {
-          if (alive.current && epoch === generation.current) setRestoring(false);
-        });
-    } else
-      queueMicrotask(() => {
-        if (alive.current && epoch === generation.current) setRestoring(false);
-      });
+    generation.current += 1;
     const activeControllers = controllers.current;
     return () => {
       alive.current = false;
+      generation.current += 1;
       activeControllers.forEach((controller) => controller.abort());
+      activeControllers.clear();
     };
-  }, [apply, request, recoverSummary, resetSummary, restoreReady]);
+  }, []);
+
+  useEffect(() => {
+    if (!restoreReady) return;
+    const epoch = generation.current;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled || !alive.current || epoch !== generation.current) return;
+      if (initialDraft && !consumedInitialDrafts.current.has(initialDraft.id)) {
+        consumedInitialDrafts.current.add(initialDraft.id);
+        const active = current.current;
+        if (
+          !active ||
+          (active.id === initialDraft.id && active.revision <= initialDraft.revision)
+        ) {
+          apply(initialDraft);
+          recoverSummary(initialDraft);
+          setGoal(initialDraft.goal);
+          goalRef.current = initialDraft.goal;
+          setModelMode(initialDraft.modelMode);
+          modeRef.current = initialDraft.modelMode;
+          setWorkspaceActive(initialDraft.workflow === "clarification");
+        }
+      }
+      setRestoring(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [apply, initialDraft, recoverSummary, restoreReady]);
 
   // Polling only reads an explicitly started analysis; it never starts another model call.
   useEffect(() => {
     if (
       !analysisPending &&
       draft?.status !== "analyzing" &&
+      !(draft as Partial<IntakeDraftResponse> | null)?.activity?.calls.some(
+        (call) => call.state === "running",
+      ) &&
       !draft?.attachments.some((file) => file.state === "reading")
     )
       return;
@@ -422,17 +512,34 @@ export function GuidedIntake({
     const poll = async () => {
       try {
         if (!draft?.id) return;
+        const operation = activeOperation.current;
         const next = await request<IntakeDraft>(`/api/intakes/${draft.id}`);
-        if (stopped || !alive.current || epoch !== generation.current) return;
+        if (
+          stopped ||
+          !alive.current ||
+          epoch !== generation.current ||
+          current.current?.id !== next.id
+        )
+          return;
+        const incomingOperation = (next as Partial<IntakeDraftResponse>).activity?.operationId;
+        if (operation && incomingOperation && operation !== incomingOperation) return;
         apply(next);
         if (
           analysisPending ||
           next.status === "analyzing" ||
+          (next as Partial<IntakeDraftResponse>).activity?.calls.some(
+            (call) => call.state === "running",
+          ) ||
           next.attachments.some((file) => file.state === "reading")
         )
           timer = setTimeout(poll, 1200);
       } catch (failure) {
-        if (!stopped && alive.current && epoch === generation.current)
+        if (
+          !stopped &&
+          alive.current &&
+          epoch === generation.current &&
+          !(failure instanceof DOMException && failure.name === "AbortError")
+        )
           setError(failure instanceof Error ? failure.message : "读取进度失败，请刷新恢复草稿。");
       }
     };
@@ -441,7 +548,7 @@ export function GuidedIntake({
       stopped = true;
       clearTimeout(timer);
     };
-  }, [draft?.id, draft?.status, draft?.attachments, analysisPending, apply, request]);
+  }, [draft, analysisPending, apply, request]);
 
   const saveDraft = async () => {
     let saved = current.current;
@@ -510,22 +617,47 @@ export function GuidedIntake({
   const reading = draft?.attachments.some((file) => file.state === "reading") ?? false;
   const blocked =
     disabled || pending || restoring || busy || analyzing || reading || !!summary.conflict;
-  const questionsVisible = draft?.status === "questions";
-  const summaryVisible = draft?.status === "summary" && !!draft.challenge;
+  const readiness = (draft as Partial<IntakeDraftResponse> | null)?.readiness ?? "not_ready";
+  const formallyReady = ["requirement_ready", "handoff_ready"].includes(readiness);
+  const canReviewSummary = !!draft?.challenge && ["questions", "summary"].includes(draft.status);
+  const canRestartPlanning =
+    draft?.workflow === "clarification" &&
+    !analyzing &&
+    !reading &&
+    (draft as Partial<IntakeDraftResponse>).readiness === "not_ready" &&
+    (["A", "B"] as const).every((role) =>
+      draft.clarification?.runs.some((run) => run.role === role && run.status === "completed"),
+    );
+  const questionsVisible = draft?.status === "questions" && !paperSummaryMode;
+  const summaryVisible =
+    (draft?.status === "summary" || (paperSummaryMode && draft?.status === "questions")) &&
+    !!draft?.challenge;
   const summaryDirty =
-    summaryVisible &&
+    !!draft?.challenge &&
     JSON.stringify([challenge, assumptions]) !==
       JSON.stringify([draft.challenge, draft.assumptions]);
-  const reportAvailable =
-    summaryVisible &&
+  const reportFresh =
+    draft?.workflow === "clarification" &&
     !!draft.clarification?.specification.trim() &&
     !!draft.clarification.executionPrompt.trim() &&
     !summaryDirty &&
     !historyAnswerEdit &&
     !historyConflict &&
+    answerSaveState === "server" &&
     !blocked &&
     !uncertain &&
-    goal === draft.goal;
+    goal === draft.goal &&
+    modelMode === draft.modelMode &&
+    readiness !== "not_ready";
+  const reportAvailable = summaryVisible && reportFresh;
+  const canConfirmSummary =
+    summaryVisible &&
+    !summaryDirty &&
+    !historyAnswerEdit &&
+    !historyConflict &&
+    !blocked &&
+    !uncertain &&
+    goal === draft?.goal;
   const historicalQuestion = draft?.answers.find(
     (answer) => answer.questionId === historyAnswerEdit?.questionId,
   )?.question;
@@ -636,6 +768,20 @@ export function GuidedIntake({
     );
     // Changing models does not submit this round or declare an untouched answer unknown.
     if (preserveUnanswered && (!answerUnsaved.current || !provided.length)) return saved;
+    if (!preserveUnanswered && !finish) {
+      const incomplete = saved.questions.findIndex(
+        (question) =>
+          !isCompleteAnswer(
+            question,
+            answerValues.current.find((answer) => answer.questionId === question.id) ??
+              answerOf(question),
+          ),
+      );
+      if (incomplete >= 0) {
+        setQuestionIndex(incomplete);
+        throw new Error("请逐题填写答案，或手动选择暂时不知道、跳过，再提交本轮。");
+      }
+    }
     const outgoing = provided;
     setAnswerSaveState("syncing");
     let next: IntakeDraft;
@@ -659,25 +805,178 @@ export function GuidedIntake({
     return next;
   };
 
-  const analyze = (finish = false) => {
+  const analyze = (
+    finish = false,
+    intent: "continue" | "preview" = "continue",
+    options: { keepUnanswered?: boolean } = {},
+  ) => {
     void operate(async (epoch) => {
-      setDialogOpen(true);
       if (unavailable) throw new Error("所选模型尚未配置，请先选择可用模型。");
       if (goalRef.current.trim().length < 2) throw new Error("请用至少 2 个字描述你的目标。");
       clearExamplePickerRequest();
-      const saved = await saveQuestionAnswers(await ensureDraft(), finish, epoch);
+      const saved = await saveQuestionAnswers(
+        await ensureDraft(),
+        finish,
+        epoch,
+        intent === "preview" || options.keepUnanswered === true,
+      );
+      if (saved.workflow === "clarification") setWorkspaceActive(true);
+      const operationId = crypto.randomUUID();
+      activeOperation.current = operationId;
       setAnalysisPending(true);
       try {
         const next = await request<IntakeDraft>(`/api/intakes/${saved.id}/analyze`, "POST", {
           revision: saved.revision,
-          operationId: crypto.randomUUID(),
+          operationId,
           finish,
+          intent,
         });
         if (epoch === generation.current) apply(next);
       } finally {
+        if (activeOperation.current === operationId) activeOperation.current = null;
         if (alive.current && epoch === generation.current) setAnalysisPending(false);
       }
     });
+  };
+
+  const rememberAnswer = (answer: IntakeAnswer) => {
+    const next = [
+      ...answerValues.current.filter((item) => item.questionId !== answer.questionId),
+      answer,
+    ];
+    answerValues.current = next;
+    answerUnsaved.current = "memory";
+    setAnswers(next);
+    try {
+      sessionStorage.setItem(
+        ANSWER_JOURNAL_KEY,
+        JSON.stringify({ scope: answerScope.current, answers: next }),
+      );
+      answerUnsaved.current = "local";
+      setAnswerSaveState("local");
+    } catch {
+      setAnswerSaveState("memory");
+    }
+  };
+  const queueQuestionAnswer = (answer: IntakeAnswer) => {
+    const epoch = generation.current;
+    const draftId = current.current?.id;
+    const scope = answerScope.current;
+    const copy = {
+      ...answer,
+      value: Array.isArray(answer.value) ? [...answer.value] : answer.value,
+    };
+    rememberAnswer(copy);
+    answerQueue.current = answerQueue.current.then(async () => {
+      if (!alive.current || epoch !== generation.current) return;
+      const saved = current.current;
+      if (!saved || saved.id !== draftId || answerJournalScope(saved) !== scope) return;
+      setAnswerSaveState("syncing");
+      try {
+        const next = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
+          revision: saved.revision,
+          answers: [copy],
+          answerMode: "draft",
+        });
+        if (!alive.current || epoch !== generation.current || current.current?.id !== next.id)
+          return;
+        apply(next);
+        const unsaved = answerValues.current.some((local) => {
+          if (
+            local.state === "answered" &&
+            (Array.isArray(local.value) ? !local.value.length : !local.value.trim())
+          )
+            return false;
+          const server = next.answers.find((entry) => entry.questionId === local.questionId);
+          return (
+            !server ||
+            server.state !== local.state ||
+            JSON.stringify(server.value) !== JSON.stringify(local.value)
+          );
+        });
+        if (!unsaved) {
+          answerUnsaved.current = null;
+          setAnswerSaveState("server");
+          try {
+            sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
+          } catch {}
+        } else setAnswerSaveState(answerUnsaved.current ?? "memory");
+      } catch (failure) {
+        if (!alive.current || epoch !== generation.current) return;
+        setAnswerSaveState(answerUnsaved.current ?? "memory");
+        if (!(failure instanceof DOMException && failure.name === "AbortError")) {
+          setError(
+            `这题尚未同步到服务器，本机回答已保留。${failure instanceof Error ? failure.message : "请重试保存。"}`,
+          );
+          try {
+            const latest = await request<IntakeDraft>(`/api/intakes/${saved.id}`);
+            if (answerJournalScope(latest) === scope) apply(latest);
+          } catch {}
+        }
+      }
+    });
+  };
+  const nextQuestion = () => {
+    const saved = current.current;
+    const question = saved?.questions[questionIndex];
+    if (!question) return false;
+    const answer =
+      answerValues.current.find((entry) => entry.questionId === question.id) ?? answerOf(question);
+    if (!isCompleteAnswer(question, answer)) {
+      setError("请填写这题的答案，或选择暂时不知道、跳过。");
+      return false;
+    }
+    setError("");
+    queueQuestionAnswer(answer);
+    setReceipt({
+      id: `answer:${saved!.id}:${question.id}:${crypto.randomUUID()}`,
+      decisionId: question.decisionId ?? question.id,
+      text: `${question.title}\n${answer.state === "answered" ? (Array.isArray(answer.value) ? answer.value.join("、") : answer.value) : answer.state === "unknown" ? "暂时不知道" : "跳过"}`,
+    });
+    const index = Math.min(saved!.questions.length - 1, questionIndex + 1);
+    presentation.current.index = index;
+    persistPresentation();
+    setQuestionIndex(index);
+    return true;
+  };
+  const dismissPaper = () => {
+    presentation.current.dismissed = true;
+    presentation.current.index = questionIndex;
+    persistPresentation();
+  };
+  const openPaper = () => {
+    setPaperSummaryMode(false);
+    presentation.current.dismissed = false;
+    persistPresentation();
+    setDialogTrigger(document.querySelector<HTMLButtonElement>("[data-open-live-questions]"));
+    setDialogOpen(true);
+  };
+  const openSummaryPaper = () => {
+    setPaperSummaryMode(true);
+    presentation.current.dismissed = false;
+    persistPresentation();
+    setDialogTrigger(document.querySelector<HTMLButtonElement>("[data-open-live-questions]"));
+    setDialogOpen(true);
+  };
+  const restartPlanning = () => {
+    setPaperSummaryMode(false);
+    analyze(false, "continue", { keepUnanswered: true });
+  };
+  const previewPlanning = () => {
+    if (historyAnswerEdit || historyConflict || summary.conflict) {
+      setError("请先处理当前回答或摘要修改，再查看规划。");
+      return;
+    }
+    const saved = current.current as IntakeDraftResponse | null;
+    if (!saved) return;
+    if (saved.readiness === "not_ready") {
+      restartPlanning();
+      return;
+    }
+    setReportPreviewOpen(true);
+    dialogMotion.current?.close();
+    if (reportFresh) return;
+    analyze(false, "preview");
   };
 
   const clearHistoryEdit = () => {
@@ -810,6 +1109,20 @@ export function GuidedIntake({
     saving.current = null;
     resetSummary();
     setDraft(null);
+    setWorkspaceActive(false);
+    setPaperSummaryMode(false);
+    setWorkspaceToolsOpen(false);
+    setReceipt(null);
+    mutationVersion.current++;
+    activeOperation.current = null;
+    answerQueue.current = Promise.resolve();
+    presentation.current = {
+      draftId: "",
+      autoOpened: false,
+      dismissed: false,
+      scope: "",
+      index: 0,
+    };
     setDialogOpen(false);
     setQuestionIndex(0);
     setHistoryAnswerEdit(null);
@@ -926,7 +1239,7 @@ export function GuidedIntake({
             <button
               type="button"
               className="secondary-button"
-              disabled={busy || pending || disabled || draft?.status !== "summary"}
+              disabled={busy || pending || disabled || !draft || !canEditSummary(draft)}
               onClick={() => summary.resolveConflict(true)}
             >
               恢复本机未保存的修改
@@ -945,9 +1258,11 @@ export function GuidedIntake({
     </>
   );
 
+  const QuestionPaper = workspaceActive ? LiveQuestionPaper : Modal;
   return (
     <section
       className="guided-intake"
+      data-workspace={workspaceActive ? "live" : "landing"}
       data-phase={
         uncertain
           ? "paused"
@@ -975,389 +1290,417 @@ export function GuidedIntake({
       aria-label="开始一次需求梳理"
       aria-busy={busy || analyzing || restoring}
     >
-      <form
-        className="gi-composer"
-        data-dropping={dropping || undefined}
-        onSubmit={(event) => {
-          event.preventDefault();
-          analyze();
-        }}
-        onDragEnter={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          event.preventDefault();
-          dragDepth.current += 1;
-          if (!blocked && !uncertain) setDropping(true);
-        }}
-        onDragOver={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = blocked || uncertain ? "none" : "copy";
-        }}
-        onDragLeave={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          dragDepth.current = Math.max(0, dragDepth.current - 1);
-          if (!dragDepth.current) setDropping(false);
-        }}
-        onDrop={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          event.preventDefault();
-          dragDepth.current = 0;
-          setDropping(false);
-          const files = [...event.dataTransfer.files];
-          if (files.length && !blocked && !uncertain) upload(files);
-        }}
-      >
-        <div className="gi-drop-veil" aria-hidden="true">
-          <Paperclip size={22} />
-          <span>松开即可添加材料</span>
-        </div>
-        <label htmlFor={`${id}-goal`}>你想做什么</label>
-        <textarea
-          ref={goalInput}
-          id={`${id}-goal`}
-          className="gi-goal"
-          rows={3}
-          maxLength={3000}
-          value={goal}
-          readOnly={uncertain}
-          disabled={blocked}
-          placeholder="先说说你想做的东西，没想清楚也没关系。可以添加文件或直接粘贴材料。"
-          onPaste={(event) => {
-            const files = [...event.clipboardData.files];
-            if (!files.length) return;
+      {workspaceActive && draft && (
+        <LiveClarificationWorkspace
+          draft={draft}
+          receipt={receipt}
+          onOpenQuestions={openPaper}
+          onReviewSummary={canReviewSummary ? openSummaryPaper : undefined}
+          onPreview={previewPlanning}
+          onRestart={canRestartPlanning ? restartPlanning : undefined}
+          onOpenTools={() => setWorkspaceToolsOpen((open) => !open)}
+          disabled={blocked || uncertain || unavailable}
+          previewDisabled={(draft as Partial<IntakeDraftResponse>).readiness === "not_ready"}
+          paperOpen={dialogOpen}
+        >
+          {recoveryFeedback}
+          {reportFresh && draft.clarification && (
+            <PlanningReport
+              specification={draft.clarification.specification}
+              executionPrompt={draft.clarification.executionPrompt}
+              initiallyOpen={reportPreviewOpen}
+            />
+          )}
+        </LiveClarificationWorkspace>
+      )}
+      <div className="gi-composer-panel" hidden={workspaceActive && !workspaceToolsOpen}>
+        <form
+          className="gi-composer"
+          data-dropping={dropping || undefined}
+          onSubmit={(event) => {
             event.preventDefault();
-            if (!blocked && !uncertain) upload(files);
+            analyze();
           }}
-          onChange={(event) => {
-            setGoal(event.target.value);
-            goalRef.current = event.target.value;
+          onDragEnter={(event) => {
+            if (!event.dataTransfer.types.includes("Files")) return;
+            event.preventDefault();
+            dragDepth.current += 1;
+            if (!blocked && !uncertain) setDropping(true);
           }}
-          onBlur={(event) => {
-            if (
-              event.relatedTarget instanceof Element &&
-              event.relatedTarget.closest(".gi-scenarios")
-            )
-              return;
-            setTimeout(() => {
+          onDragOver={(event) => {
+            if (!event.dataTransfer.types.includes("Files")) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = blocked || uncertain ? "none" : "copy";
+          }}
+          onDragLeave={(event) => {
+            if (!event.dataTransfer.types.includes("Files")) return;
+            dragDepth.current = Math.max(0, dragDepth.current - 1);
+            if (!dragDepth.current) setDropping(false);
+          }}
+          onDrop={(event) => {
+            if (!event.dataTransfer.types.includes("Files")) return;
+            event.preventDefault();
+            dragDepth.current = 0;
+            setDropping(false);
+            const files = [...event.dataTransfer.files];
+            if (files.length && !blocked && !uncertain) upload(files);
+          }}
+        >
+          <div className="gi-drop-veil" aria-hidden="true">
+            <Paperclip size={22} />
+            <span>松开即可添加材料</span>
+          </div>
+          <label htmlFor={`${id}-goal`}>你想做什么</label>
+          <textarea
+            ref={goalInput}
+            id={`${id}-goal`}
+            className="gi-goal"
+            rows={3}
+            maxLength={3000}
+            value={goal}
+            readOnly={uncertain}
+            disabled={blocked}
+            placeholder="先说说你想做的东西，没想清楚也没关系。可以添加文件或直接粘贴材料。"
+            onPaste={(event) => {
+              const files = [...event.clipboardData.files];
+              if (!files.length) return;
+              event.preventDefault();
+              if (!blocked && !uncertain) upload(files);
+            }}
+            onChange={(event) => {
+              setGoal(event.target.value);
+              goalRef.current = event.target.value;
+            }}
+            onBlur={(event) => {
               if (
-                !alive.current ||
-                disabled ||
-                pending ||
-                locked.current ||
-                current.current?.status === "uncertain" ||
-                goalRef.current.trim().length < 2
+                event.relatedTarget instanceof Element &&
+                event.relatedTarget.closest(".gi-scenarios")
               )
                 return;
-              if (!current.current || current.current.goal !== goalRef.current) {
-                void flushSummaryRef
-                  .current()
-                  .then(ensureDraft)
-                  .catch((failure) => {
-                    if (alive.current && failure.name !== "AbortError")
-                      setError(
-                        failure instanceof Error ? failure.message : "草稿尚未保存，请重试。",
-                      );
-                  });
-              }
-            }, 0);
-          }}
-        />
-        <div className="gi-composer-footer">
-          <div className="gi-tools">
-            <button
-              type="button"
-              className="gi-tool"
-              aria-label="上传参考材料"
-              title="添加参考材料"
-              aria-expanded={materialsOpen}
-              aria-controls={`${id}-materials-picker`}
-              disabled={blocked || uncertain}
-              onClick={() => setMaterialsOpen(!materialsOpen)}
-            >
-              <Paperclip size={18} />
-              <span>添加材料</span>
-            </button>
-            <ModelSelector
-              compact
-              mode={modelMode}
-              providers={modelProviders}
-              challenge={baseChallenge}
-              disabled={blocked}
-              selectionDisabled={uncertain}
-              onChange={(mode) => {
-                if (current.current?.status === "uncertain" || mode === modeRef.current) return;
-                if (!current.current) {
-                  setModelMode(mode);
-                  modeRef.current = mode;
+              setTimeout(() => {
+                if (
+                  !alive.current ||
+                  disabled ||
+                  pending ||
+                  locked.current ||
+                  current.current?.status === "uncertain" ||
+                  goalRef.current.trim().length < 2
+                )
                   return;
-                }
-                void operate(async (epoch) => {
-                  let saved = current.current!;
-                  try {
-                    saved = await saveQuestionAnswers(saved, false, epoch, true);
-                  } catch (failure) {
-                    if (failure instanceof DOMException && failure.name === "AbortError")
-                      throw failure;
-                    throw new Error(
-                      `切换模型前未能保存本轮回答，原模型和回答已保留。${failure instanceof Error ? failure.message : "请稍后重试。"}`,
-                    );
-                  }
-                  let next: IntakeDraft;
-                  try {
-                    next = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
-                      revision: saved.revision,
-                      modelMode: mode,
+                if (!current.current || current.current.goal !== goalRef.current) {
+                  void flushSummaryRef
+                    .current()
+                    .then(ensureDraft)
+                    .catch((failure) => {
+                      if (alive.current && failure.name !== "AbortError")
+                        setError(
+                          failure instanceof Error ? failure.message : "草稿尚未保存，请重试。",
+                        );
                     });
-                  } catch (failure) {
-                    if (failure instanceof DOMException && failure.name === "AbortError")
-                      throw failure;
-                    throw new Error(
-                      `未能确认模型切换结果，页面保留原选择；已同步的回答仍保留。请刷新后核对。${failure instanceof Error ? failure.message : ""}`,
-                    );
-                  }
-                  if (epoch !== generation.current) return;
-                  try {
-                    sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
-                  } catch {}
-                  apply(next);
-                  setModelMode(next.modelMode);
-                  modeRef.current = next.modelMode;
-                });
-              }}
-            />
-            {draft && !uncertain && (
+                }
+              }, 0);
+            }}
+          />
+          <div className="gi-composer-footer">
+            <div className="gi-tools">
               <button
                 type="button"
-                className="gi-tool gi-reset"
-                aria-label="准备新问题"
-                title="准备新问题"
-                disabled={busy || analyzing || reading}
-                onClick={reset}
-              >
-                <RotateCcw size={16} />
-              </button>
-            )}
-          </div>
-          <button
-            className="primary-button gi-analyze"
-            type="submit"
-            disabled={blocked || uncertain || unavailable || goal.trim().length < 2}
-          >
-            {busy || analyzing ? (
-              <LoaderCircle size={17} className="gi-spin" />
-            ) : (
-              <ArrowRight size={17} />
-            )}
-            <span>
-              {restoring
-                ? "恢复草稿…"
-                : analyzing
-                  ? "正在梳理…"
-                  : busy
-                    ? "正在保存…"
-                    : summaryVisible
-                      ? "重新梳理"
-                      : questionsVisible
-                        ? "重新梳理目标"
-                        : "开始梳理"}
-            </span>
-          </button>
-        </div>
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          accept={ACCEPT}
-          className="sr-only"
-          aria-label="选择参考材料"
-          disabled={blocked || uncertain}
-          onChange={(event) => {
-            const files = [...(event.target.files ?? [])];
-            event.target.value = "";
-            if (files.length) upload(files);
-          }}
-        />
-      </form>
-
-      {!draft && (
-        <div className="gi-scenarios" aria-label="合成场景试填">
-          <span>试填合成场景</span>
-          <div role="group" aria-label="选择一个合成场景">
-            {CHOICE_SCENARIOS.map((scenario) => (
-              <button
-                type="button"
-                key={scenario.label}
+                className="gi-tool"
+                aria-label="上传参考材料"
+                title="添加参考材料"
+                aria-expanded={materialsOpen}
+                aria-controls={`${id}-materials-picker`}
                 disabled={blocked || uncertain}
-                onClick={() => {
-                  setGoal(scenario.goal);
-                  goalRef.current = scenario.goal;
-                  goalInput.current?.focus();
-                }}
+                onClick={() => setMaterialsOpen(!materialsOpen)}
               >
-                {scenario.label}
+                <Paperclip size={18} />
+                <span>添加材料</span>
               </button>
-            ))}
-          </div>
-          <small>虚构问题，仅填入输入框。你也可以输入任何其他选择。</small>
-        </div>
-      )}
-
-      {unavailable && !pending && !restoring && (
-        <p className="gi-config" role="status">
-          {provider?.error ?? "所选模型尚未配置，请在模型列表中选择已配置的模型。"}
-        </p>
-      )}
-      <DisclosureMotion
-        open={materialsOpen}
-        id={`${id}-materials-picker`}
-        className="gi-materials-picker"
-      >
-        <div>
-          <p id={`${id}-materials-limits`}>
-            支持 PDF、Word、表格、文本和图片。最多 5 个文件，单个不超过 10 MiB，总计不超过 30 MiB。
-          </p>
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={blocked || uncertain}
-            aria-describedby={`${id}-materials-limits`}
-            onClick={() => fileInput.current?.click()}
-          >
-            <Paperclip size={15} /> 选择文件
-          </button>
-        </div>
-      </DisclosureMotion>
-      <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
-        <ul ref={attachmentRoot}>
-          {draft?.attachments.map((file) => (
-            <li key={file.id} data-motion-key={file.id}>
-              <div className="gi-file-heading">
-                <FileText size={17} />
-                <strong>{file.name}</strong>
-                <span>{(file.size / MIB).toFixed(1)} MiB</span>
+              <ModelSelector
+                compact
+                mode={modelMode}
+                providers={modelProviders}
+                challenge={baseChallenge}
+                disabled={blocked}
+                selectionDisabled={uncertain}
+                onChange={(mode) => {
+                  if (current.current?.status === "uncertain" || mode === modeRef.current) return;
+                  if (!current.current) {
+                    setModelMode(mode);
+                    modeRef.current = mode;
+                    return;
+                  }
+                  void operate(async (epoch) => {
+                    let saved = current.current!;
+                    try {
+                      saved = await saveQuestionAnswers(saved, false, epoch, true);
+                    } catch (failure) {
+                      if (failure instanceof DOMException && failure.name === "AbortError")
+                        throw failure;
+                      throw new Error(
+                        `切换模型前未能保存本轮回答，原模型和回答已保留。${failure instanceof Error ? failure.message : "请稍后重试。"}`,
+                      );
+                    }
+                    let next: IntakeDraft;
+                    try {
+                      next = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
+                        revision: saved.revision,
+                        modelMode: mode,
+                      });
+                    } catch (failure) {
+                      if (failure instanceof DOMException && failure.name === "AbortError")
+                        throw failure;
+                      throw new Error(
+                        `未能确认模型切换结果，页面保留原选择；已同步的回答仍保留。请刷新后核对。${failure instanceof Error ? failure.message : ""}`,
+                      );
+                    }
+                    if (epoch !== generation.current) return;
+                    try {
+                      sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
+                    } catch {}
+                    apply(next);
+                    setModelMode(next.modelMode);
+                    modeRef.current = next.modelMode;
+                  });
+                }}
+              />
+              {draft && !uncertain && (
                 <button
                   type="button"
-                  className="icon-button"
-                  aria-label={`移除 ${file.name}`}
-                  disabled={blocked || uncertain}
-                  onClick={() =>
-                    void operate(async (epoch) => {
-                      const next = await request<IntakeDraft>(
-                        `/api/intakes/${draft.id}/attachments/${file.id}`,
-                        "DELETE",
-                      );
-                      if (epoch === generation.current) {
-                        captureAttachments();
-                        apply(next);
-                        if (source?.attachmentId === file.id) setSource(null);
-                      }
-                    })
-                  }
+                  className="gi-tool gi-reset"
+                  aria-label="准备新问题"
+                  title="准备新问题"
+                  disabled={busy || analyzing || reading}
+                  onClick={reset}
                 >
-                  <X size={15} />
+                  <RotateCcw size={16} />
                 </button>
-              </div>
-              <p className={`gi-file-state ${file.state === "failed" ? "failed" : ""}`}>
-                {file.state === "ready"
-                  ? `${file.interpreted ? "含模型读取的内容，请核对" : file.imageCount > 0 ? (draft.sources.some((item) => item.attachmentId === file.id && !item.interpretation && item.text.trim()) ? "文字已提取，图像待读取" : "图像等待模型读取") : "文字已提取"}${file.pageCount ? ` · ${file.pageCount} 页` : ""}`
-                  : file.state === "reading"
-                    ? "正在读取材料…"
-                    : file.state === "needs_pages"
-                      ? `共 ${file.pageCount ?? "多"} 页，请先选择最多 20 页`
-                      : (file.error ?? "这份材料未能读取，请移除或换一个文件。")}
-              </p>
-              {file.warnings.map((warning, i) => (
-                <p key={i} className="gi-file-warning">
-                  {warning}
-                </p>
+              )}
+            </div>
+            <button
+              className="primary-button gi-analyze"
+              type="submit"
+              disabled={blocked || uncertain || unavailable || goal.trim().length < 2}
+            >
+              {busy || analyzing ? (
+                <LoaderCircle size={17} className="gi-spin" />
+              ) : (
+                <ArrowRight size={17} />
+              )}
+              <span>
+                {restoring
+                  ? "恢复草稿…"
+                  : analyzing
+                    ? "正在梳理…"
+                    : busy
+                      ? "正在保存…"
+                      : summaryVisible
+                        ? "重新梳理"
+                        : questionsVisible
+                          ? "重新梳理目标"
+                          : "开始梳理"}
+              </span>
+            </button>
+          </div>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            accept={ACCEPT}
+            className="sr-only"
+            aria-label="选择参考材料"
+            disabled={blocked || uncertain}
+            onChange={(event) => {
+              const files = [...(event.target.files ?? [])];
+              event.target.value = "";
+              if (files.length) upload(files);
+            }}
+          />
+        </form>
+
+        {!draft && (
+          <div className="gi-scenarios" aria-label="合成场景试填">
+            <span>试填合成场景</span>
+            <div role="group" aria-label="选择一个合成场景">
+              {CHOICE_SCENARIOS.map((scenario) => (
+                <button
+                  type="button"
+                  key={scenario.label}
+                  disabled={blocked || uncertain}
+                  onClick={() => {
+                    setGoal(scenario.goal);
+                    goalRef.current = scenario.goal;
+                    goalInput.current?.focus();
+                  }}
+                >
+                  {scenario.label}
+                </button>
               ))}
-              {file.state === "needs_pages" && (
-                <div className="gi-pages">
-                  <label>
-                    <span className="sr-only">{file.name} 的页码</span>
-                    <input
-                      value={pageInputs[file.id] ?? ""}
-                      placeholder="例如 1-5, 8"
-                      readOnly={uncertain}
-                      disabled={blocked}
-                      onChange={(event) =>
-                        setPageInputs((old) => ({ ...old, [file.id]: event.target.value }))
-                      }
-                    />
-                  </label>
+            </div>
+            <small>虚构问题，仅填入输入框。你也可以输入任何其他选择。</small>
+          </div>
+        )}
+
+        {unavailable && !pending && !restoring && (
+          <p className="gi-config" role="status">
+            {provider?.error ?? "所选模型尚未配置，请在模型列表中选择已配置的模型。"}
+          </p>
+        )}
+        <DisclosureMotion
+          open={materialsOpen}
+          id={`${id}-materials-picker`}
+          className="gi-materials-picker"
+        >
+          <div>
+            <p id={`${id}-materials-limits`}>
+              支持 PDF、Word、表格、文本和图片。最多 5 个文件，单个不超过 10 MiB，总计不超过 30
+              MiB。
+            </p>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={blocked || uncertain}
+              aria-describedby={`${id}-materials-limits`}
+              onClick={() => fileInput.current?.click()}
+            >
+              <Paperclip size={15} /> 选择文件
+            </button>
+          </div>
+        </DisclosureMotion>
+        <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
+          <ul ref={attachmentRoot}>
+            {draft?.attachments.map((file) => (
+              <li key={file.id} data-motion-key={file.id}>
+                <div className="gi-file-heading">
+                  <FileText size={17} />
+                  <strong>{file.name}</strong>
+                  <span>{(file.size / MIB).toFixed(1)} MiB</span>
                   <button
                     type="button"
-                    className="secondary-button"
+                    className="icon-button"
+                    aria-label={`移除 ${file.name}`}
                     disabled={blocked || uncertain}
                     onClick={() =>
                       void operate(async (epoch) => {
-                        const pages = parseIntakePages(
-                          pageInputs[file.id] ?? "",
-                          file.pageCount ?? 20,
-                        );
                         const next = await request<IntakeDraft>(
-                          `/api/intakes/${draft.id}/attachments/${file.id}/pages`,
-                          "POST",
-                          { pages },
+                          `/api/intakes/${draft.id}/attachments/${file.id}`,
+                          "DELETE",
                         );
-                        if (epoch === generation.current) apply(next);
+                        if (epoch === generation.current) {
+                          captureAttachments();
+                          apply(next);
+                          if (source?.attachmentId === file.id) setSource(null);
+                        }
                       })
                     }
                   >
-                    读取所选页
+                    <X size={15} />
                   </button>
                 </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      </DisclosureMotion>
-      {!dialogOpen && recoveryFeedback}
-      <DisclosureMotion open={analyzing || reading} className="gi-progress">
-        <div>
-          <LoaderCircle className="gi-spin" size={20} />
-          <span>
-            {reading
-              ? "正在整理材料，原文和位置会一并保留。"
-              : "正在分析你的目标，梳理影响选择的信息。"}
-          </span>
-        </div>
-      </DisclosureMotion>
-      {(questionsVisible ||
-        summaryVisible ||
-        analyzing ||
-        uncertain ||
-        draft?.status === "input" ||
-        draft?.status === "failed" ||
-        !!historyAnswerEdit ||
-        !!historyConflict) && (
-        <div className="gi-resume">
-          <p>
-            {questionsVisible
-              ? `第${draft?.round ?? 1}轮 · ${draft?.questions.length ?? 0} 个待补充问题`
-              : summaryVisible
-                ? "摘要已整理，等待你确认。"
-                : uncertain
-                  ? "调用已暂停，等待核对。"
-                  : "正在梳理你的目标。"}
-          </p>
-          <button
-            ref={setDialogTrigger}
-            type="button"
-            className="secondary-button"
-            aria-haspopup="dialog"
-            onClick={() => setDialogOpen(true)}
-          >
-            {questionsVisible ? "继续回答" : summaryVisible ? "查看并确认摘要" : "查看梳理进度"}
-          </button>
-        </div>
-      )}
+                <p className={`gi-file-state ${file.state === "failed" ? "failed" : ""}`}>
+                  {file.state === "ready"
+                    ? `${file.interpreted ? "含模型读取的内容，请核对" : file.imageCount > 0 ? (draft.sources.some((item) => item.attachmentId === file.id && !item.interpretation && item.text.trim()) ? "文字已提取，图像待读取" : "图像等待模型读取") : "文字已提取"}${file.pageCount ? ` · ${file.pageCount} 页` : ""}`
+                    : file.state === "reading"
+                      ? "正在读取材料…"
+                      : file.state === "needs_pages"
+                        ? `共 ${file.pageCount ?? "多"} 页，请先选择最多 20 页`
+                        : (file.error ?? "这份材料未能读取，请移除或换一个文件。")}
+                </p>
+                {file.warnings.map((warning, i) => (
+                  <p key={i} className="gi-file-warning">
+                    {warning}
+                  </p>
+                ))}
+                {file.state === "needs_pages" && (
+                  <div className="gi-pages">
+                    <label>
+                      <span className="sr-only">{file.name} 的页码</span>
+                      <input
+                        value={pageInputs[file.id] ?? ""}
+                        placeholder="例如 1-5, 8"
+                        readOnly={uncertain}
+                        disabled={blocked}
+                        onChange={(event) =>
+                          setPageInputs((old) => ({ ...old, [file.id]: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={blocked || uncertain}
+                      onClick={() =>
+                        void operate(async (epoch) => {
+                          const pages = parseIntakePages(
+                            pageInputs[file.id] ?? "",
+                            file.pageCount ?? 20,
+                          );
+                          const next = await request<IntakeDraft>(
+                            `/api/intakes/${draft.id}/attachments/${file.id}/pages`,
+                            "POST",
+                            { pages },
+                          );
+                          if (epoch === generation.current) apply(next);
+                        })
+                      }
+                    >
+                      读取所选页
+                    </button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </DisclosureMotion>
+        {!dialogOpen && recoveryFeedback}
+        <DisclosureMotion open={analyzing || reading} className="gi-progress">
+          <div>
+            <LoaderCircle className="gi-spin" size={20} />
+            <span>
+              {reading
+                ? "正在整理材料，原文和位置会一并保留。"
+                : "正在分析你的目标，梳理影响选择的信息。"}
+            </span>
+          </div>
+        </DisclosureMotion>
+        {(questionsVisible ||
+          summaryVisible ||
+          analyzing ||
+          uncertain ||
+          draft?.status === "input" ||
+          draft?.status === "failed" ||
+          !!historyAnswerEdit ||
+          !!historyConflict) && (
+          <div className="gi-resume">
+            <p>
+              {questionsVisible
+                ? `第${draft?.round ?? 1}轮 · ${draft?.questions.length ?? 0} 个待补充问题`
+                : summaryVisible
+                  ? "摘要已整理，等待你确认。"
+                  : uncertain
+                    ? "调用已暂停，等待核对。"
+                    : "正在梳理你的目标。"}
+            </p>
+            <button
+              ref={setDialogTrigger}
+              type="button"
+              className="secondary-button"
+              aria-haspopup="dialog"
+              onClick={() => setDialogOpen(true)}
+            >
+              {questionsVisible ? "继续回答" : summaryVisible ? "查看并确认摘要" : "查看梳理进度"}
+            </button>
+          </div>
+        )}
+      </div>
       {dialogOpen && (
-        <Modal
+        <QuestionPaper
           title="需求梳理"
+          {...(workspaceActive ? { onDismiss: dismissPaper } : {})}
           trigger={dialogTrigger}
           motionRef={dialogMotion}
           onClose={() => {
+            dismissPaper();
             setDialogOpen(false);
             requestAnimationFrame(() => dialogTrigger?.focus({ preventScroll: true }));
           }}
@@ -1404,30 +1747,7 @@ export function GuidedIntake({
                       answerOf(question)
                     }
                     disabled={blocked}
-                    onChange={(answer) => {
-                      const next = [
-                        ...answerValues.current.filter(
-                          (item) => item.questionId !== answer.questionId,
-                        ),
-                        answer,
-                      ];
-                      answerValues.current = next;
-                      answerUnsaved.current = "memory";
-                      setAnswers(next);
-                      try {
-                        sessionStorage.setItem(
-                          ANSWER_JOURNAL_KEY,
-                          JSON.stringify({
-                            scope: answerScope.current,
-                            answers: next,
-                          }),
-                        );
-                        answerUnsaved.current = "local";
-                        setAnswerSaveState("local");
-                      } catch {
-                        setAnswerSaveState("memory");
-                      }
-                    }}
+                    onChange={rememberAnswer}
                   />
                 ))}
               </div>
@@ -1445,7 +1765,11 @@ export function GuidedIntake({
                   type="button"
                   className="secondary-button"
                   disabled={blocked || questionIndex === 0}
-                  onClick={() => setQuestionIndex((index) => index - 1)}
+                  onClick={() => {
+                    presentation.current.index = questionIndex - 1;
+                    persistPresentation();
+                    setQuestionIndex((index) => index - 1);
+                  }}
                 >
                   上一题
                 </button>
@@ -1454,7 +1778,7 @@ export function GuidedIntake({
                     type="button"
                     className="primary-button"
                     disabled={blocked}
-                    onClick={() => setQuestionIndex((index) => index + 1)}
+                    onClick={nextQuestion}
                   >
                     下一题
                     <ArrowRight size={16} />
@@ -1466,18 +1790,30 @@ export function GuidedIntake({
                   type="button"
                   className="text-button"
                   disabled={blocked || uncertain || unavailable}
-                  onClick={() => analyze(true)}
+                  onClick={previewPlanning}
                 >
-                  跳过本轮，整理摘要
+                  先看当前规划
                 </button>
+                {canReviewSummary && (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={blocked}
+                    onClick={openSummaryPaper}
+                  >
+                    核对并交接需求
+                  </button>
+                )}
                 {questionIndex >= (draft?.questions.length ?? 0) - 1 && (
                   <button
                     type="button"
                     className="primary-button"
                     disabled={blocked || uncertain || unavailable}
-                    onClick={() => analyze(false)}
+                    onClick={() => {
+                      if (nextQuestion()) analyze(false);
+                    }}
                   >
-                    确认本轮回答并继续
+                    提交本轮并继续
                     <ArrowRight size={16} />
                   </button>
                 )}
@@ -1627,7 +1963,9 @@ export function GuidedIntake({
                     type="button"
                     className="secondary-button"
                     disabled={blocked || uncertain || unavailable || !!historyConflict}
-                    onClick={() => analyze(false)}
+                    onClick={() =>
+                      draft?.workflow === "clarification" ? previewPlanning() : analyze(false)
+                    }
                   >
                     根据当前摘要刷新分析
                   </button>
@@ -1711,11 +2049,11 @@ export function GuidedIntake({
                   uncertain ||
                   unavailable ||
                   goal !== draft?.goal ||
-                  (draft?.workflow === "clarification" && !reportAvailable)
+                  (draft?.workflow === "clarification" && !canConfirmSummary)
                 }
                 onClick={() =>
                   void operate(async (epoch) => {
-                    await ensureDraft();
+                    await saveQuestionAnswers(await ensureDraft(), false, epoch, true);
                     const parsed = ChallengeSchema.safeParse({
                       ...challenge,
                       options: challenge.options.map((option) => option.trim()).filter(Boolean),
@@ -1726,6 +2064,7 @@ export function GuidedIntake({
                       );
                     if (!current.current) return;
                     const submittedDraftId = current.current.id;
+                    setAnalysisPending(true);
                     const result = await request<ArenaSnapshot | IntakeDraft>(
                       `/api/intakes/${submittedDraftId}/submit`,
                       "POST",
@@ -1737,6 +2076,7 @@ export function GuidedIntake({
                     );
                     if (!alive.current || epoch !== generation.current) return;
                     if (!("versions" in result)) {
+                      if (result.status === "questions") setPaperSummaryMode(false);
                       apply(result);
                       return;
                     }
@@ -1747,7 +2087,11 @@ export function GuidedIntake({
                 }
               >
                 {busy ? <LoaderCircle size={17} className="gi-spin" /> : <ArrowRight size={17} />}
-                {draft?.workflow === "clarification" ? "确认要求并查漏交接" : "确认摘要并开始推演"}
+                {draft?.workflow === "clarification"
+                  ? formallyReady
+                    ? "确认摘要并正式交接"
+                    : "确认当前摘要并查漏"
+                  : "确认摘要并开始推演"}
               </button>
             </DisclosureMotion>
 
@@ -1876,17 +2220,39 @@ export function GuidedIntake({
               !summaryVisible &&
               draft && (
                 <div className="gi-step-actions">
-                  <p className="gi-hint">已保存的要求等待重新分析，旧报告暂不可用。</p>
+                  <p className="gi-hint">
+                    {(draft as Partial<IntakeDraftResponse>).readiness === "previewable"
+                      ? "已保留当前要求，可以重新整理规划。"
+                      : "已保存的要求等待重新分析，旧报告暂不可用。"}
+                  </p>
                   <button
                     type="button"
                     className="primary-button"
                     disabled={blocked || unavailable || !!historyConflict}
-                    onClick={() => analyze(false)}
+                    onClick={() =>
+                      (draft as Partial<IntakeDraftResponse>).readiness === "previewable"
+                        ? previewPlanning()
+                        : canRestartPlanning
+                          ? restartPlanning()
+                          : analyze(false)
+                    }
                   >
-                    重新分析
+                    {(draft as Partial<IntakeDraftResponse>).readiness === "previewable"
+                      ? "先看当前规划"
+                      : "重新分析"}
                   </button>
                 </div>
               )}
+            {canRestartPlanning && (
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={blocked || uncertain || unavailable || !!historyConflict}
+                onClick={restartPlanning}
+              >
+                重新梳理需求
+              </button>
+            )}
             <button
               type="button"
               className="text-button gi-paper-exit"
@@ -1895,7 +2261,7 @@ export function GuidedIntake({
               暂存并退出
             </button>
           </div>
-        </Modal>
+        </QuestionPaper>
       )}
       <DisclosureMotion open={!!draft?.sources.length} className="gi-sources">
         <button

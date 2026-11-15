@@ -8,15 +8,24 @@ import type {
 } from "../../src/lib/clarification-contracts";
 import type {
   IntakeAnswer,
-  IntakeDraft,
+  IntakeDraftResponse,
   IntakeQuestion,
   RecordedAnswer,
 } from "../../src/lib/intake-contracts";
 import { configureFixtureModels, fixtureIntake } from "./intake.fixture";
 import { fixtureSnapshot, fixtureChallenge } from "./ui.fixture";
+import { buildClarificationReplay, projectReplay } from "../../src/lib/replay";
 import { ANSWER_JOURNAL_KEY } from "../../src/components/intake-answer-journal";
 
 const date = "2026-11-12T00:00:00.000Z";
+function fixturePlanningIntake(overrides: Partial<IntakeDraftResponse> = {}): IntakeDraftResponse {
+  return {
+    ...fixtureIntake(overrides),
+    activity: { operationId: null, calls: [] },
+    readiness: "not_ready",
+    ...overrides,
+  };
+}
 const goal = "【演示数据】明确校园活动报名成果的范围、内容、流程和风格。";
 const scopeQuestion: IntakeQuestion = {
   id: "scope",
@@ -73,7 +82,7 @@ for (const width of [1440, 390]) {
     let submissions = 0;
     let advances = 0;
     let created = 0;
-    let draft: IntakeDraft = fixtureIntake({ workflow: "clarification", goal });
+    let draft = fixturePlanningIntake({ workflow: "clarification", goal });
     const state = (next: ClarificationState["next"]): ClarificationState => ({
       protocol: "clarification-1",
       items: structuredClone(items),
@@ -90,7 +99,17 @@ for (const width of [1440, 390]) {
       })),
       suggestions: ["演示数据：AI 建议增加邮箱通知，尚未确认。"],
       conflicts: [],
-      review: null,
+      review: runs.some((run) => run.role === "C")
+        ? {
+            summary: "【演示数据】C 本次独立审查记录",
+            ready: analyses > 2,
+            coverage: [],
+            gaps: analyses > 2 ? [] : [items[2]],
+            conflicts: [],
+            fingerprint: "synthetic-fixture-review",
+            basedOnRevision: runs.findLast((run) => run.role === "C")!.basedOnRevision,
+          }
+        : null,
       next,
       draftOnly: next !== "completed",
       specification:
@@ -165,17 +184,22 @@ for (const width of [1440, 390]) {
         const body = route.request().postDataJSON();
         expect(body.revision).toBe(draft.revision);
         if (body.answers) {
-          expect(body.answerMode).toBe("complete");
+          expect(["draft", "complete"]).toContain(body.answerMode);
           const accepted: RecordedAnswer[] = body.answers.map((answer: IntakeAnswer) => ({
             ...answer,
             question: draft.questions.find((question) => question.id === answer.questionId)!,
-            confirmation: answer.state === "answered" ? "confirmed" : "pending",
-            confirmedRevision: draft.revision + 1,
-            confirmedAt: date,
+            confirmation:
+              body.answerMode === "complete" && answer.state === "answered"
+                ? "confirmed"
+                : "pending",
+            ...(body.answerMode === "complete" && answer.state === "answered"
+              ? { confirmedRevision: draft.revision + 1, confirmedAt: date }
+              : {}),
           }));
           draft = {
             ...draft,
             revision: draft.revision + 1,
+            readiness: "previewable",
             answers: [
               ...draft.answers.filter(
                 (answer) => !accepted.some((item) => item.questionId === answer.questionId),
@@ -194,9 +218,15 @@ for (const width of [1440, 390]) {
         return route.fulfill({ json: draft });
       }
       if (path === `/api/intakes/${draft.id}/analyze`) {
+        expect(route.request().postDataJSON()).toMatchObject({
+          revision: draft.revision,
+          intent: "continue",
+          finish: false,
+        });
         analyses++;
         addRun("A");
         addRun("B");
+        if (analyses > 1) addRun("C", analyses > 2);
         draft =
           analyses === 1
             ? {
@@ -205,36 +235,40 @@ for (const width of [1440, 390]) {
                 status: "questions",
                 round: analyses,
                 questions: [scopeQuestion, styleQuestion],
+                readiness: "previewable",
                 clarification: state("questions"),
               }
-            : {
-                ...draft,
-                revision: draft.revision + 1,
-                status: "summary",
-                round: analyses,
-                questions: [],
-                challenge: {
-                  ...structuredClone(snapshot.versions[0].challenge),
-                  goal,
-                  preferences: "简洁正式",
-                },
-                clarification: state("summary"),
-              };
+            : analyses === 2
+              ? {
+                  ...draft,
+                  revision: draft.revision + 1,
+                  status: "questions",
+                  round: analyses,
+                  questions: [acceptanceQuestion],
+                  readiness: "previewable",
+                  clarification: state("questions"),
+                }
+              : {
+                  ...draft,
+                  revision: draft.revision + 1,
+                  status: "summary",
+                  round: analyses,
+                  questions: [],
+                  readiness: "requirement_ready",
+                  challenge: {
+                    ...structuredClone(snapshot.versions[0].challenge),
+                    goal,
+                    preferences: "简洁正式",
+                  },
+                  clarification: state("summary"),
+                };
         return route.fulfill({ json: draft });
       }
       if (path === `/api/intakes/${draft.id}/submit`) {
         submissions++;
-        addRun("C", submissions > 1);
-        if (submissions === 1) {
-          draft = {
-            ...draft,
-            revision: draft.revision + 1,
-            status: "questions",
-            questions: [acceptanceQuestion],
-            clarification: state("questions"),
-          };
-          return route.fulfill({ json: draft });
-        }
+        expect(draft.readiness).toBe("requirement_ready");
+        expect(draft.answers).toHaveLength(3);
+        expect(draft.answers.every((answer) => answer.confirmation === "confirmed")).toBe(true);
         const finalState = state("completed");
         finalState.review = {
           summary: "【演示数据】查漏已完成",
@@ -243,7 +277,7 @@ for (const width of [1440, 390]) {
           gaps: [],
           conflicts: [],
           fingerprint: "fixture",
-          basedOnRevision: draft.revision,
+          basedOnRevision: runs.findLast((run) => run.role === "C")!.basedOnRevision,
         };
         Object.assign(snapshot.versions[0], {
           workflow: "clarification",
@@ -279,6 +313,11 @@ for (const width of [1440, 390]) {
             executionPrompt: finalState.executionPrompt,
           },
         });
+        const replay = buildClarificationReplay(snapshot.versions[0]);
+        expect(replay.at(-1)?.replayAction?.kind).toBe("handoff");
+        expect(projectReplay(snapshot.versions[0], replay, replay.length - 1).handoffComplete).toBe(
+          true,
+        );
         expect(snapshot.versions[0].strategies).toEqual([]);
         expect(snapshot.versions[0].attacks).toEqual([]);
         expect(snapshot.versions[0].revisions).toEqual([]);
@@ -286,6 +325,7 @@ for (const width of [1440, 390]) {
         draft = {
           ...draft,
           status: "submitted",
+          readiness: "handoff_ready",
           arenaId: snapshot.id,
           revision: draft.revision + 1,
         };
@@ -312,16 +352,31 @@ for (const width of [1440, 390]) {
     expect(analyses).toBe(1);
     await intakeDialog.getByRole("button", { name: "暂存并退出", exact: true }).click();
     await expect(intakeDialog).toBeHidden();
-    await page.getByRole("button", { name: "继续回答", exact: true }).click();
+    await page.locator("[data-open-live-questions]").click();
     await expect(page.getByRole("radio", { name: "界面演示", exact: true })).toBeChecked();
     expect(analyses).toBe(1);
     await intakeDialog.evaluate((element) => element.setAttribute("data-fixture-paper", "same"));
     await intakeDialog.getByRole("button", { name: "下一题", exact: true }).click();
     await expect(page.getByRole("radio", { name: "简洁正式", exact: true })).toBeChecked();
-    await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
-    const handoff = page.getByRole("button", { name: "确认要求并查漏交接", exact: true });
-    await expect(handoff).toBeVisible();
+    await intakeDialog.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
+    await expect(
+      intakeDialog.getByRole("textbox", { name: acceptanceQuestion.title, exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "真实需求协作工作区" })).toBeVisible();
+    await expect(page.locator(".clarification-replay")).toHaveCount(0);
+    expect(submissions).toBe(0);
+    expect(analyses).toBe(2);
     await expect(intakeDialog).toHaveAttribute("data-fixture-paper", "same");
+    await page.reload();
+    await expect(
+      intakeDialog.getByRole("textbox", { name: acceptanceQuestion.title, exact: true }),
+    ).toBeVisible();
+    await intakeDialog
+      .getByRole("textbox", { name: acceptanceQuestion.title, exact: true })
+      .fill("提交后显示演示成功，并且不收集真实个人资料。");
+    await intakeDialog.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
+    const handoff = intakeDialog.getByRole("button", { name: "确认摘要并正式交接", exact: true });
+    await expect(handoff).toBeEnabled();
     const preview = intakeDialog.getByRole("region", { name: "规划报告预览", exact: true });
     await expect(preview.getByText("详细规划报告 · 预览版", { exact: true })).toBeVisible();
     await preview.getByRole("button", { name: "查看完整预览", exact: true }).click();
@@ -336,22 +391,16 @@ for (const width of [1440, 390]) {
       `${draft.clarification!.specification}\n\n---\n\n# 执行提示词（预览）\n\n${draft.clarification!.executionPrompt}`,
     );
     expect(submissions).toBe(0);
-    expect(analyses).toBe(2);
+    expect(analyses).toBe(3);
     await handoff.click();
-    await expect(
-      page.getByRole("textbox", { name: acceptanceQuestion.title, exact: true }),
-    ).toBeVisible();
-    await expect(page.locator(".c-root")).toHaveCount(0);
-    await expect(intakeDialog).toHaveAttribute("data-fixture-paper", "same");
-    await page.reload();
-    await expect(
-      page.getByRole("textbox", { name: acceptanceQuestion.title, exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole("textbox", { name: acceptanceQuestion.title, exact: true })
-      .fill("提交后显示演示成功，并且不收集真实个人资料。");
-    await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
-    await handoff.click();
+    const formal = page.getByRole("region", { name: "需求规划成果", exact: true });
+    await expect(formal).toBeVisible();
+    await expect(formal.getByText("正式需求记录", { exact: true })).toBeVisible();
+    await expect(formal.locator(".planning-report-content")).toHaveText(
+      snapshot.versions[0].clarification!.specification,
+    );
+    await expect(page.locator(".clarification-replay")).toHaveCount(0);
+    await formal.getByRole("button", { name: "回放历史过程", exact: true }).click();
     const result = page.getByRole("region", { name: "结论", exact: true });
     await expect(
       result.getByRole("heading", { name: "需求说明与执行提示词", exact: true }),
@@ -471,6 +520,9 @@ for (const width of [1440, 390]) {
       .fill("【演示数据】执行者询问是否需要英文版本，请等本人决定。");
     await feedback.getByRole("button", { name: "取消", exact: true }).click();
     await page.reload();
+    await expect(formal).toBeVisible();
+    await expect(page.locator(".clarification-replay")).toHaveCount(0);
+    await formal.getByRole("button", { name: "回放历史过程", exact: true }).click();
     await expect(
       result.getByRole("heading", { name: "需求说明与执行提示词", exact: true }),
     ).toBeVisible();
@@ -479,7 +531,7 @@ for (const width of [1440, 390]) {
       false,
     );
     expect(created).toBe(1);
-    expect(submissions).toBe(2);
+    expect(submissions).toBe(1);
     expect(advances).toBe(0);
   });
 }
@@ -507,10 +559,11 @@ test("explicit UI fixture: historical answer editing restores locally, cancels, 
       confirmedAt: date,
     }),
   );
-  let draft = fixtureIntake({
+  let draft = fixturePlanningIntake({
     workflow: "clarification",
     revision: 3,
     status: "summary",
+    readiness: "requirement_ready",
     round: 3,
     challenge: structuredClone(fixtureChallenge),
     answers: records,
@@ -553,6 +606,7 @@ test("explicit UI fixture: historical answer editing restores locally, cancels, 
         ...draft,
         revision: draft.revision + 1,
         status: "input",
+        readiness: "not_ready",
         questions: [],
         challenge: null,
         answers: draft.answers.map((answer) =>
@@ -589,6 +643,7 @@ test("explicit UI fixture: historical answer editing restores locally, cancels, 
         ...draft,
         revision: draft.revision + 1,
         status: "questions",
+        readiness: "previewable",
         round: 4,
         questions: [dependent],
       };
@@ -664,10 +719,11 @@ test("explicit UI fixture: local summary edits disable old report preview and ex
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const snapshot = configureFixtureModels(fixtureSnapshot());
-  const draft = fixtureIntake({
+  const draft = fixturePlanningIntake({
     workflow: "clarification",
     revision: 3,
     status: "summary",
+    readiness: "requirement_ready",
     challenge: structuredClone(fixtureChallenge),
     clarification: {
       protocol: "clarification-1",
@@ -702,6 +758,7 @@ test("explicit UI fixture: local summary edits disable old report preview and ex
           json: {
             ...draft,
             revision: 4,
+            readiness: "not_ready",
             challenge: route.request().postDataJSON().summary.challenge,
             clarification: { ...draft.clarification, specification: "", executionPrompt: "" },
           },
@@ -731,7 +788,7 @@ test("explicit UI fixture: local summary edits disable old report preview and ex
     ).toHaveCount(0);
     await expect(preview).not.toContainText("编辑前报告");
     await expect(
-      paper.getByRole("button", { name: "确认要求并查漏交接", exact: true }),
+      paper.getByRole("button", { name: "确认摘要并正式交接", exact: true }),
     ).toBeDisabled();
     expect(draft.revision).toBe(3);
   } finally {
@@ -745,10 +802,11 @@ test("explicit UI fixture: historical memory-only edits survive revision conflic
   await page.emulateMedia({ reducedMotion: "reduce" });
   const snapshot = configureFixtureModels(fixtureSnapshot());
   const question = { ...scopeQuestion, type: "text" as const, options: [] };
-  let draft = fixtureIntake({
+  let draft = fixturePlanningIntake({
     workflow: "clarification",
     revision: 3,
     status: "summary",
+    readiness: "requirement_ready",
     round: 3,
     challenge: structuredClone(fixtureChallenge),
     answers: [
@@ -820,6 +878,7 @@ test("explicit UI fixture: historical memory-only edits survive revision conflic
         ...draft,
         revision: draft.revision + 1,
         status: "input",
+        readiness: "not_ready",
         challenge: null,
         answers: [
           {
@@ -839,6 +898,7 @@ test("explicit UI fixture: historical memory-only edits survive revision conflic
         ...draft,
         revision: draft.revision + 1,
         status: "questions",
+        readiness: "previewable",
         round: 4,
         questions: [styleQuestion],
       };
@@ -867,7 +927,7 @@ test("explicit UI fixture: historical memory-only edits survive revision conflic
   expect(patches).toBe(1);
   expect(analyses).toBe(0);
   await paper.getByRole("button", { name: "暂存并退出", exact: true }).click();
-  await page.getByRole("button", { name: "查看并确认摘要", exact: true }).click();
+  await page.locator("[data-open-live-questions]").click();
   await expect(conflict).toContainText("仅存在内存的新范围");
   expect(patches).toBe(1);
   await conflict.getByRole("button", { name: "恢复本机修改并重新核对", exact: true }).click();

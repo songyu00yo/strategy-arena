@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
+import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { z } from "zod";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const schemas = [
@@ -127,11 +129,82 @@ export function modelEvidenceComponents(commit, { directory = process.cwd() } = 
         ]),
       ),
   );
-  const protocol = {
+  const promptProtocol = {
     protocol: literal(declarations.get("CLARIFICATION_PROTOCOL")),
     system: literal(declarations.get("CLARIFICATION_SYSTEM")),
     roles: literal(declarations.get("CLARIFICATION_ROLES")),
   };
+  const runtimeSource = ts.createSourceFile(
+    formatterPath,
+    bytes.get(formatterPath)?.toString() ?? "",
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const hashFunction = runtimeSource.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === "clarificationProtocolHash",
+  );
+  let hashVersion;
+  const inspectHashVersion = (node) => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      node.name.getText(runtimeSource) === "version" &&
+      ts.isStringLiteral(node.initializer) &&
+      node.initializer.text.startsWith("clarification-schema-")
+    )
+      hashVersion = node.initializer.text;
+    ts.forEachChild(node, inspectHashVersion);
+  };
+  if (hashFunction) inspectHashVersion(hashFunction);
+  let protocol = promptProtocol;
+  if (hashVersion) {
+    assert.equal(hashVersion, "clarification-schema-2", "Unsupported protocol hash version.");
+    // Evaluate only the committed, pure schema modules. Runtime, database and environment
+    // modules are unavailable to this loader, including through relative imports.
+    const allowedModules = new Set([
+      "src/lib/clarification-contracts.ts",
+      "src/lib/intake-contracts.ts",
+      "src/lib/contracts.ts",
+      "src/lib/answer-options.ts",
+      "src/lib/model-catalog.ts",
+    ]);
+    const loaded = new Map();
+    const loadSchema = (path) => {
+      assert(allowedModules.has(path), `Unsupported schema dependency: ${path}`);
+      if (loaded.has(path)) return loaded.get(path).exports;
+      const contents = bytes.get(path);
+      assert(contents, `Committed schema dependency is missing: ${path}`);
+      const schemaModule = { exports: {} };
+      loaded.set(path, schemaModule);
+      const compiled = ts.transpileModule(contents.toString(), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      runInNewContext(
+        compiled,
+        {
+          module: schemaModule,
+          exports: schemaModule.exports,
+          require(specifier) {
+            if (specifier === "zod") return { z };
+            assert(specifier.startsWith("."), "Only relative schema imports are supported.");
+            return loadSchema(posix.join(posix.dirname(path), specifier) + ".ts");
+          },
+        },
+        { filename: path, timeout: 1000 },
+      );
+      return schemaModule.exports;
+    };
+    const schema = loadSchema("src/lib/clarification-contracts.ts");
+    protocol = {
+      version: hashVersion,
+      ...promptProtocol,
+      schemas: {
+        decomposition: z.toJSONSchema(schema.DecompositionSchema),
+        options: z.toJSONSchema(schema.OptionReviewSchema),
+        handoff: z.toJSONSchema(schema.HandoffReviewSchema),
+      },
+    };
+  }
   return {
     commit,
     applicationSelectionFingerprint: digest(JSON.stringify(applicationFiles)),

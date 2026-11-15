@@ -8,7 +8,7 @@ import { GET, PATCH } from "../src/app/api/intakes/[id]/route";
 import { ensureOwner } from "../src/lib/server/auth";
 import { closeDb, db } from "../src/lib/server/db";
 import { createIntake } from "../src/lib/server/intakes";
-import type { IntakeDraft } from "../src/lib/intake-contracts";
+import type { IntakeDraft, IntakeDraftResponse } from "../src/lib/intake-contracts";
 
 let directory: string;
 let server: Server;
@@ -119,8 +119,12 @@ it.each([
     closeDb();
     const restoredResponse = await fetch(url, { headers: { cookie } });
     expect(restoredResponse.status).toBe(200);
-    const restored = (await restoredResponse.json()) as IntakeDraft;
+    const restored = (await restoredResponse.json()) as IntakeDraftResponse;
     expect(restored.answers).toEqual(saved.answers);
+    expect(restored.id).toBe(draft.id);
+    expect(restored.activity).toEqual({ operationId: null, calls: [] });
+    expect(restored.readiness).toBe("not_ready");
+    expect(restored).not.toHaveProperty("draft");
     const invalidResponse = await patch(restored.revision, incomplete, "complete");
     expect(invalidResponse.status).toBe(400);
     const unchanged = (await (await fetch(url, { headers: { cookie } })).json()) as IntakeDraft;

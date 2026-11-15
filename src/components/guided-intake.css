@@ -295,10 +295,12 @@
   position: relative;
   padding-bottom: 4px;
 }
-.gi-answer-field small {
-  position: absolute;
-  right: 12px;
-  top: 11px;
+.gi-answer-field > small {
+  position: static;
+  display: block;
+  margin-top: 7px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
   color: var(--gi-muted);
   font-size: 11px;
   pointer-events: none;
@@ -921,4 +923,21 @@
 .gi-history-conflict {
   border-left: 3px solid #d95540;
   padding-left: 12px;
+}
+
+.gi-answer-field > input[type="number"] + small {
+  position: absolute;
+  right: 12px;
+  top: 11px;
+  margin-top: 0;
+}
+.gi-other-answer textarea {
+  display: block;
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+}
+.gi-other-answer > small[role="status"] {
+  position: static;
+  margin-top: 7px;
 }

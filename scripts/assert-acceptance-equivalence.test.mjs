@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { z } from "zod";
 import {
   assertModelEvidenceEquivalent,
   modelEvidenceComponents,
@@ -131,6 +132,58 @@ function fixture(t) {
       verifyModelAcceptanceLineage(receipt, { directory, finalCommit: receipt.source.commit }),
   };
 }
+
+test("schema-bearing protocol identities use committed schemas and preserve historical hashes", (t) => {
+  const f = fixture(t);
+  const prompt = {
+    protocol: "fixture",
+    system: "fixture",
+    roles: { A: "A", B: "B", C: "C" },
+  };
+  assert.equal(f.identity(f.previous).protocolHash, digest(JSON.stringify(prompt)));
+  f.write(
+    "src/lib/server/clarification.ts",
+    'export function formatClarification() { return "synthetic report"; }\n' +
+      'export function clarificationProtocolHash() { return { version: "clarification-schema-2" }; }\n',
+  );
+  const schemaSource =
+    'import { z } from "zod";\n' +
+    "export const DecompositionSchema = z.object({ summary: z.string() });\n" +
+    "export const OptionReviewSchema = z.object({ summary: z.string() });\n" +
+    "export const HandoffReviewSchema = z.object({ summary: z.string() });\n";
+  f.write("src/lib/clarification-contracts.ts", schemaSource);
+  const current = f.commit("Synthetic schema-bearing protocol");
+  const schema = z.toJSONSchema(z.object({ summary: z.string() }));
+  assert.equal(
+    f.identity(current).protocolHash,
+    digest(
+      JSON.stringify({
+        version: "clarification-schema-2",
+        ...prompt,
+        schemas: { decomposition: schema, options: schema, handoff: schema },
+      }),
+    ),
+  );
+  f.write(
+    "src/lib/clarification-contracts.ts",
+    schemaSource.replaceAll("z.string()", "z.string().min(1)"),
+  );
+  const changed = f.commit("Synthetic schema-only change");
+  assert.notEqual(f.identity(current).protocolHash, f.identity(changed).protocolHash);
+  assert.equal(f.identity(f.previous).protocolHash, digest(JSON.stringify(prompt)));
+});
+
+test("schema protocol derivation cannot import runtime modules", (t) => {
+  const f = fixture(t);
+  f.write(
+    "src/lib/server/clarification.ts",
+    'export function formatClarification() { return "synthetic report"; }\n' +
+      'export function clarificationProtocolHash() { return { version: "clarification-schema-2" }; }\n',
+  );
+  f.write("src/lib/clarification-contracts.ts", 'import { db } from "./server/db"; db();\n');
+  const changed = f.commit("Synthetic unsupported schema import");
+  assert.throws(() => f.identity(changed), /Unsupported schema dependency/);
+});
 
 test("pure strict equivalence rejects changed application scope while model-input scope labels it honestly", () => {
   const previous = {

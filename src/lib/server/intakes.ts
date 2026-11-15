@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
-  clarificationFingerprint,
   clarificationProtocolHash,
   emptyClarification,
   runClarification,
   SUMMARY_FIELDS_BY_TOPIC,
+  derivePlanningReadiness,
+  isCurrentClarificationReview,
+  hasBlockingUnconfirmedItems,
 } from "./clarification";
 import path from "node:path";
 import type { z } from "zod";
@@ -24,6 +27,9 @@ import {
   IntakeAnalysisSchema,
   VisualReadingSchema,
   type IntakeDraft,
+  type IntakeDraftResponse,
+  type IntakeActivity,
+  type ClarificationRole,
   type IntakeAttachment,
   type MaterialSource,
   type RecordedAnswer,
@@ -52,12 +58,13 @@ type SummaryEdits = {
   updatedAt: string;
   revision: number;
 };
-type PrivateDraft = IntakeDraft & {
-  clarificationPromptHash?: string;
-  config?: ModelConfig;
-  configHash?: string;
-  summaryEdits?: SummaryEdits;
-};
+type PrivateDraft = IntakeDraft &
+  Partial<Pick<IntakeDraftResponse, "activity" | "readiness">> & {
+    clarificationPromptHash?: string;
+    config?: ModelConfig;
+    configHash?: string;
+    summaryEdits?: SummaryEdits;
+  };
 type StoredAttachment = IntakeAttachment & {
   parsed?: ParsedAttachment;
   startedAt?: number;
@@ -172,9 +179,12 @@ function configurationHash(config: ModelConfig) {
 }
 function save(draft: PrivateDraft) {
   draft.updatedAt = now();
+  const { activity: omittedActivity, readiness: omittedReadiness, ...stored } = draft;
+  void omittedActivity;
+  void omittedReadiness;
   db()
     .prepare("UPDATE intake_drafts SET body=?,updated_at=? WHERE id=?")
-    .run(JSON.stringify(draft), Date.now(), draft.id);
+    .run(JSON.stringify(stored), Date.now(), draft.id);
 }
 function read(id: string, owner: string): PrivateDraft {
   const row = db()
@@ -226,17 +236,68 @@ function publicAttachment(attachment: StoredAttachment): IntakeAttachment {
   void omittedVisual;
   return view;
 }
-function publicDraft(draft: PrivateDraft): IntakeDraft {
-  const { config: omitted, configHash: omittedHash, summaryEdits: omittedEdits, ...view } = draft;
+function intakeActivity(draftId: string): IntakeActivity {
+  const operation = db()
+    .prepare(
+      "SELECT id,state FROM intake_operations WHERE draft_id=? AND state IN ('pending','uncertain') ORDER BY updated_at DESC,rowid DESC LIMIT 1",
+    )
+    .get(draftId) as { id: string; state: string } | undefined;
+  if (!operation) return { operationId: null, calls: [] };
+  const roles = new Map<string, ClarificationRole>([
+    ["clarification_A", "A"],
+    ["clarification_B", "B"],
+    ["clarification_C", "C"],
+  ]);
+  const calls: IntakeActivity["calls"] = [];
+  const records = db()
+    .prepare(
+      "SELECT id,kind,state,created_at FROM intake_calls WHERE operation_id=? ORDER BY created_at,rowid",
+    )
+    .all(operation.id) as { id: string; kind: string; state: string; created_at: number }[];
+  for (const record of records) {
+    const role = roles.get(record.kind);
+    if (!role) continue;
+    let state: IntakeActivity["calls"][number]["state"];
+    switch (record.state) {
+      case "pending":
+        state = operation.state === "pending" ? "running" : "uncertain";
+        break;
+      case "failed":
+      case "uncertain":
+        state = record.state;
+        break;
+      default:
+        continue;
+    }
+    calls.push({
+      callId: record.id,
+      operationId: operation.id,
+      role,
+      state,
+      startedAt: record.created_at,
+    });
+  }
+  return { operationId: operation.id, calls };
+}
+function publicDraft(draft: PrivateDraft): IntakeDraftResponse {
+  const {
+    config: omitted,
+    configHash: omittedHash,
+    summaryEdits: omittedEdits,
+    activity: omittedActivity,
+    readiness: omittedReadiness,
+    ...view
+  } = draft;
   void omitted;
   void omittedHash;
   void omittedEdits;
+  void omittedActivity;
+  void omittedReadiness;
   if (
     view.workflow === "clarification" &&
     view.clarification &&
     (draft.clarificationPromptHash !== clarificationProtocolHash() ||
-      !view.clarification.review ||
-      view.clarification.review.fingerprint !== clarificationFingerprint(draft))
+      !isCurrentClarificationReview(draft))
   ) {
     const state = structuredClone(view.clarification);
     view.clarification = {
@@ -248,7 +309,11 @@ function publicDraft(draft: PrivateDraft): IntakeDraft {
       executionPrompt: "",
     };
   }
-  return view;
+  return {
+    ...view,
+    activity: intakeActivity(draft.id),
+    readiness: derivePlanningReadiness(view),
+  };
 }
 function invalidateClarificationReport(
   draft: PrivateDraft,
@@ -557,7 +622,7 @@ function cleanup() {
 export function createIntake(
   owner: string,
   input: z.infer<typeof CreateIntakeSchema>,
-): IntakeDraft {
+): IntakeDraftResponse {
   input = CreateIntakeSchema.parse(input);
   return atomic(() => {
     cleanup();
@@ -599,7 +664,7 @@ export function createIntake(
     return publicDraft(draft);
   });
 }
-export function getIntake(draftId: string, owner: string): IntakeDraft {
+export function getIntake(draftId: string, owner: string): IntakeDraftResponse {
   expireOwnedDraft(draftId, owner);
   return atomic(() => {
     const draft = read(draftId, owner);
@@ -613,7 +678,7 @@ export function createFollowUpIntake(
   version: ArenaVersion,
   owner: string,
   titles: string[],
-): IntakeDraft | null {
+): IntakeDraftResponse | null {
   const arena = assertOwner(arenaId, owner);
   if (arena.active_version_id !== version.id)
     throw new ArenaError("任务版本已变化，请查看当前版本。", 409, "STALE_VERSION");
@@ -734,11 +799,66 @@ export function createFollowUpIntake(
   save(draft);
   return publicDraft(draft);
 }
+function applySummaryChanges(
+  draft: PrivateDraft,
+  summary: NonNullable<z.infer<typeof UpdateIntakeSchema>["summary"]>,
+  provenance: SummaryEdits["provenance"] = "user-edited-draft",
+) {
+  const fields = { ...draft.summaryEdits?.fields };
+  const changedFields: (keyof Challenge)[] = [];
+  const changedAssumptions =
+    JSON.stringify(summary.assumptions) !== JSON.stringify(draft.assumptions);
+  const rejectedAssumptions = rejectedAssumptionsFor(draft, summary.assumptions);
+  for (const key of Object.keys(summary.challenge) as (keyof Challenge)[]) {
+    if (
+      key !== "materials" &&
+      JSON.stringify(summary.challenge[key]) !== JSON.stringify(draft.challenge![key])
+    ) {
+      Object.assign(fields, { [key]: summary.challenge[key] });
+      changedFields.push(key);
+    }
+  }
+  const changedRejections = !isDeepStrictEqual(
+    rejectedAssumptions,
+    draft.summaryEdits?.rejectedAssumptions ?? [],
+  );
+  if (!changedFields.length && !changedAssumptions && !changedRejections) return false;
+  rememberConfirmation(draft);
+  if (changedFields.length) {
+    draft.confirmation!.pendingSummaryFields = [
+      ...new Set([...(draft.confirmation!.pendingSummaryFields ?? []), ...changedFields]),
+    ];
+    const affectedIds = new Set(
+      draft.answers
+        .filter((answer) =>
+          summaryFieldsForAnswer(draft, answer).some((field) => changedFields.includes(field)),
+        )
+        .map((answer) => answer.questionId),
+    );
+    invalidateDependents(draft, affectedIds);
+  }
+  invalidateClarificationReport(draft, "summary");
+  draft.summaryEdits = {
+    fields,
+    assumptions: summary.assumptions,
+    rejectedAssumptions,
+    provenance,
+    updatedAt: now(),
+    revision: draft.revision + 1,
+  };
+  draft.assumptions = [...summary.assumptions];
+  refreshSources(draft);
+  draft.challenge = ChallengeSchema.parse({
+    ...summary.challenge,
+    materials: materials(draft),
+  });
+  return true;
+}
 export function updateIntake(
   draftId: string,
   owner: string,
   input: z.infer<typeof UpdateIntakeSchema>,
-): IntakeDraft {
+): IntakeDraftResponse {
   expireOwnedDraft(draftId, owner);
   input = UpdateIntakeSchema.parse(input);
   return atomic(() => {
@@ -752,52 +872,13 @@ export function updateIntake(
           400,
           "MIXED_SUMMARY_UPDATE",
         );
-      if (draft.status !== "summary" || !draft.challenge)
+      if (
+        !draft.challenge ||
+        (draft.status !== "summary" &&
+          !(draft.workflow === "clarification" && draft.status === "questions"))
+      )
         throw new ArenaError("当前任务还没有可编辑的摘要。", 409, "SUMMARY_REQUIRED");
-      const fields = { ...draft.summaryEdits?.fields };
-      const changedFields: (keyof Challenge)[] = [];
-      const changedAssumptions =
-        JSON.stringify(input.summary.assumptions) !== JSON.stringify(draft.assumptions);
-      const rejectedAssumptions = rejectedAssumptionsFor(draft, input.summary.assumptions);
-      for (const key of Object.keys(input.summary.challenge) as (keyof Challenge)[]) {
-        if (
-          key !== "materials" &&
-          JSON.stringify(input.summary.challenge[key]) !== JSON.stringify(draft.challenge[key])
-        ) {
-          Object.assign(fields, { [key]: input.summary.challenge[key] });
-          changedFields.push(key);
-        }
-      }
-      if (changedFields.length || changedAssumptions) rememberConfirmation(draft);
-      if (changedFields.length) {
-        draft.confirmation!.pendingSummaryFields = [
-          ...new Set([...(draft.confirmation!.pendingSummaryFields ?? []), ...changedFields]),
-        ];
-        const affectedIds = new Set(
-          draft.answers
-            .filter((answer) =>
-              summaryFieldsForAnswer(draft, answer).some((field) => changedFields.includes(field)),
-            )
-            .map((answer) => answer.questionId),
-        );
-        invalidateDependents(draft, affectedIds);
-      }
-      if (changedFields.length || changedAssumptions)
-        invalidateClarificationReport(draft, "summary");
-      draft.summaryEdits = {
-        fields,
-        assumptions: input.summary.assumptions,
-        rejectedAssumptions,
-        provenance: "user-edited-draft",
-        updatedAt: now(),
-        revision: draft.revision + 1,
-      };
-      draft.assumptions = [...input.summary.assumptions];
-      refreshSources(draft);
-      draft.challenge = ChallengeSchema.parse({
-        ...input.summary.challenge,
-        materials: materials(draft),
-      });
+      if (!applySummaryChanges(draft, input.summary)) return publicDraft(draft);
       draft.revision++;
       save(draft);
       return publicDraft(draft);
@@ -1173,6 +1254,7 @@ async function executeClarification(
   config: ModelConfig,
   finish: boolean,
   submission?: z.infer<typeof SubmitIntakeSchema>,
+  intent: "continue" | "preview" = "continue",
 ) {
   const input = structuredClone(draft);
   if (!input.challenge && draft.summaryEdits) {
@@ -1194,6 +1276,7 @@ async function executeClarification(
     revision,
     config,
     finish,
+    intent,
     submit: submission,
     editedFields: draft.summaryEdits?.fields,
     editedAssumptions: draft.summaryEdits?.assumptions,
@@ -1202,9 +1285,13 @@ async function executeClarification(
     record: (state) =>
       atomic(() => {
         const current = read(draft.id, owner);
+        const operation = db()
+          .prepare("SELECT state FROM intake_operations WHERE id=? AND draft_id=?")
+          .get(operationId, draft.id) as { state: string } | undefined;
         if (
           current.status !== "analyzing" ||
           current.revision !== revision ||
+          operation?.state !== "pending" ||
           !linkedVersionCurrent(current)
         )
           throw new ArenaError(
@@ -1240,16 +1327,17 @@ function commitClarificationResult(
   revision: number,
   result: Awaited<ReturnType<typeof runClarification>>,
   submission?: z.infer<typeof SubmitIntakeSchema>,
+  intent: "continue" | "preview" = "continue",
 ) {
   return atomic(() => {
     const draft = read(draftId, owner);
     const operation = db()
-      .prepare("SELECT state FROM intake_operations WHERE id=?")
-      .get(operationId) as { state: string };
+      .prepare("SELECT state FROM intake_operations WHERE id=? AND draft_id=?")
+      .get(operationId, draftId) as { state: string } | undefined;
     if (
       draft.status !== "analyzing" ||
       draft.revision !== revision ||
-      operation.state !== "pending"
+      operation?.state !== "pending"
     )
       return publicDraft(draft);
     if (!linkedVersionCurrent(draft))
@@ -1264,12 +1352,17 @@ function commitClarificationResult(
       draft.confirmation!.pendingSummaryFields = [];
     }
     draft.clarification = result.state;
-    draft.questions = result.questions;
-    draft.queuedQuestions = [];
+    if (intent !== "preview") {
+      draft.questions = result.questions;
+      draft.queuedQuestions = [];
+      draft.round = result.state.rounds.at(-1)?.round ?? draft.round;
+    }
     draft.challenge = result.challenge;
     draft.assumptions = result.assumptions;
-    draft.status = result.status;
-    draft.round = result.state.rounds.at(-1)?.round ?? draft.round;
+    draft.status =
+      intent === "preview" && (draft.questions.length || draft.queuedQuestions?.length)
+        ? "questions"
+        : result.status;
     draft.error = null;
     draft.revision++;
     db()
@@ -1286,45 +1379,73 @@ export async function submitClarificationIntake(
   input: z.infer<typeof SubmitIntakeSchema>,
 ) {
   input = SubmitIntakeSchema.parse(input);
-  let current = read(draftId, owner);
+  expireOwnedDraft(draftId, owner);
+  let current = atomic(() => {
+    const draft = read(draftId, owner);
+    recoverStale(draft);
+    return draft;
+  });
   if (current.workflow !== "clarification") return submitIntake(draftId, owner, input);
   if (current.arenaId) return getArena(current.arenaId, owner);
   const challenge = ChallengeSchema.parse({ ...input.challenge, materials: materials(current) });
-  if (
-    current.revision === input.revision &&
-    current.status === "summary" &&
-    current.clarificationPromptHash === clarificationProtocolHash() &&
-    current.clarification?.next === "completed" &&
-    current.clarification.review?.fingerprint ===
-      clarificationFingerprint(current, { ...input, challenge }) &&
-    JSON.stringify(input.assumptions) === JSON.stringify(current.assumptions) &&
-    JSON.stringify(challenge) === JSON.stringify(current.challenge)
-  )
-    return createArena(challenge, owner, current.modelMode, {
+  const initialSubmission = { ...input, challenge };
+  const reusable = atomic(() => {
+    const draft = read(draftId, owner);
+    mutable(draft, input.revision);
+    const state = draft.clarification;
+    const draftOnly = state?.requestedDraft === true;
+    const statusAllowsSubmission = draft.status === "summary" || draft.status === "questions";
+    if (
+      !statusAllowsSubmission ||
+      !state ||
+      draft.clarificationPromptHash !== clarificationProtocolHash() ||
+      !isCurrentClarificationReview(draft, initialSubmission) ||
+      (!draftOnly &&
+        (!state.review?.ready ||
+          hasBlockingUnconfirmedItems(draft, initialSubmission) ||
+          state.conflicts.length)) ||
+      !isDeepStrictEqual(input.assumptions, draft.assumptions) ||
+      !isDeepStrictEqual(challenge, draft.challenge)
+    )
+      return null;
+    frozenConfiguration(draft);
+    rememberConfirmation(draft);
+    draft.confirmation!.summary = {
+      revision: draft.revision,
+      confirmedAt: now(),
+      challenge: structuredClone(challenge),
+    };
+    draft.confirmation!.pendingSummaryFields = [];
+    state.next = "completed";
+    state.draftOnly = draftOnly;
+    draft.status = "summary";
+    draft.revision++;
+    save(draft);
+    return draft;
+  });
+  if (reusable)
+    return createArena(challenge, owner, reusable.modelMode, {
       intakeId: draftId,
-      revision: input.revision,
-      assumptions: current.assumptions,
+      revision: reusable.revision,
+      assumptions: reusable.assumptions,
     });
   const operationId = id();
   const claim = atomic(() => {
     const draft = read(draftId, owner);
     mutable(draft, input.revision);
-    if (draft.status !== "summary" || !draft.challenge)
+    const statusAllowsSubmission = draft.status === "summary" || draft.status === "questions";
+    if (!statusAllowsSubmission || !draft.challenge)
       throw new ArenaError("请先整理并核对当前需求摘要。", 409, "SUMMARY_REQUIRED");
     const config = frozenConfiguration(draft);
-    if (JSON.stringify(input.assumptions) !== JSON.stringify(draft.assumptions)) {
-      rememberConfirmation(draft);
-      draft.summaryEdits = {
-        fields: { ...draft.summaryEdits?.fields },
-        assumptions: [...input.assumptions],
-        rejectedAssumptions: rejectedAssumptionsFor(draft, input.assumptions),
-        provenance: "user-confirmed-summary",
-        updatedAt: now(),
-        revision: draft.revision + 1,
-      };
-      draft.assumptions = [...input.assumptions];
-      invalidateClarificationReport(draft);
-    }
+    applySummaryChanges(
+      draft,
+      { challenge: input.challenge, assumptions: input.assumptions },
+      "user-confirmed-summary",
+    );
+    const submission = {
+      ...input,
+      challenge: ChallengeSchema.parse({ ...input.challenge, materials: materials(draft) }),
+    };
     draft.status = "analyzing";
     draft.revision++;
     db()
@@ -1340,8 +1461,9 @@ export async function submitClarificationIntake(
         Date.now(),
       );
     save(draft);
-    return { draft, config };
+    return { draft, config, submission };
   });
+  const { submission } = claim;
   try {
     const result = await executeClarification(
       claim.draft,
@@ -1350,11 +1472,32 @@ export async function submitClarificationIntake(
       claim.draft.revision,
       claim.config,
       !!claim.draft.clarification?.requestedDraft,
-      { ...input, challenge },
+      submission,
     );
-    const canDeliver = result.state.review?.ready || result.state.requestedDraft;
+    const reviewed = {
+      ...claim.draft,
+      clarification: result.state,
+      challenge: result.challenge,
+      assumptions: result.assumptions,
+      confirmation: {
+        ...(claim.draft.confirmation ?? { history: [] }),
+        summary: {
+          revision: claim.draft.revision,
+          confirmedAt: now(),
+          challenge: structuredClone(submission.challenge),
+        },
+        pendingSummaryFields: [],
+      },
+    };
+    const canDeliver =
+      isCurrentClarificationReview(reviewed, submission) &&
+      (result.state.requestedDraft === true ||
+        (result.state.review?.ready === true &&
+          !hasBlockingUnconfirmedItems(reviewed, submission) &&
+          !result.state.conflicts.length));
     if (canDeliver) {
       result.state.next = "completed";
+      result.state.draftOnly = result.state.requestedDraft === true;
       result.status = "summary";
       result.questions = [];
     }
@@ -1364,10 +1507,19 @@ export async function submitClarificationIntake(
       operationId,
       claim.draft.revision,
       result,
-      { ...input, challenge },
+      submission,
     );
-    if (!canDeliver || saved.clarification?.next !== "completed") return saved;
-    return createArena(challenge, owner, saved.modelMode, {
+    if (
+      !canDeliver ||
+      saved.revision !== claim.draft.revision + 1 ||
+      saved.status !== "summary" ||
+      saved.clarification?.next !== "completed" ||
+      !isCurrentClarificationReview(saved, submission) ||
+      (!saved.clarification.requestedDraft &&
+        (!saved.clarification.review?.ready || hasBlockingUnconfirmedItems(saved, submission)))
+    )
+      return saved;
+    return createArena(submission.challenge, owner, saved.modelMode, {
       intakeId: draftId,
       revision: saved.revision,
       assumptions: saved.assumptions,
@@ -1377,7 +1529,10 @@ export async function submitClarificationIntake(
     if (current.status === "analyzing" && current.revision === claim.draft.revision)
       atomic(() => {
         const draft = read(draftId, owner);
-        if (draft.revision !== claim.draft.revision) return;
+        const operation = db()
+          .prepare("SELECT state FROM intake_operations WHERE id=? AND draft_id=?")
+          .get(operationId, draftId) as { state: string } | undefined;
+        if (draft.revision !== claim.draft.revision || operation?.state !== "pending") return;
         const uncertain = error instanceof ModelCallError && error.uncertain;
         draft.status = uncertain ? "uncertain" : "failed";
         draft.error = error instanceof Error ? error.message : "本轮查漏失败，已保留记录。";
@@ -1394,23 +1549,47 @@ export async function submitClarificationIntake(
 export async function analyzeIntake(
   draftId: string,
   owner: string,
-  input: z.infer<typeof AnalyzeIntakeSchema>,
-): Promise<IntakeDraft> {
+  rawInput: z.input<typeof AnalyzeIntakeSchema>,
+): Promise<IntakeDraftResponse> {
   expireOwnedDraft(draftId, owner);
-  input = AnalyzeIntakeSchema.parse(input);
+  const input = AnalyzeIntakeSchema.parse(rawInput);
   const claim = atomic(() => {
     const draft = read(draftId, owner);
     recoverStale(draft);
     const existing = db()
       .prepare("SELECT * FROM intake_operations WHERE id=?")
       .get(input.operationId) as OperationRow | undefined;
-    const payload = JSON.stringify({ draftId, revision: input.revision, finish: input.finish });
+    const payload = {
+      draftId,
+      revision: input.revision,
+      finish: input.finish,
+      intent: input.intent,
+    };
     if (existing) {
-      if (existing.draft_id !== draftId || existing.body !== payload)
+      let previousPayload: unknown;
+      try {
+        const stored: unknown = JSON.parse(existing.body);
+        if (stored && typeof stored === "object" && !Array.isArray(stored))
+          previousPayload = {
+            ...stored,
+            intent: Object.hasOwn(stored, "intent")
+              ? (stored as { intent: unknown }).intent
+              : "continue",
+          };
+      } catch {
+        // A malformed historical payload cannot establish an idempotent request identity.
+      }
+      if (existing.draft_id !== draftId || !isDeepStrictEqual(previousPayload, payload))
         throw new ArenaError("此操作编号已用于另一份输入，请刷新后重试。", 409, "OPERATION_REUSED");
       return { duplicate: true, draft, config: draft.config };
     }
     mutable(draft, input.revision);
+    if (input.intent === "preview" && draft.workflow !== "clarification")
+      throw new ArenaError(
+        "规划预览需要当前需求查漏工作区的 A/B 结果，请先继续整理。",
+        409,
+        "CLARIFICATION_ANALYSIS_STALE",
+      );
     if (draft.goal.trim().length < 2)
       throw new ArenaError("请先写下要解决的问题，至少写两个字。", 400, "GOAL_REQUIRED");
     if (
@@ -1437,14 +1616,22 @@ export async function analyzeIntake(
       .prepare(
         "INSERT INTO intake_operations(id,draft_id,revision,body,state,updated_at) VALUES(?,?,?,?,?,?)",
       )
-      .run(input.operationId, draftId, input.revision, payload, "pending", Date.now());
+      .run(
+        input.operationId,
+        draftId,
+        input.revision,
+        JSON.stringify(payload),
+        "pending",
+        Date.now(),
+      );
     save(draft);
     return { duplicate: false, draft, config };
   });
   if (claim.duplicate) return publicDraft(claim.draft);
   const config = claim.config!;
   try {
-    for (const attachment of storedAttachments(draftId)) {
+    const analysisAttachments = input.intent === "preview" ? [] : storedAttachments(draftId);
+    for (const attachment of analysisAttachments) {
       if (!attachment.parsed?.images.length || attachment.state !== "ready") continue;
       if (attachment.visual?.configHash !== claim.draft.configHash)
         attachment.visual = { configHash: claim.draft.configHash!, batches: {} };
@@ -1494,6 +1681,8 @@ export async function analyzeIntake(
         claim.draft.revision,
         config,
         input.finish,
+        undefined,
+        input.intent,
       );
       return commitClarificationResult(
         draftId,
@@ -1501,6 +1690,8 @@ export async function analyzeIntake(
         input.operationId,
         claim.draft.revision,
         result,
+        undefined,
+        input.intent,
       );
     }
     const finish = input.finish;
@@ -1706,7 +1897,7 @@ export async function addIntakeAttachment(
   owner: string,
   bytes: Buffer,
   filename: string,
-): Promise<IntakeDraft> {
+): Promise<IntakeDraftResponse> {
   expireOwnedDraft(draftId, owner);
   const name = path
     .basename(filename.replace(/\\/g, "/"))
@@ -1768,7 +1959,7 @@ export async function selectIntakePages(
   owner: string,
   attachmentId: string,
   pages: number[],
-): Promise<IntakeDraft> {
+): Promise<IntakeDraftResponse> {
   expireOwnedDraft(draftId, owner);
   if (
     !pages.length ||
@@ -1805,7 +1996,7 @@ export function removeIntakeAttachment(
   draftId: string,
   owner: string,
   attachmentId: string,
-): IntakeDraft {
+): IntakeDraftResponse {
   expireOwnedDraft(draftId, owner);
   return atomic(() => {
     const draft = read(draftId, owner);

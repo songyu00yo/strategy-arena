@@ -24,6 +24,7 @@ export interface ClarificationContext {
   operationId: string;
   revision: number;
   finish: boolean;
+  intent?: "continue" | "preview";
   config: ModelConfig;
   submit?: { challenge: Challenge; assumptions: string[] };
   editedFields?: Partial<Omit<Challenge, "materials">>;
@@ -32,16 +33,25 @@ export interface ClarificationContext {
   call: <T>(role: "A" | "B" | "C", request: StructuredRequest<T>) => Promise<T>;
   record: (state: ClarificationState) => void;
 }
+let cachedProtocolHash: string | undefined;
 export function clarificationProtocolHash() {
-  return createHash("sha256")
+  if (cachedProtocolHash) return cachedProtocolHash;
+  cachedProtocolHash = createHash("sha256")
     .update(
       JSON.stringify({
+        version: "clarification-schema-2",
         protocol: CLARIFICATION_PROTOCOL,
         system: CLARIFICATION_SYSTEM,
         roles: CLARIFICATION_ROLES,
+        schemas: {
+          decomposition: z.toJSONSchema(DecompositionSchema),
+          options: z.toJSONSchema(OptionReviewSchema),
+          handoff: z.toJSONSchema(HandoffReviewSchema),
+        },
       }),
     )
     .digest("hex");
+  return cachedProtocolHash;
 }
 export function clarificationReviewConfig(config: ModelConfig): ModelConfig {
   const override =
@@ -65,43 +75,100 @@ export function emptyClarification(): ClarificationState {
     executionPrompt: "",
   };
 }
+function fingerprint(value: unknown) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+function confirmedSubmission(draft: IntakeDraft, submission?: ClarificationContext["submit"]) {
+  if (submission) return { challenge: submission.challenge, assumptions: submission.assumptions };
+  const summary = draft.confirmation?.summary;
+  return summary ? { challenge: summary.challenge, assumptions: draft.assumptions } : null;
+}
 export function clarificationFingerprint(
   draft: IntakeDraft,
   submission?: ClarificationContext["submit"],
 ) {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        goal: draft.goal,
-        modelMode: draft.modelMode,
-        answers: draft.answers.map((answer) => ({
-          questionId: answer.questionId,
-          state: answer.state,
-          value: answer.value,
-          confirmation: answer.confirmation,
-          needsReconfirmation: answer.needsReconfirmation,
-        })),
-        sources: draft.sources.map((source) => ({
-          id: source.id,
-          attachmentId: source.attachmentId,
-          location: source.location,
-          text: source.text,
-          interpretation: source.interpretation,
-          origin: source.origin,
-        })),
-        attachments: (draft.attachments ?? []).map((attachment) => ({
-          id: attachment.id,
-          name: attachment.name,
-          state: attachment.state,
-          locations: attachment.locations,
-          warnings: attachment.warnings,
-        })),
-        summary: submission?.challenge ?? draft.challenge,
-        pendingFields: draft.confirmation?.pendingSummaryFields ?? [],
-        feedback: draft.clarification?.feedback ?? [],
-      }),
+  return fingerprint({
+    protocolHash: clarificationProtocolHash(),
+    goal: draft.goal,
+    modelMode: draft.modelMode,
+    answers: draft.answers.map((answer) => ({
+      questionId: answer.questionId,
+      question: answer.question,
+      state: answer.state,
+      value: answer.value,
+      confirmation: answer.confirmation,
+      needsReconfirmation: answer.needsReconfirmation,
+    })),
+    sources: draft.sources,
+    attachments: (draft.attachments ?? []).map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      state: attachment.state,
+      locations: attachment.locations,
+      warnings: attachment.warnings,
+    })),
+    summary: submission?.challenge ?? draft.challenge,
+    submittedRequirements: confirmedSubmission(draft, submission),
+    assumptions: submission?.assumptions ?? draft.assumptions,
+    pendingFields: submission ? [] : (draft.confirmation?.pendingSummaryFields ?? []),
+    items: draft.clarification ? activeItems(draft.clarification) : [],
+    conflicts: draft.clarification?.conflicts ?? [],
+    feedback: draft.clarification?.feedback ?? [],
+  });
+}
+function analysisFingerprint(draft: IntakeDraft, submission?: ClarificationContext["submit"]) {
+  // Unconfirmed new answers can inform C's provisional plan without changing the confirmed graph.
+  return fingerprint({
+    protocolHash: clarificationProtocolHash(),
+    goal: draft.goal,
+    modelMode: draft.modelMode,
+    answers: draft.answers.filter(confirmed).map((answer) => ({
+      questionId: answer.questionId,
+      question: answer.question,
+      state: answer.state,
+      value: answer.value,
+      confirmation: answer.confirmation,
+      needsReconfirmation: answer.needsReconfirmation,
+    })),
+    sources: draft.sources,
+    attachments: (draft.attachments ?? []).map((attachment) => ({
+      id: attachment.id,
+      state: attachment.state,
+      locations: attachment.locations,
+    })),
+    summary: submission?.challenge ?? draft.challenge,
+    assumptions: submission?.assumptions ?? draft.assumptions,
+    feedback: draft.clarification?.feedback ?? [],
+  });
+}
+function hasCurrentAnalysis(draft: IntakeDraft, submission?: ClarificationContext["submit"]) {
+  const state = draft.clarification;
+  return (
+    !!state?.items.length &&
+    state.analysisFingerprint === analysisFingerprint(draft, submission) &&
+    state.runs.some(
+      (run) =>
+        run.role === "A" &&
+        run.status === "completed" &&
+        run.promptHash === clarificationProtocolHash(),
     )
-    .digest("hex");
+  );
+}
+export function isCurrentClarificationReview(
+  draft: IntakeDraft,
+  submission?: ClarificationContext["submit"],
+) {
+  const state = draft.clarification;
+  const run = state?.runs.findLast((entry) => entry.role === "C");
+  return (
+    !!state?.review &&
+    !!run &&
+    run.status === "completed" &&
+    run.promptHash === clarificationProtocolHash() &&
+    state.review.basedOnRevision === run.basedOnRevision &&
+    state.review.basedOnRevision <= draft.revision &&
+    state.review.fingerprint === clarificationFingerprint(draft, submission)
+  );
 }
 export function decisionAnswer(draft: IntakeDraft, item: DecisionItem): RecordedAnswer | undefined {
   return draft.answers.findLast(
@@ -120,6 +187,31 @@ function confirmed(answer: RecordedAnswer | undefined) {
     return hasCompleteChoiceAnswer(answer.question.type, answer.question.options, answer.value);
   const value = Array.isArray(answer.value) ? answer.value.join("、") : answer.value;
   return !!value.trim();
+}
+function authorizationDecision(answer: RecordedAnswer): "allow" | "deny" | null {
+  if (!confirmed(answer) || !answer.question.authorization) return null;
+  return explicitDecisionValue(answer.value);
+}
+function explicitDecisionValue(value: RecordedAnswer["value"]): "allow" | "deny" | null {
+  const textValue = (Array.isArray(value) ? value.join(" ") : value).trim();
+  if (
+    /是否|能否|尚未|还没|未(?:确定|决定|确认)|待定|不确定|不知道|不清楚|再考虑|以后再|同意与否|不一定|也许/.test(
+      textValue,
+    )
+  )
+    return null;
+  const text = textValue.replace(/^(?:我(?:们)?|本人)(?:明确)?/, "");
+  if (
+    /^(?:同意|允许|授权)(?!与否|吗|[？?])/.test(text) ||
+    /^(?:是(?:的)?|yes|agree|allow)(?:$|[\s，,。！!、（(])/i.test(text)
+  )
+    return "allow";
+  if (
+    /^(?:拒绝|不同意|不允许|不授权|不公开|不采集|不需要|不用|仅本人)/.test(text) ||
+    /^(?:否|no|deny)(?:$|[\s，,。！!、（(])/i.test(text)
+  )
+    return "deny";
+  return null;
 }
 function deferred(answer: RecordedAnswer | undefined) {
   return (
@@ -163,7 +255,11 @@ function resolved(
 ) {
   const existingAnswer = decisionAnswer(draft, item);
   if (existingAnswer?.needsReconfirmation) return false;
-  if (confirmed(existingAnswer)) return true;
+  if (confirmed(existingAnswer)) {
+    return (
+      !existingAnswer!.question.authorization || authorizationDecision(existingAnswer!) !== null
+    );
+  }
   if (!item.provided) return false;
   if (!item.provided.sourceRef.trim() || !concreteProvidedQuote(item.provided.quote)) return false;
   if (
@@ -191,6 +287,69 @@ function resolved(
   const value = answer && (Array.isArray(answer.value) ? answer.value.join("、") : answer.value);
   return confirmed(answer) && !!value?.includes(quote);
 }
+function explicitlyRequired(
+  draft: IntakeDraft,
+  item: DecisionItem,
+  submission?: ClarificationContext["submit"],
+) {
+  const answer = decisionAnswer(draft, item);
+  if (
+    answer?.question.authorization ||
+    draft.questions.some(
+      (question) => (question.decisionId ?? question.id) === item.id && question.authorization,
+    )
+  )
+    return true;
+  const value = confirmed(answer)
+    ? Array.isArray(answer!.value)
+      ? answer!.value.join("、")
+      : answer!.value
+    : "";
+  const quote = item.provided && resolved(draft, item, submission) ? item.provided.quote : "";
+  return /必须|务必|必需|不可缺少|\b(?:must|required|mandatory)\b/i.test(value + quote);
+}
+export function hasBlockingUnconfirmedItems(
+  draft: IntakeDraft,
+  submission?: ClarificationContext["submit"],
+) {
+  const state = draft.clarification;
+  if (!state) return true;
+  const items = activeItems(state);
+  const required = new Set(
+    items
+      .filter((item) => item.required || explicitlyRequired(draft, item, submission))
+      .map((item) => item.id),
+  );
+  for (const id of required) {
+    const item = items.find((entry) => entry.id === id);
+    if (!item) return true;
+    for (const dependency of item.dependsOn) {
+      if (!state.retiredIds.includes(dependency)) required.add(dependency);
+    }
+  }
+  return items.some((item) => required.has(item.id) && !resolved(draft, item, submission));
+}
+export function derivePlanningReadiness(
+  draft: IntakeDraft,
+): import("../intake-contracts").PlanningReadiness {
+  if (!hasCurrentAnalysis(draft)) return "not_ready";
+  const state = draft.clarification!;
+  if (state.requestedDraft) return "previewable";
+  if (
+    !isCurrentClarificationReview(draft) ||
+    !state.review?.ready ||
+    hasBlockingUnconfirmedItems(draft) ||
+    state.conflicts.length ||
+    draft.confirmation?.pendingSummaryFields?.length
+  )
+    return "previewable";
+  return draft.confirmation?.summary &&
+    !state.draftOnly &&
+    !state.requestedDraft &&
+    state.next === "completed"
+    ? "handoff_ready"
+    : "requirement_ready";
+}
 function mergeItems(state: ClarificationState, incoming: DecisionItem[], draft: IntakeDraft) {
   const items = new Map(state.items.map((item) => [item.id, item]));
   if (new Set(incoming.map((item) => item.id)).size !== incoming.length)
@@ -198,9 +357,52 @@ function mergeItems(state: ClarificationState, incoming: DecisionItem[], draft: 
   for (const item of incoming) {
     const prior = items.get(item.id);
     if (prior && confirmed(decisionAnswer(draft, prior))) continue;
-    items.set(item.id, item);
+    const protectedRequired =
+      explicitlyRequired(draft, item) ||
+      (prior?.required && (prior.topic === "authorization" || explicitlyRequired(draft, prior)));
+    items.set(item.id, protectedRequired ? { ...item, required: true } : item);
   }
   state.items = [...items.values()];
+}
+function protectedRetirementHasSource(
+  draft: IntakeDraft,
+  item: DecisionItem,
+  answerIds: string[],
+  baseline: { items: DecisionItem[]; answers?: RecordedAnswer[]; revision?: number },
+) {
+  const related = new Set(item.dependsOn);
+  for (const id of related) {
+    const dependency = baseline.items.find((entry) => entry.id === id);
+    for (const parent of dependency?.dependsOn ?? []) related.add(parent);
+  }
+  return answerIds.some((id) => {
+    const answer = draft.answers.findLast((entry) => entry.questionId === id);
+    if (!confirmed(answer)) return false;
+    const decisionId = answer!.question.decisionId ?? answer!.questionId;
+    if (decisionId === item.id) {
+      if (item.topic === "authorization" || answer!.question.authorization)
+        return explicitDecisionValue(answer!.value) === "deny";
+      const text = Array.isArray(answer!.value) ? answer!.value.join(" ") : answer!.value;
+      return /^(?:我(?:们)?|本人)?(?:取消|删除|移除|撤销|不再需要|不再要求|不需要|不用|不要)/.test(
+        text.trim(),
+      );
+    }
+    if (!related.has(decisionId) || !baseline.items.some((entry) => entry.id === decisionId))
+      return false;
+    if (baseline.answers) {
+      const previous = baseline.answers.findLast(
+        (entry) => (entry.question.decisionId ?? entry.questionId) === decisionId,
+      );
+      const semanticValue = (entry: RecordedAnswer) =>
+        JSON.stringify(Array.isArray(entry.value) ? [...entry.value].sort() : entry.value.trim());
+      return !confirmed(previous) || semanticValue(previous!) !== semanticValue(answer!);
+    }
+    return (
+      baseline.revision !== undefined &&
+      answer!.confirmedRevision !== undefined &&
+      answer!.confirmedRevision > baseline.revision
+    );
+  });
 }
 function activeItems(state: ClarificationState) {
   return state.items.filter((item) => !state.retiredIds.includes(item.id));
@@ -279,7 +481,9 @@ export function formatClarification(
   } as const;
   const projectOverview = [
     ...(state.review?.summary
-      ? [`- **AI 项目归纳（基于当前确认记录，非新增需求）**：${state.review.summary}`]
+      ? [
+          `- **AI 项目归纳（基于当前确认记录，非新增需求）**：${state.review.projectOverview || state.review.summary}`,
+        ]
       : ["- AI 项目归纳：尚无 C 角色总结；以下仅列已确认事实。"]),
     ...(!pendingFields.has("budget") && summary?.budget != null
       ? [`- **预算上限**：¥${summary.budget}（用户确认）`]
@@ -379,11 +583,7 @@ export function formatClarification(
   });
   const budgetKnown = !pendingFields.has("budget") && confirmedSummary?.budget != null;
   const timeKnown = !pendingFields.has("timeHours") && confirmedSummary?.timeHours != null;
-  const authorizationGranted = formal.some((answer) => {
-    if (!answer.question.authorization) return false;
-    const value = Array.isArray(answer.value) ? answer.value.join(" ").trim() : answer.value.trim();
-    return /^(?:同意|允许|确认|是)(?:$|[，,、：: （(])|^(?:yes|agree)(?:$|\b)/i.test(value);
-  });
+  const authorizationGranted = formal.some((answer) => authorizationDecision(answer) === "allow");
   const feasibilityLines = coverageRows.map(
     (row) =>
       `- ${row.label}：${row.status}${row.reasons.length ? `；依据：${row.reasons.join("；")}` : ""}`,
@@ -442,6 +642,15 @@ export function formatClarification(
   const aiPlan = state.review?.implementationPlan ?? [];
   const aiTradeoffs = state.review?.tradeoffs ?? [];
   const aiRisks = state.review?.risks ?? [];
+  const deliveryPlan = state.review?.deliveryPlan;
+  const deliveryPlanLines = deliveryPlan
+    ? [
+        "### 交付物（AI 规划，待核验）",
+        ...deliveryPlan.deliverables.map((entry) => `- ${entry}`),
+        "### 验收策略（AI 规划，待核验）",
+        ...deliveryPlan.acceptanceStrategy.map((entry) => `- ${entry}`),
+      ]
+    : [];
   reportGaps.push(
     ...aiFeasibility
       .filter((entry) => entry.status === "blocked")
@@ -470,10 +679,10 @@ export function formatClarification(
   );
   const planStages = [
     "1. 需求冻结：列出已确认答案、未决事项、授权边界和来源；由用户确认后锁定正式需求版本。",
-    "2. 技术验证：对接口、数据、安全、性能、部署等关键风险做最小验证；失败时回到方案取舍。",
+    "2. 条件验证：根据项目目标核查资源、材料、流程和交付环境，保留尚未验证的条件。",
     "3. 分阶段实现：先完成最小闭环，再扩展次要能力；每项任务绑定输入、输出、依赖和验收。",
-    "4. 集成验收：执行功能、异常、权限、恢复、性能和兼容测试，保留可复核记录。",
-    "5. 发布复盘：交付部署/使用说明、已知限制、运维责任及未完成事项；变更需求创建新版本。",
+    "4. 交付验收：按已确认的成果与验收标准逐项检查，保留实际结果和未完成事项。",
+    "5. 交接复盘：交付使用或执行说明、已知限制、责任和未完成事项；变更需求另作确认。",
   ];
   lines.push(
     "## 可行性分析",
@@ -496,6 +705,9 @@ export function formatClarification(
     "## 产品与实施规划（AI 分析；不扩大用户授权）",
     "以下阶段计划来自 C 角色分析；每阶段包含任务、依赖、交付物、验收和估算依据。缺少的内容不得由执行者自行补成已确认要求。",
     ...(aiPlanLines.length ? aiPlanLines : planStages),
+    ...(deliveryPlanLines.length
+      ? ["", "## 交付与验收规划（AI 分析，待核验）", ...deliveryPlanLines]
+      : []),
     "",
     "## 实施路径与方案取舍（AI 分析，非用户确认）",
     "- 根据已确认目标、活动或产品流程、资源约束和交付环境选择实施方式；不预设必须采用软件、网站或其他特定技术形式。",
@@ -597,6 +809,12 @@ export function formatClarification(
       ? ["C 角色 AI 可行性初判（非实测）：", ...aiFeasibilityLines]
       : []),
     ...(aiPlanLines.length ? ["C 角色 AI 实施计划（估算与任务均需核验）：", ...aiPlanLines] : []),
+    ...(state.review?.projectOverview
+      ? [`C 角色 AI 项目概述（非新增确认）：${state.review.projectOverview}`]
+      : []),
+    ...(deliveryPlanLines.length
+      ? ["C 角色 AI 交付与验收规划（待核验）：", ...deliveryPlanLines]
+      : []),
     ...(tradeoffLines.length ? ["AI 方案取舍（不是用户确认）：", ...tradeoffLines] : []),
     ...(riskLines.length ? ["AI 风险分析：", ...riskLines] : []),
     ...(state.suggestions.length
@@ -621,62 +839,7 @@ export function formatClarification(
   ].join("\n");
 }
 
-export async function runClarification(draft: IntakeDraft, context: ClarificationContext) {
-  draft = structuredClone(draft);
-  const pendingFields = new Set<keyof Challenge>(
-    context.submit ? [] : (draft.confirmation?.pendingSummaryFields ?? []),
-  );
-  if (!context.submit) {
-    const confirmedSummary = draft.confirmation?.summary?.challenge;
-    for (const field of Object.keys(context.editedFields ?? {}) as (keyof Omit<
-      Challenge,
-      "materials"
-    >)[]) {
-      if (
-        JSON.stringify(context.editedFields?.[field]) !== JSON.stringify(confirmedSummary?.[field])
-      )
-        pendingFields.add(field);
-    }
-  }
-  draft.confirmation = {
-    ...(draft.confirmation ?? { history: [] }),
-    pendingSummaryFields: [...pendingFields],
-  };
-  if (context.submit)
-    draft.confirmation.summary = {
-      revision: context.revision,
-      confirmedAt: new Date().toISOString(),
-      challenge: structuredClone(context.submit.challenge),
-    };
-  const state = structuredClone(draft.clarification ?? emptyClarification());
-  const retainedAssumptions = context.submit?.assumptions ?? context.editedAssumptions;
-  const rejectedAssumptions = [...new Set(context.rejectedAssumptions ?? [])];
-  const priorReview = state.runs.findLast(
-    (run) => run.role === "C" && run.status === "completed",
-  )?.output;
-  const priorGapIds = new Set(
-    priorReview && "gaps" in priorReview ? priorReview.gaps.map((gap) => gap.id) : [],
-  );
-  state.review = null;
-  const round = draft.round + 1;
-  const previousItems = structuredClone(state.items);
-  const previouslyRetired = new Set(state.retiredIds);
-  const runStart = state.runs.length;
-  const common = {
-    originalGoal: draft.goal,
-    answers: draft.answers,
-    confirmedSummary: context.submit ?? draft.confirmation?.summary,
-    editedSummary: draft.challenge,
-    editedFields: context.editedFields,
-    assumptions: retainedAssumptions ?? draft.assumptions,
-    editedAssumptions: retainedAssumptions,
-    rejectedSuggestions: rejectedAssumptions,
-    pendingSummaryFields: [...pendingFields],
-    sources: draft.sources,
-    previousItems: activeItems(state),
-    retiredItems: state.items.filter((item) => previouslyRetired.has(item.id)),
-    caseContext: "用户材料是需求来源，产品内实际提交的answers才是本轮回答。执行反馈尚未发生。",
-  };
+function createRoleCaller(context: ClarificationContext, state: ClarificationState, round: number) {
   async function role<T>(
     name: ClarificationRun["role"],
     schema: z.ZodType<T>,
@@ -697,6 +860,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       ...(repairOf ? { repairOf } : {}),
     };
     run.promptHash = clarificationProtocolHash();
+    run.inputFingerprint = fingerprint(input);
     try {
       const value = schema.parse(
         await context.call(name, {
@@ -746,6 +910,187 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       throw error;
     }
   }
+  return role;
+}
+function reviewInput(draft: IntakeDraft, state: ClarificationState, context: ClarificationContext) {
+  return {
+    originalGoal: draft.goal,
+    answers: draft.answers,
+    confirmedSummary: confirmedSubmission(draft, context.submit),
+    editedSummary: context.submit?.challenge ?? draft.challenge,
+    assumptions: context.submit?.assumptions ?? draft.assumptions,
+    editedAssumptions: context.submit?.assumptions ?? context.editedAssumptions,
+    pendingSummaryFields: context.submit ? [] : (draft.confirmation?.pendingSummaryFields ?? []),
+    rejectedSuggestions: context.rejectedAssumptions ?? [],
+    sources: draft.sources,
+    feedback: state.feedback ?? [],
+    items: activeItems(state),
+    conflicts: state.conflicts,
+    submittedRequirements: confirmedSubmission(draft, context.submit),
+    caseContext: "用户材料与未确认回答保持来源状态，不得据此推定确认或授权。执行反馈尚未发生。",
+  };
+}
+function applyReview(
+  draft: IntakeDraft,
+  state: ClarificationState,
+  context: ClarificationContext,
+  review: z.infer<typeof HandoffReviewSchema>,
+  currentConflicts: string[],
+) {
+  const gaps = review.gaps.map((gap) => {
+    if (confirmed(decisionAnswer(draft, gap))) return gap;
+    const { provided: omitted, ...pending } = gap;
+    void omitted;
+    return pending;
+  });
+  mergeItems(state, gaps, draft);
+  state.conflicts = [...new Set([...currentConflicts, ...review.conflicts])];
+  const coverage =
+    ["function", "content", "flow", "style"].every((topic) =>
+      review.coverage.some((entry) => entry.topic === topic),
+    ) &&
+    new Set(review.coverage.map((entry) => entry.topic)).size === review.coverage.length &&
+    review.coverage.every(
+      (entry) =>
+        !entry.applicable ||
+        (entry.decisionIds.length > 0 &&
+          entry.decisionIds.every((id) => activeItems(state).some((item) => item.id === id))),
+    );
+  state.review = {
+    ...review,
+    ready:
+      review.ready &&
+      coverage &&
+      !hasBlockingUnconfirmedItems(draft, context.submit) &&
+      !draft.confirmation?.pendingSummaryFields?.length &&
+      !state.conflicts.length,
+    fingerprint: "",
+    basedOnRevision: context.revision,
+  };
+  state.review.fingerprint = clarificationFingerprint(draft, context.submit);
+}
+export async function runProvisionalReview(draft: IntakeDraft, context: ClarificationContext) {
+  if (context.finish || context.submit)
+    throw new ArenaError(
+      "规划预览不能同时结束整理或正式交接。",
+      400,
+      "CLARIFICATION_PREVIEW_INTENT",
+    );
+  draft = structuredClone(draft);
+  const state = structuredClone(draft.clarification ?? emptyClarification());
+  draft.clarification = state;
+  if (draft.attachments.some((attachment) => attachment.state !== "ready"))
+    throw new ArenaError(
+      "部分材料尚未完整读取，请先处理材料缺口后再预览。",
+      409,
+      "CLARIFICATION_MATERIALS_PENDING",
+    );
+  if (!hasCurrentAnalysis(draft))
+    throw new ArenaError(
+      "当前资料或已确认回答已改变，请先继续需求整理，再生成规划预览。",
+      409,
+      "CLARIFICATION_ANALYSIS_STALE",
+    );
+  if (!isCurrentClarificationReview(draft)) {
+    state.review = null;
+    state.specification = "";
+    state.executionPrompt = "";
+    const role = createRoleCaller(context, state, draft.round);
+    const review = await role("C", HandoffReviewSchema, reviewInput(draft, state, context));
+    applyReview(draft, state, context, review, state.conflicts);
+  }
+  state.draftOnly = true;
+  const challenge =
+    draft.challenge ??
+    ChallengeSchema.parse({
+      goal: draft.goal.length >= 8 ? draft.goal : `需求细化任务 — ${draft.goal}`,
+    });
+  formatClarification(
+    draft,
+    state,
+    challenge,
+    context.editedAssumptions !== undefined,
+    context.rejectedAssumptions ?? [],
+  );
+  return {
+    state,
+    questions: structuredClone(draft.questions),
+    challenge,
+    assumptions: [...draft.assumptions],
+    status: draft.questions.length ? ("questions" as const) : ("summary" as const),
+  };
+}
+
+export async function runClarification(draft: IntakeDraft, context: ClarificationContext) {
+  if (context.intent === "preview") return runProvisionalReview(draft, context);
+  draft = structuredClone(draft);
+  const pendingFields = new Set<keyof Challenge>(
+    context.submit ? [] : (draft.confirmation?.pendingSummaryFields ?? []),
+  );
+  if (!context.submit) {
+    const confirmedSummary = draft.confirmation?.summary?.challenge;
+    for (const field of Object.keys(context.editedFields ?? {}) as (keyof Omit<
+      Challenge,
+      "materials"
+    >)[]) {
+      if (
+        JSON.stringify(context.editedFields?.[field]) !== JSON.stringify(confirmedSummary?.[field])
+      )
+        pendingFields.add(field);
+    }
+  }
+  draft.confirmation = {
+    ...(draft.confirmation ?? { history: [] }),
+    pendingSummaryFields: [...pendingFields],
+  };
+  if (context.submit)
+    draft.confirmation.summary = {
+      revision: context.revision,
+      confirmedAt: new Date().toISOString(),
+      challenge: structuredClone(context.submit.challenge),
+    };
+  const reuseAnalysis = !!context.submit && hasCurrentAnalysis(draft, context.submit);
+  const state = structuredClone(draft.clarification ?? emptyClarification());
+  draft.clarification = state;
+  const retainedAssumptions = context.submit?.assumptions ?? context.editedAssumptions;
+  const rejectedAssumptions = [...new Set(context.rejectedAssumptions ?? [])];
+  const priorReview = state.runs.findLast(
+    (run) => run.role === "C" && run.status === "completed",
+  )?.output;
+  const priorGapIds = new Set(
+    priorReview && "gaps" in priorReview ? priorReview.gaps.map((gap) => gap.id) : [],
+  );
+  const previousCReview = state.review;
+  if (!reuseAnalysis) {
+    state.review = null;
+    delete state.analysisFingerprint;
+  }
+  const round = reuseAnalysis ? draft.round : draft.round + 1;
+  const previousItems = structuredClone(state.items);
+  const retirementBaseline = {
+    items: previousItems,
+    answers: state.rounds.at(-1)?.answers,
+    revision: state.runs.findLast((run) => run.role === "A" && run.status === "completed")
+      ?.basedOnRevision,
+  };
+  const previouslyRetired = new Set(state.retiredIds);
+  const runStart = state.runs.length;
+  const common = {
+    originalGoal: draft.goal,
+    answers: draft.answers,
+    confirmedSummary: context.submit ?? draft.confirmation?.summary,
+    editedSummary: draft.challenge,
+    editedFields: context.editedFields,
+    assumptions: retainedAssumptions ?? draft.assumptions,
+    editedAssumptions: retainedAssumptions,
+    rejectedSuggestions: rejectedAssumptions,
+    pendingSummaryFields: [...pendingFields],
+    sources: draft.sources,
+    previousItems: activeItems(state),
+    retiredItems: state.items.filter((item) => previouslyRetired.has(item.id)),
+    caseContext: "用户材料是需求来源，产品内实际提交的answers才是本轮回答。执行反馈尚未发生。",
+  };
+  const role = createRoleCaller(context, state, round);
   function pendingReviewItems(items: DecisionItem[], currentReview = false) {
     return items.map((item) => {
       if (confirmed(decisionAnswer(draft, item))) return item;
@@ -763,27 +1108,44 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       return pending;
     });
   }
-  const decomposition = await role("A", DecompositionSchema, common);
-  const incomingIds = new Set(decomposition.items.map((item) => item.id));
-  state.retiredIds = state.retiredIds.filter((id) => !incomingIds.has(id));
-  mergeItems(state, pendingReviewItems(decomposition.items), draft);
-  const knownAnswers = new Set(
-    draft.answers.filter((answer) => confirmed(answer)).map((answer) => answer.questionId),
-  );
-  if (context.submit) knownAnswers.add("confirmed_summary");
-  for (const retired of decomposition.retired) {
-    if (
-      !state.items.some((item) => item.id === retired.id) ||
-      retired.answerIds.some((answerId) => !knownAnswers.has(answerId))
-    )
-      throw new ArenaError("事项排除缺少对应的用户确认依据。", 502, "CLARIFICATION_RETIREMENT");
-    state.retiredIds = [...new Set([...state.retiredIds, retired.id])];
+  const decomposition = reuseAnalysis ? null : await role("A", DecompositionSchema, common);
+  if (decomposition) {
+    const incomingIds = new Set(decomposition.items.map((item) => item.id));
+    state.retiredIds = state.retiredIds.filter((id) => !incomingIds.has(id));
+    mergeItems(state, pendingReviewItems(decomposition.items), draft);
+    const knownAnswers = new Set(
+      draft.answers.filter((answer) => confirmed(answer)).map((answer) => answer.questionId),
+    );
+    if (context.submit) knownAnswers.add("confirmed_summary");
+    for (const retired of decomposition.retired) {
+      if (
+        !state.items.some((item) => item.id === retired.id) ||
+        retired.answerIds.some((answerId) => !knownAnswers.has(answerId))
+      )
+        throw new ArenaError("事项排除缺少对应的用户确认依据。", 502, "CLARIFICATION_RETIREMENT");
+      const previous =
+        previousItems.find((item) => item.id === retired.id) ??
+        state.items.find((item) => item.id === retired.id)!;
+      const protectedItem =
+        explicitlyRequired(draft, previous, context.submit) ||
+        (previous.required && previous.topic === "authorization");
+      if (
+        protectedItem &&
+        !protectedRetirementHasSource(draft, previous, retired.answerIds, retirementBaseline)
+      )
+        throw new ArenaError(
+          "受保护事项的排除缺少直接关联的确认依据；请确认该事项的拒绝或删除决定，或其已知前置范围的变更。",
+          502,
+          "CLARIFICATION_RETIREMENT",
+        );
+      state.retiredIds = [...new Set([...state.retiredIds, retired.id])];
+    }
+    // Suggestions are a current-round projection. Older A outputs remain immutable in runs.
+    // User-retained/edited assumptions live separately in summaryEdits.assumptions / draft.assumptions.
+    state.suggestions = [...new Set(decomposition.suggestions)]
+      .filter((suggestion) => !rejectedAssumptions.includes(suggestion))
+      .slice(0, 12);
   }
-  // Suggestions are a current-round projection. Older A outputs remain immutable in runs.
-  // User-retained/edited assumptions live separately in summaryEdits.assumptions / draft.assumptions.
-  state.suggestions = [...new Set(decomposition.suggestions)]
-    .filter((suggestion) => !rejectedAssumptions.includes(suggestion))
-    .slice(0, 12);
   function knownForQuestions(item: DecisionItem) {
     if (decisionAnswer(draft, item)?.needsReconfirmation) return false;
     if (resolved(draft, item, context.submit)) return true;
@@ -804,6 +1166,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
       !pendingFields.has("options")
     );
   }
+  let currentOptionConflicts: string[] | null = null;
   async function options() {
     const questionableItems = activeItems(state).filter((item) => {
       const answer = decisionAnswer(draft, item);
@@ -816,6 +1179,7 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
         })
       );
     });
+    if (!questionableItems.length) return [];
     const questionIds = questionableItems.map((item) => item.id);
     const boundedOptions = OptionReviewSchema.extend({
       questions: questionIds.length
@@ -865,83 +1229,15 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
     )
       throw new ArenaError("选项审查遗漏了尚待本人决定的事项。", 502, "CLARIFICATION_QUESTIONS");
     state.conflicts = result.conflicts.map((conflict) => conflict.description);
+    currentOptionConflicts = state.conflicts;
     return result.questions;
   }
-  let questions = await options();
-  if (context.submit || context.finish || !questions.length) {
-    const review = await role("C", HandoffReviewSchema, {
-      ...common,
-      items: activeItems(state),
-      conflicts: state.conflicts,
-      submittedRequirements: context.submit ?? null,
-    });
-    mergeItems(state, pendingReviewItems(review.gaps, true), draft);
-    state.conflicts = [...new Set([...state.conflicts, ...review.conflicts])];
-    const coverage =
-      ["function", "content", "flow", "style"].every((topic) =>
-        review.coverage.some((entry) => entry.topic === topic),
-      ) &&
-      new Set(review.coverage.map((entry) => entry.topic)).size === review.coverage.length &&
-      review.coverage.every(
-        (entry) =>
-          !entry.applicable ||
-          (entry.decisionIds.length > 0 &&
-            entry.decisionIds.every((decisionId) =>
-              activeItems(state).some((item) => item.id === decisionId),
-            )),
-      );
-    const blocked = activeItems(state).some((item) => !resolved(draft, item, context.submit));
-    state.review = {
-      ...review,
-      ready:
-        review.ready &&
-        coverage &&
-        !pendingFields.size &&
-        !blocked &&
-        !questions.length &&
-        !state.conflicts.length &&
-        !review.gaps.length,
-      fingerprint: clarificationFingerprint(draft, context.submit),
-      basedOnRevision: context.revision,
-    };
-    if (!questions.length && review.gaps.length && !context.finish) questions = await options();
-  }
-  // A successful C review is only a preview. Formal status requires the explicit submit action.
-  state.draftOnly = !context.submit || context.finish || !state.review?.ready;
-  state.requestedDraft = context.finish;
-  state.next = questions.length && !context.finish ? "questions" : "summary";
-  const changes = {
-    added: state.items
-      .filter((item) => !previousItems.some((old) => old.id === item.id))
-      .map((item) => item.id),
-    retired: decomposition.retired.map((item) => item.id),
-    changed: state.items
-      .filter((item) => {
-        const old = previousItems.find((prior) => prior.id === item.id);
-        return (
-          (old && JSON.stringify(old) !== JSON.stringify(item)) ||
-          (previouslyRetired.has(item.id) && !state.retiredIds.includes(item.id))
-        );
+  let questions: IntakeQuestion[] = reuseAnalysis
+    ? draft.questions.filter((question) => {
+        const item = state.items.find((entry) => entry.id === (question.decisionId ?? question.id));
+        return !!item && !knownForQuestions(item) && !deferred(decisionAnswer(draft, item));
       })
-      .map((item) => item.id),
-    triggerAnswerIds: draft.answers
-      .filter(
-        (answer) =>
-          !state.rounds
-            .at(-1)
-            ?.answers.some((prior) => JSON.stringify(prior) === JSON.stringify(answer)),
-      )
-      .map((answer) => answer.questionId),
-  };
-  state.rounds.push({
-    round,
-    revision: context.revision,
-    questions,
-    answers: structuredClone(draft.answers),
-    changes,
-    runIds: state.runs.slice(runStart).map((run) => run.id),
-    createdAt: new Date().toISOString(),
-  });
+    : await options();
   const confirmedAnswers = draft.answers.filter(
     (answer) =>
       confirmed(answer) &&
@@ -974,6 +1270,73 @@ export async function runClarification(draft: IntakeDraft, context: Clarificatio
         .slice(0, 1500),
       options: [],
       ...context.editedFields,
+    });
+  draft.challenge = challenge;
+  draft.assumptions =
+    retainedAssumptions !== undefined ? [...retainedAssumptions] : state.suggestions.slice(0, 6);
+  state.analysisFingerprint = analysisFingerprint(draft, context.submit);
+  draft.questions = questions;
+  if (previousCReview?.fingerprint === clarificationFingerprint(draft, context.submit))
+    state.review = previousCReview;
+  if (
+    context.submit ||
+    context.finish ||
+    !questions.length ||
+    !hasBlockingUnconfirmedItems(draft, context.submit)
+  ) {
+    if (!isCurrentClarificationReview(draft, context.submit)) {
+      const review = await role("C", HandoffReviewSchema, reviewInput(draft, state, context));
+      applyReview(
+        draft,
+        state,
+        context,
+        review,
+        currentOptionConflicts ?? (reuseAnalysis ? state.conflicts : []),
+      );
+      if (!questions.length && review.gaps.some((gap) => gap.required) && !context.finish)
+        questions = await options();
+    }
+  }
+  // A successful C review is only a preview. Formal status requires the explicit submit action.
+  state.draftOnly = !context.submit || context.finish || !state.review?.ready;
+  state.requestedDraft = context.finish;
+  state.next =
+    questions.length && !context.finish && !state.review?.ready ? "questions" : "summary";
+  const changes = {
+    added: state.items
+      .filter((item) => !previousItems.some((old) => old.id === item.id))
+      .map((item) => item.id),
+    retired: decomposition?.retired.map((item) => item.id) ?? [],
+    changed: state.items
+      .filter((item) => {
+        const old = previousItems.find((prior) => prior.id === item.id);
+        return (
+          (old && JSON.stringify(old) !== JSON.stringify(item)) ||
+          (previouslyRetired.has(item.id) && !state.retiredIds.includes(item.id))
+        );
+      })
+      .map((item) => item.id),
+    triggerAnswerIds: draft.answers
+      .filter(
+        (answer) =>
+          !state.rounds
+            .at(-1)
+            ?.answers.some((prior) => JSON.stringify(prior) === JSON.stringify(answer)),
+      )
+      .map((answer) => answer.questionId),
+  };
+  if (state.runs.slice(runStart).some((run) => run.role !== "C"))
+    state.rounds.push({
+      round,
+      revision: context.revision,
+      questions: questions.filter(
+        (question): question is IntakeQuestion & { decisionId: string } =>
+          typeof question.decisionId === "string",
+      ),
+      answers: structuredClone(draft.answers),
+      changes,
+      runIds: state.runs.slice(runStart).map((run) => run.id),
+      createdAt: new Date().toISOString(),
     });
   if (state.review)
     state.review.fingerprint = clarificationFingerprint(

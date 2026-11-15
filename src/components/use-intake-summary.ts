@@ -28,6 +28,10 @@ const EMPTY: Challenge = {
 type Summary = { challenge: Challenge; assumptions: string[] };
 const same = (a: Summary, b: Summary) =>
   JSON.stringify([a.challenge, a.assumptions]) === JSON.stringify([b.challenge, b.assumptions]);
+export const canEditSummary = (draft: IntakeDraft) =>
+  !!draft.challenge &&
+  (draft.status === "summary" ||
+    (draft.workflow === "clarification" && draft.status === "questions"));
 
 /** Save one draft's editable summary in order, keeping a small journal of its unsaved tail. */
 export function useIntakeSummary({
@@ -104,7 +108,7 @@ export function useIntakeSummary({
         setStatus("摘要草稿已保存，提交后确认");
         return;
       }
-      if (draft.status === "summary" && saved.baseRevision === draft.revision) {
+      if (canEditSummary(draft) && saved.baseRevision === draft.revision) {
         show(saved);
         dirty.current = true;
         version.current++;
@@ -121,7 +125,7 @@ export function useIntakeSummary({
   const edit = useCallback(
     (next: Summary) => {
       const draft = current.current;
-      if (!draft || draft.status !== "summary") return;
+      if (!draft || !canEditSummary(draft)) return;
       show(next);
       dirty.current = true;
       version.current++;
@@ -163,7 +167,7 @@ export function useIntakeSummary({
     const save = async () => {
       while (dirty.current) {
         const draft = current.current;
-        if (!draft || draft.status !== "summary")
+        if (!draft || !canEditSummary(draft))
           throw new Error("草稿状态已变化，尚未保存的摘要仍保留在本机，请先核对草稿。");
         const atVersion = version.current;
         const summary = structuredClone(values.current);
@@ -246,7 +250,7 @@ export function useIntakeSummary({
       const draft = current.current;
       const saved = conflictRef.current;
       if (!draft || !saved) return;
-      if (restoreLocal && draft.status !== "summary") return;
+      if (restoreLocal && !canEditSummary(draft)) return;
       conflictRef.current = null;
       setConflict(null);
       if (restoreLocal) edit({ challenge: saved.challenge, assumptions: saved.assumptions });

@@ -55,6 +55,13 @@ export const OptionReviewSchema = z.object({
 export const HandoffReviewSchema = z.object({
   summary: z.string().min(1).max(500),
   ready: z.boolean(),
+  projectOverview: z.string().max(1600).optional(),
+  deliveryPlan: z
+    .object({
+      deliverables: z.array(z.string().min(1).max(200)).max(6),
+      acceptanceStrategy: z.array(z.string().min(1).max(300)).max(6),
+    })
+    .optional(),
   coverage: z
     .array(
       z.object({
@@ -78,23 +85,23 @@ export const HandoffReviewSchema = z.object({
         validation: z.string().min(1).max(180),
       }),
     )
-    .max(4)
+    .max(8)
     .default([]),
   implementationPlan: z
     .array(
       z.object({
         phase: z.string().min(1).max(80),
         objective: z.string().min(1).max(180),
-        tasks: z.array(z.string().min(1).max(140)).min(1).max(4),
-        dependencies: z.array(z.string().min(1).max(200)).max(3),
-        deliverables: z.array(z.string().min(1).max(200)).max(3),
-        acceptance: z.array(z.string().min(1).max(300)).max(3),
+        tasks: z.array(z.string().min(1).max(140)).min(1).max(6),
+        dependencies: z.array(z.string().min(1).max(200)).max(6),
+        deliverables: z.array(z.string().min(1).max(200)).max(6),
+        acceptance: z.array(z.string().min(1).max(300)).max(6),
         estimate: z.string().min(1).max(60),
         estimateBasis: z.string().min(1).max(180),
         estimateUncertainty: z.string().min(1).max(160),
       }),
     )
-    .max(3)
+    .max(8)
     .default([]),
   tradeoffs: z
     .array(
@@ -115,7 +122,7 @@ export const HandoffReviewSchema = z.object({
         uncertainty: z.string().min(1).max(160),
       }),
     )
-    .max(2)
+    .max(6)
     .default([]),
   risks: z
     .array(
@@ -128,7 +135,7 @@ export const HandoffReviewSchema = z.object({
         uncertainty: z.string().min(1).max(160),
       }),
     )
-    .max(3)
+    .max(8)
     .default([]),
 });
 export type Decomposition = z.infer<typeof DecompositionSchema>;
@@ -155,6 +162,7 @@ export interface ClarificationRun {
   repairOf?: string;
   callIds?: string[];
   promptHash?: string;
+  inputFingerprint?: string;
   createdAt: string;
 }
 export interface ClarificationRound {
@@ -178,6 +186,7 @@ export interface ClarificationState {
   next: "questions" | "summary" | "completed";
   draftOnly: boolean;
   requestedDraft?: boolean;
+  analysisFingerprint?: string;
   specification: string;
   executionPrompt: string;
   feedback?: Array<{

@@ -38,6 +38,47 @@ function health(snapshot: ArenaSnapshot) {
   };
 }
 
+test("explicit UI fixture: starting fresh during a pending restore releases the loading state", async ({
+  page,
+}) => {
+  const snapshot = completedSnapshot();
+  const draft = fixtureIntake({ goal: "【测试替身】此前保存的旧目标" });
+  await restorePointer(page, draft.id);
+  let release!: () => void;
+  let requested = false;
+  let returned = false;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/health") return route.fulfill({ json: health(snapshot) });
+    if (path === `/api/intakes/${draft.id}`) {
+      requested = true;
+      await pending;
+      await route.fulfill({ json: draft });
+      returned = true;
+      return;
+    }
+    return route.fulfill({ status: 500, json: { error: "Unexpected fixture request" } });
+  });
+  try {
+    await page.goto("/");
+    await expect.poll(() => requested).toBe(true);
+    await page.getByRole("button", { name: "方案擂台首页", exact: true }).click();
+    const goal = page.getByRole("textbox", { name: "你想做什么", exact: true });
+    await expect(goal).toBeEnabled();
+    await goal.fill("【测试替身】全新的个人目标");
+    await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeEnabled();
+    release();
+    await expect.poll(() => returned).toBe(true);
+    await expect(goal).toHaveValue("【测试替身】全新的个人目标");
+    await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeEnabled();
+  } finally {
+    release();
+  }
+});
+
 test("explicit UI fixture: model changes first save the current answers, and failed saves keep the old model and local draft", async ({
   page,
 }) => {
@@ -149,7 +190,21 @@ test("explicit UI fixture: model changes first save the current answers, and fai
   ).toBeVisible();
   await page.getByRole("button", { name: "继续回答", exact: true }).click();
   await expect(answer).toHaveValue("测试：不离职，保留当前收入。");
-  expect(patches).toHaveLength(1);
+  expect(patches).toEqual([
+    {
+      revision: 0,
+      answerMode: "draft",
+      answers: [{ questionId: "limits", state: "answered", value: "测试：不离职，保留当前收入。" }],
+    },
+    {
+      revision: 0,
+      answerMode: "draft",
+      answers: [
+        { questionId: "limits", state: "answered", value: "测试：不离职，保留当前收入。" },
+        { questionId: "private", state: "skipped", value: "" },
+      ],
+    },
+  ]);
   expect(draft.modelMode).toBe("gpt-6.1-terra");
   expect(
     await page.evaluate((key) => sessionStorage.getItem(key), ANSWER_JOURNAL_KEY),
@@ -159,12 +214,15 @@ test("explicit UI fixture: model changes first save the current answers, and fai
   await expect(
     page.getByRole("button", { name: "选择模型，当前GPT 6.1 Sol", exact: true }),
   ).toBeVisible();
-  expect(patches).toHaveLength(3);
+  expect(patches).toHaveLength(4);
   expect(patches.map((patch) => (patch.answers ? "answers" : "model"))).toEqual([
+    "answers",
     "answers",
     "answers",
     "model",
   ]);
+  expect(patches[2]).toEqual(patches[1]);
+  expect(patches[3]).toEqual({ revision: 1, modelMode: "gpt-6.1-sol" });
   expect(draft.answers).toMatchObject([
     { questionId: "limits", state: "answered", value: "测试：不离职，保留当前收入。" },
     { questionId: "private", state: "skipped" },
@@ -198,12 +256,14 @@ test("explicit UI fixture: unsent question answers survive refresh and failed sy
   await restorePointer(page, draft.id);
   let analyses = 0;
   let answerSaves = 0;
+  const patches: { revision: number; answers: IntakeAnswer[]; answerMode: string }[] = [];
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/health") return route.fulfill({ json: health(snapshot) });
     if (path.endsWith("/analyze")) analyses++;
     if (route.request().method() === "PATCH") {
       answerSaves++;
+      patches.push(route.request().postDataJSON());
       return route.fulfill({ status: 503, json: { error: "测试：暂时离线" } });
     }
     if (path.startsWith("/api/intakes/")) return route.fulfill({ json: draft });
@@ -227,9 +287,21 @@ test("explicit UI fixture: unsent question answers survive refresh and failed sy
   await expect(field).toHaveValue("测试：不离职，保留当前收入。");
   expect(answerSaves).toBe(0);
   expect(analyses).toBe(0);
-  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+  await page.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "测试：暂时离线" })).toBeVisible();
-  expect(answerSaves).toBe(1);
+  await expect.poll(() => answerSaves).toBe(2);
+  expect(patches).toEqual([
+    {
+      revision: 0,
+      answerMode: "draft",
+      answers: [{ questionId: "limits", state: "answered", value: "测试：不离职，保留当前收入。" }],
+    },
+    {
+      revision: 0,
+      answerMode: "complete",
+      answers: [{ questionId: "limits", state: "answered", value: "测试：不离职，保留当前收入。" }],
+    },
+  ]);
   expect(analyses).toBe(0);
   expect(
     await page.evaluate((key) => sessionStorage.getItem(key), ANSWER_JOURNAL_KEY),
@@ -452,7 +524,7 @@ test("explicit UI fixture: committed submit with a lost response recovers the sa
   expect(oldArenaReads).toBe(0);
 });
 
-test("explicit UI fixture: a third question round confirms only entered answers and preserves unknown and untouched items", async ({
+test("explicit UI fixture: a third round preserves untouched authorization until explicitly skipped and confirms only entered answers", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -488,28 +560,66 @@ test("explicit UI fixture: a third question round confirms only entered answers 
   ];
   let draft = fixtureIntake({ status: "questions", round: 3, questions });
   await restorePointer(page, draft.id);
-  const patches: { answers: IntakeAnswer[]; answerMode: string }[] = [];
+  const patches: { revision: number; answers: IntakeAnswer[]; answerMode: string }[] = [];
+  const expectedPatches = [
+    {
+      revision: 0,
+      answerMode: "draft",
+      answers: [{ questionId: "style", state: "answered", value: "简洁正式" }],
+    },
+    {
+      revision: 1,
+      answerMode: "draft",
+      answers: [{ questionId: "materials", state: "unknown", value: "" }],
+    },
+    {
+      revision: 2,
+      answerMode: "draft",
+      answers: [{ questionId: "authorization", state: "skipped", value: "" }],
+    },
+    {
+      revision: 3,
+      answerMode: "complete",
+      answers: [
+        { questionId: "style", state: "answered", value: "简洁正式" },
+        { questionId: "materials", state: "unknown", value: "" },
+        { questionId: "authorization", state: "skipped", value: "" },
+      ],
+    },
+  ];
+  let analyses = 0;
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/health") return route.fulfill({ json: health(snapshot) });
     if (route.request().method() === "PATCH") {
       const body = route.request().postDataJSON();
       patches.push(body);
-      expect(body.answerMode).toBe("complete");
-      expect(body.answers).toEqual([
-        { questionId: "style", state: "answered", value: "简洁正式" },
-        { questionId: "materials", state: "unknown", value: "" },
-      ]);
+      expect(body).toEqual(expectedPatches[patches.length - 1]);
+      expect(body.revision).toBe(draft.revision);
+      const accepted: IntakeDraft["answers"] = body.answers.map((answer: IntakeAnswer) => ({
+        ...answer,
+        question: questions.find((question) => question.id === answer.questionId)!,
+        confirmation:
+          body.answerMode === "complete" && answer.state === "answered" ? "confirmed" : "pending",
+      }));
       draft = {
         ...draft,
         revision: draft.revision + 1,
-        answers: body.answers.map((answer: IntakeAnswer) => ({
-          ...answer,
-          question: questions.find((question) => question.id === answer.questionId)!,
-        })),
+        answers: [
+          ...draft.answers.filter(
+            (answer) => !accepted.some((entry) => entry.questionId === answer.questionId),
+          ),
+          ...accepted,
+        ],
       };
     }
     if (path.endsWith("/analyze")) {
+      analyses++;
+      expect(route.request().postDataJSON()).toMatchObject({
+        revision: 4,
+        finish: false,
+        intent: "continue",
+      });
       draft = {
         ...draft,
         revision: draft.revision + 1,
@@ -540,11 +650,32 @@ test("explicit UI fixture: a third question round confirms only entered answers 
     .getByRole("button", { name: "暂时不知道", exact: true })
     .click();
   await page.getByRole("button", { name: "下一题", exact: true }).click();
-  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+  await expect.poll(() => patches.length).toBe(2);
+  await page.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "请填写这题的答案，或选择暂时不知道、跳过。" }),
+  ).toBeVisible();
+  expect(patches).toEqual(expectedPatches.slice(0, 2));
+  expect(analyses).toBe(0);
+  expect(draft.answers.some((answer) => answer.questionId === "authorization")).toBe(false);
+  expect(draft.answers.every((answer) => answer.confirmation === "pending")).toBe(true);
+  await page
+    .getByRole("group", { name: "是否授权使用公开素材？", exact: true })
+    .getByRole("button", { name: "跳过", exact: true })
+    .click();
+  await page.getByRole("button", { name: "提交本轮并继续", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "这份演示文稿给谁阅读？", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("第 4 轮", { exact: false })).toBeVisible();
-  expect(patches).toHaveLength(1);
-  expect(draft.answers.some((answer) => answer.questionId === "authorization")).toBe(false);
+  expect(patches).toEqual(expectedPatches);
+  expect(analyses).toBe(1);
+  expect(draft.answers).toMatchObject([
+    { questionId: "style", state: "answered", value: "简洁正式", confirmation: "confirmed" },
+    { questionId: "materials", state: "unknown", value: "", confirmation: "pending" },
+    { questionId: "authorization", state: "skipped", value: "", confirmation: "pending" },
+  ]);
+  const authorization = draft.answers.find((answer) => answer.questionId === "authorization")!;
+  expect(authorization.confirmedRevision).toBeUndefined();
+  expect(authorization.confirmedAt).toBeUndefined();
 });

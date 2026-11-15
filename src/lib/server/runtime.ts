@@ -50,7 +50,11 @@ import {
 } from "./intakes";
 import type { IntakeDraft, SubmitIntakeSchema } from "@/lib/intake-contracts";
 import { freezeCorpus } from "./retrieval";
-import { clarificationFingerprint, clarificationProtocolHash } from "./clarification";
+import {
+  clarificationProtocolHash,
+  hasBlockingUnconfirmedItems,
+  isCurrentClarificationReview,
+} from "./clarification";
 import { SCHEMA_VERSION, ChallengeSchema } from "@/lib/contracts";
 import { PROMPT_VERSION } from "../../../prompts/protocol";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
@@ -332,15 +336,19 @@ export function createArena(
           "CLARIFICATION_PROTOCOL_STALE",
         );
       const state = draftBody.clarification as ArenaVersion["clarification"];
+      const intake = draftBody as unknown as IntakeDraft;
+      const submission = {
+        challenge,
+        assumptions: options?.assumptions ?? intake.assumptions,
+      };
       if (
         !state ||
         state.next !== "completed" ||
-        (!state.review?.ready && !state.requestedDraft) ||
-        state.review?.fingerprint !==
-          clarificationFingerprint(draftBody as unknown as IntakeDraft, {
-            challenge,
-            assumptions: [],
-          })
+        !isCurrentClarificationReview(intake, submission) ||
+        (!state.requestedDraft &&
+          (state.draftOnly ||
+            !state.review?.ready ||
+            hasBlockingUnconfirmedItems(intake, submission)))
       )
         throw new ArenaError("需求尚未完成当前版本的查漏与确认。", 409, "CLARIFICATION_NOT_READY");
     }

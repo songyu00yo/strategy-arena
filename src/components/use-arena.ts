@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArenaSnapshot, Challenge, ModelMode, FollowUpInput } from "@/lib/contracts";
-import type { IntakeDraft } from "@/lib/intake-contracts";
+import type { IntakeDraftResponse } from "@/lib/intake-contracts";
 import { clearExplicitArenaRequest, examplePickerRequested } from "@/lib/example-navigation";
 import {
   clearIntakeDraftPointer,
@@ -58,6 +58,7 @@ export function useArena() {
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState("");
   const [snapshot, setSnapshot] = useState<ArenaSnapshot | null>(null);
+  const [restoredIntake, setRestoredIntake] = useState<IntakeDraftResponse | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(true);
@@ -83,6 +84,7 @@ export function useArena() {
       if (!mounted.current || expectedGeneration !== generation.current) return false;
       if (latest.current && snapshotIsOlder(value, latest.current)) return false;
       latest.current = value;
+      setRestoredIntake(null);
       setSnapshot(value);
       if (
         value.versions.find((version) => version.id === value.activeVersionId)?.waitingForIntake ||
@@ -99,7 +101,7 @@ export function useArena() {
     async (id: string) => {
       const epoch = generation.current;
       const value = await request<ArenaSnapshot>(`/api/arenas/${id}`);
-      accept(value, epoch);
+      if (latest.current?.id === id) accept(value, epoch);
       return value;
     },
     [request, accept],
@@ -125,21 +127,23 @@ export function useArena() {
       id = readArenaPointer();
       const draftId = readIntakeDraftPointer();
       if (draftId) {
-        let draft: IntakeDraft | null = null;
+        let draft: IntakeDraftResponse | null = null;
         try {
-          draft = await request<IntakeDraft>(`/api/intakes/${encodeURIComponent(draftId)}`);
+          draft = await request<IntakeDraftResponse>(`/api/intakes/${encodeURIComponent(draftId)}`);
         } catch (failure) {
+          if (!mounted.current || epoch !== generation.current) return;
           if (failure instanceof ApiError && failure.code === "NOT_FOUND")
             clearIntakeDraftPointer(draftId);
           else throw failure;
         }
         if (draft) {
+          if (!mounted.current || epoch !== generation.current) return;
           saveIntakeDraftPointer(draft.id);
           // The server may have committed submit even when the browser lost its response.
           if (draft.status === "submitted" && draft.arenaId) {
             const committed = await request<ArenaSnapshot>(`/api/arenas/${draft.arenaId}`);
             if (accept(committed, epoch)) clearIntakeDraftPointer(draft.id);
-          }
+          } else setRestoredIntake(draft);
           // A pending draft takes precedence over an older discussion in this browser.
           return;
         }
@@ -149,7 +153,11 @@ export function useArena() {
       const value = await request<ArenaSnapshot>(`/api/arenas/${encodeURIComponent(id)}`);
       accept(value, epoch);
     } catch (e) {
-      if (mounted.current && !(e instanceof Error && e.name === "AbortError")) {
+      if (
+        mounted.current &&
+        epoch === generation.current &&
+        !(e instanceof Error && e.name === "AbortError")
+      ) {
         if (
           restoringPreviousArena &&
           e instanceof ApiError &&
@@ -167,7 +175,7 @@ export function useArena() {
         );
       }
     } finally {
-      if (mounted.current) setRestoring(false);
+      if (mounted.current && epoch === generation.current) setRestoring(false);
     }
   }, [request, accept]);
   useEffect(() => {
@@ -371,6 +379,7 @@ export function useArena() {
     health,
     healthError,
     snapshot,
+    restoredIntake,
     active,
     error,
     busy,
@@ -404,6 +413,7 @@ export function useArena() {
       clearIntakeDraftPointer(readIntakeDraftPointer());
       clearExplicitArenaRequest();
       latest.current = null;
+      setRestoredIntake(null);
       setSnapshot(null);
       setAuto(false);
       setError("");
@@ -416,16 +426,38 @@ export function useArena() {
       const value = await request<ArenaSnapshot>(`/api/arenas/${encodeURIComponent(id)}`);
       if (accept(value, epoch, true)) clearIntakeDraftPointer(readIntakeDraftPointer());
     },
-    openIntake: (id: string) => {
-      generation.current++;
+    openIntake: async (id: string) => {
+      const epoch = ++generation.current;
       clearExplicitArenaRequest();
-      clearArenaPointer(readArenaPointer());
-      saveIntakeDraftPointer(id, true);
-      latest.current = null;
-      setSnapshot(null);
       setAuto(false);
       setError("");
-      setRestoring(false);
+      setRestoring(true);
+      try {
+        const draft = await request<IntakeDraftResponse>(`/api/intakes/${encodeURIComponent(id)}`);
+        if (!mounted.current || epoch !== generation.current) return false;
+        if (draft.status === "submitted" && draft.arenaId) {
+          const committed = await request<ArenaSnapshot>(`/api/arenas/${draft.arenaId}`);
+          if (!accept(committed, epoch, true)) return false;
+          clearIntakeDraftPointer(readIntakeDraftPointer());
+        } else {
+          clearArenaPointer(readArenaPointer());
+          saveIntakeDraftPointer(draft.id, true);
+          latest.current = null;
+          setSnapshot(null);
+          setRestoredIntake(draft);
+        }
+        return true;
+      } catch (failure) {
+        if (
+          mounted.current &&
+          epoch === generation.current &&
+          !(failure instanceof Error && failure.name === "AbortError")
+        )
+          setError(failure instanceof Error ? failure.message : "未能打开草稿，请稍后重试。");
+        return false;
+      } finally {
+        if (mounted.current && epoch === generation.current) setRestoring(false);
+      }
     },
     adopt: (value: ArenaSnapshot) => {
       const epoch = ++generation.current;
@@ -500,10 +532,13 @@ export function useArena() {
       clearExplicitArenaRequest();
       generation.current++;
       latest.current = null;
+      setRestoredIntake(null);
       setAuto(false);
       setSnapshot(null);
+      setRestoring(false);
       setError("");
       clearArenaPointer(ownId);
+      clearIntakeDraftPointer(restoredIntake?.id ?? null);
     },
   };
 }

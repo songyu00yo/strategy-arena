@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      DIAGNOSTIC_COMMIT: 7f5d1f19b1ab5f2a18ddf5b08fcc25828d8e97dc
+      DIAGNOSTIC_COMMIT: 16cea370a28bb7cbb82a89b12e42fa11e0b1371e
       MODEL_API_KEY: ""
       DEEPSEEK_API_KEY: ""
       OPENAI_API_KEY: ""
@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 7f5d1f19b1ab5f2a18ddf5b08fcc25828d8e97dc
+          ref: 16cea370a28bb7cbb82a89b12e42fa11e0b1371e
           fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -44,6 +44,13 @@ jobs:
         run: |
           set -euo pipefail
           pnpm exec playwright install --with-deps chromium 2>&1 | tee artifacts/motion-browser-install.log
+      - name: Stress twenty original natural moving-target clicks without retries
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/retarget-stress
+          pnpm exec playwright test tests/e2e/overlay-continuity.spec.ts --project=chromium --workers=1 --retries=0 --max-failures=0 --repeat-each=10 --grep 'normal interruption: a real click retargets an unfinished handoff' --trace=retain-on-failure 2>&1 | tee artifacts/retarget-stress/run.log
+          node --input-type=module -e 'import {readFileSync} from "node:fs"; import {summarizePlaywright} from "./scripts/ci-validation-report.mjs"; const s=summarizePlaywright(JSON.parse(readFileSync("test-results/e2e.json"))); if(s.status!=="passed"||s.testsDiscovered!==20||s.attempts!==20) throw new Error(JSON.stringify(s));'
+          cp test-results/e2e.json test-results/e2e.xml artifacts/retarget-stress/
       - name: Run original 135 serial A1 B A2 diagnostics against final checkout
         run: |
           set -euo pipefail
@@ -53,5 +60,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pro10-exact-135-${{ env.DIAGNOSTIC_COMMIT }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/
+          path: |
+            artifacts/
+            test-results/e2e.json
+            test-results/e2e.xml
+            test-results/**/*.zip
+            test-results/**/*.png
           retention-days: 14

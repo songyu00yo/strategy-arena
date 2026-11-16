@@ -86,6 +86,7 @@ function result(value: unknown) {
 beforeEach(() => {
   closeDb();
   vi.resetAllMocks();
+  vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", undefined);
   for (const [key, value] of Object.entries({
     ARENA_DATABASE_PATH: ":memory:",
     OPENAI_API_KEY: "synthetic",
@@ -748,6 +749,33 @@ describe("attachment sources and atomic confirmation", () => {
 
 describe("lazy retention at every existing-draft read entry", () => {
   const expiredAt = () => Date.now() - 24 * 60 * 60 * 1000 - 1000;
+  it.each(["draft GET", "attachment GET", "new draft cleanup"] as const)(
+    "retains existing drafts and attachments with expiry disabled through %s",
+    async (entry) => {
+      vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", "false");
+      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
+      const bytes = Buffer.from("synthetic retained original-version material");
+      draft = await addIntakeAttachment(draft.id, "alice", bytes, "retained.txt");
+      db().prepare("UPDATE intake_drafts SET updated_at=? WHERE id=?").run(expiredAt(), draft.id);
+      const stored = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id);
+      expect(() => getIntake(draft.id, "bob")).toThrow("无权访问");
+      if (entry === "draft GET") expect(getIntake(draft.id, "alice").id).toBe(draft.id);
+      else if (entry === "attachment GET")
+        expect(
+          getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
+        ).toBe(true);
+      else createIntake("bob", { goal, modelMode: "gpt-6.1-terra" });
+      expect(getIntake(draft.id, "alice")).toEqual(draft);
+      expect(db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id)).toEqual(
+        stored,
+      );
+      expect(
+        getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
+      ).toBe(true);
+      expect(fixture.generate).not.toHaveBeenCalled();
+      expect(fixture.hold).not.toHaveBeenCalled();
+    },
+  );
   it("rejects and deletes an expired unsubmitted draft and its attachments on GET", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     draft = await addIntakeAttachment(

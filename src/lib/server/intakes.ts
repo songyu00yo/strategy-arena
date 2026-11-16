@@ -127,6 +127,7 @@ function expireOwnedDraft(draftId: string, owner: string) {
       | undefined;
     if (!row || row.submitted_arena_id || row.updated_at >= Date.now() - IDLE_MS) return;
     preserveExpiredCallAudit(JSON.parse(row.body) as PrivateDraft);
+    if (process.env.ARENA_INTAKE_EXPIRY_ENABLED === "false") return;
     db()
       .prepare(
         "DELETE FROM intake_drafts WHERE id=? AND owner=? AND updated_at<? AND submitted_arena_id IS NULL AND COALESCE(json_extract(intake_drafts.body,'$.status'),'')!='uncertain' AND NOT EXISTS (SELECT 1 FROM intake_operations WHERE draft_id=intake_drafts.id AND state='uncertain') AND NOT EXISTS (SELECT 1 FROM intake_calls JOIN intake_operations ON intake_operations.id=intake_calls.operation_id WHERE intake_operations.draft_id=intake_drafts.id AND intake_calls.state='uncertain') AND NOT EXISTS (SELECT 1 FROM intake_operations WHERE draft_id=intake_drafts.id AND state='pending' AND updated_at>=?)",
@@ -409,6 +410,7 @@ function cleanup() {
     .prepare("SELECT body FROM intake_drafts WHERE updated_at<? AND submitted_arena_id IS NULL")
     .all(Date.now() - IDLE_MS) as { body: string }[];
   for (const row of expired) preserveExpiredCallAudit(JSON.parse(row.body) as PrivateDraft);
+  if (process.env.ARENA_INTAKE_EXPIRY_ENABLED === "false") return;
   db()
     .prepare(
       "DELETE FROM intake_drafts WHERE updated_at<? AND submitted_arena_id IS NULL AND COALESCE(json_extract(intake_drafts.body,'$.status'),'')!='uncertain' AND NOT EXISTS (SELECT 1 FROM intake_operations WHERE draft_id=intake_drafts.id AND state='uncertain') AND NOT EXISTS (SELECT 1 FROM intake_calls JOIN intake_operations ON intake_operations.id=intake_calls.operation_id WHERE intake_operations.draft_id=intake_drafts.id AND intake_calls.state='uncertain') AND id NOT IN (SELECT draft_id FROM intake_operations WHERE state='pending' AND updated_at>=?)",

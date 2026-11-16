@@ -192,7 +192,7 @@ async function pointers(page: Page) {
 async function createSecondDraft(context: BrowserContext) {
   const page = await context.newPage();
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await expect(page.getByLabel("你想解决什么问题？", { exact: true })).not.toHaveValue("");
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
   await page
@@ -211,7 +211,7 @@ test("explicit UI fixture: a tab keeps its unsent answers after another tab crea
   await page.emulateMedia({ reducedMotion: "reduce" });
   const fixture = await installTabFixture(context);
   await seedPointer(page, firstId);
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   const answer = page.getByRole("textbox", { name: firstQuestion, exact: true });
   await answer.fill(unsentAnswer);
   expect((await pointers(page)).tab).toBe(firstId); // Legacy localStorage pointer is migrated.
@@ -234,7 +234,7 @@ test("explicit UI fixture: starting over clears only the current tab's draft, pr
   await page.emulateMedia({ reducedMotion: "reduce" });
   const fixture = await installTabFixture(context);
   await seedPointer(page, firstId);
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await page.getByRole("textbox", { name: firstQuestion, exact: true }).fill(unsentAnswer);
   const other = await createSecondDraft(context);
   await page.getByRole("button", { name: "准备新问题", exact: true }).click();
@@ -262,7 +262,7 @@ test("explicit UI fixture: submitting one tab cannot clear or resume another tab
   });
   const fixture = await installTabFixture(context, first);
   await seedPointer(page, firstId);
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await expect(page.getByRole("button", { name: "开始推演", exact: true })).toBeVisible();
   const other = await createSecondDraft(context);
   await page.getByRole("button", { name: "开始推演", exact: true }).click();
@@ -287,7 +287,7 @@ for (const [status, code] of [
     await page.emulateMedia({ reducedMotion: "reduce" });
     const fixture = await installTabFixture(context);
     await seedPointer(page, firstId);
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     await page.getByRole("textbox", { name: firstQuestion, exact: true }).fill(unsentAnswer);
     const other = await createSecondDraft(context);
     fixture.denyFirst(status, code);
@@ -353,12 +353,12 @@ async function submitTwoDiscussions(page: Page, context: BrowserContext) {
   const fixture = await installTabFixture(context, undefined, true);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await submitNewDiscussion(page, firstArenaGoal, firstArenaId);
   const other = await context.newPage();
   await other.emulateMedia({ reducedMotion: "reduce" });
   await other.addInitScript(() => sessionStorage.setItem("arena-intro", "1"));
-  await other.goto("/");
+  await other.goto("/?legacy=1");
   await expect(other.getByRole("heading", { name: firstArenaGoal, exact: true })).toBeVisible();
   await other.getByRole("button", { name: "新问题", exact: true }).click();
   await submitNewDiscussion(other, secondArenaGoal, secondArenaId);
@@ -370,7 +370,7 @@ test("explicit UI fixture: after two tabs submit their own discussions, a plain 
   context,
 }) => {
   const { fixture, other } = await submitTwoDiscussions(page, context);
-  await expect(page).toHaveURL(/\/$/); // An explicit ?arena URL must not mask pointer restoration.
+  await expect(page).toHaveURL(/\/\?legacy=1$/); // The legacy entrance has no ?arena ID to mask pointer restoration.
   const before = fixture.requestsFrom(page).length;
   await page.reload();
   await expect(page.getByRole("heading", { name: firstArenaGoal, exact: true })).toBeVisible();
@@ -457,7 +457,7 @@ test("explicit UI fixture: unsynced summaries survive another tab's edits and st
   });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await seedPointer(page, firstId, { tabOwned: true });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   const firstField = page.getByRole("textbox", { name: "必须满足的限制", exact: true });
   const firstTail = "合成摘要A未同步：不能离职，保留现有收入。";
   await firstField.fill(firstTail);
@@ -465,7 +465,7 @@ test("explicit UI fixture: unsynced summaries survive another tab's edits and st
   const other = await context.newPage();
   await other.emulateMedia({ reducedMotion: "reduce" });
   await seedPointer(other, secondId, { tabOwned: true });
-  await other.goto("/");
+  await other.goto("/?legacy=1");
   const secondField = other.getByRole("textbox", { name: "必须满足的限制", exact: true });
   const secondTail = "合成摘要B未同步：只使用现有设备。";
   await secondField.fill(secondTail);

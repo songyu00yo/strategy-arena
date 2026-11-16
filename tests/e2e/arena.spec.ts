@@ -81,7 +81,7 @@ test("real unconfigured homepage explains missing key and prevents starting a pa
     headers: { Origin: origin },
     data: { code: "e2e-only-access-code" },
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await expect(page.getByRole("button", { name: "模型待配置" })).toBeVisible();
   await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeDisabled();
   await expect(
@@ -126,7 +126,7 @@ test("explicit UI fixture: five stages, evidence, condition rematch and preserve
     return route.fulfill({ json: snapshot });
   });
   await installQuickIntakeFixture(page, snapshot);
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await confirmFixtureIntake(page);
   await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
   await page.screenshot({
@@ -235,7 +235,7 @@ test("explicit UI fixture: a delayed old advance cannot replace a new condition 
   });
   try {
     await installQuickIntakeFixture(page, snapshot);
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     await confirmFixtureIntake(page);
     await oldSeen;
     await page.getByRole("button", { name: "调整条件" }).click();
@@ -282,7 +282,7 @@ async function openCompletedFixture(page: import("@playwright/test").Page) {
     return route.fulfill({ json: snapshot });
   });
   await installQuickIntakeFixture(page, snapshot);
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await confirmFixtureIntake(page);
   await expect(page.getByRole("heading", { name: "测试裁决：先做最小样片" })).toBeVisible();
 }

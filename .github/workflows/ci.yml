@@ -41,7 +41,7 @@ jobs:
           node --test scripts/*.test.mjs 2>&1 | tee artifacts/release-integrity.log
       - run: node scripts/validate-evals.mjs
       - run: pnpm build 2>&1 | tee artifacts/build.log
-      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e 2>&1 | tee artifacts/e2e.log
       - name: Package validated build and its evidence
         run: |

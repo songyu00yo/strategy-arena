@@ -180,7 +180,7 @@ test("homepage keeps examples hidden until requested, then opens an input-first 
   const payload = recording(example.slug);
   const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin, true);
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await expect(page.getByRole("region", { name: "选择真实案例" })).toHaveCount(0);
   const entry = page.getByRole("button", { name: "先看真实案例", exact: true });
   await entry.focus();

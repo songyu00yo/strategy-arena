@@ -268,7 +268,7 @@ test("explicit UI fixture: goal only, three adaptive questions, skipped follow-u
     }
     return route.fulfill({ json: draft });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   // The home tools stay hidden until the visitor writes something.
   await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeHidden();
   await expect(page.getByRole("textbox", { name: "必须满足的限制", exact: true })).toBeHidden();
@@ -357,7 +357,7 @@ test("explicit UI fixture: refresh restores questions and a late pre-refresh res
     return route.fulfill({ json: draft });
   });
   try {
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     await expect(page.getByRole("heading", { name: "再了解你一点。" })).toBeVisible();
     await page
       .getByRole("group", { name: questions[0].title, exact: true })
@@ -404,7 +404,7 @@ test("explicit UI fixture: rapid repeated confirmation starts exactly one submis
     return route.fulfill({ json: draft });
   });
   try {
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     const submit = page.getByRole("button", { name: "开始推演", exact: true });
     await submit.evaluate((button) => {
       (button as HTMLButtonElement).click();
@@ -502,7 +502,7 @@ test("explicit UI fixture: PDF page selection, failed attachment and source disc
       };
     return route.fulfill({ json: draft });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await page.getByLabel("你想解决什么问题？", { exact: true }).fill(fixtureChallenge.goal);
   await page.getByLabel("选择参考材料", { exact: true }).setInputFiles({
     name: "fixture-long.pdf",

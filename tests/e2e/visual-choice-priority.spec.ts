@@ -37,7 +37,7 @@ for (const viewport of [
           json: { error: "Unexpected API call blocked by fixture" },
         });
       });
-      await page.goto("/");
+      await page.goto("/?legacy=1");
       await expect(page.getByRole("heading", { name: "你想解决什么问题？" })).toBeVisible();
       const input = page.getByLabel("你想解决什么问题？", { exact: true });
       await expect(input).toBeEditable();

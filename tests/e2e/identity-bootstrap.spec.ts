@@ -86,7 +86,7 @@ test("real identity bootstrap blocks draft creation and history, then one blur a
     draftFulfilled = true;
   });
   try {
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/?legacy=1", { waitUntil: "domcontentloaded" });
     await expect.poll(() => identities).toBe(1);
     const input = page.getByLabel("你想解决什么问题？", { exact: true });
     const history = page.getByRole("banner").getByRole("button", { name: "我的历史", exact: true });
@@ -156,8 +156,8 @@ test("real Web Locks serialize first identity creation across two browser tabs",
   });
   try {
     await Promise.all([
-      page.goto("/", { waitUntil: "domcontentloaded" }),
-      other.goto("/", { waitUntil: "domcontentloaded" }),
+      page.goto("/?legacy=1", { waitUntil: "domcontentloaded" }),
+      other.goto("/?legacy=1", { waitUntil: "domcontentloaded" }),
     ]);
     expect(await page.evaluate(() => Boolean(navigator.locks))).toBe(true);
     await expect.poll(() => healthReads).toBe(2);
@@ -194,7 +194,7 @@ test("real access unlock waits for identity bootstrap before allowing history or
     await route.fulfill({ response: await route.fetch() });
   });
   try {
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     await expect(page.getByRole("button", { name: "验证访问码", exact: true })).toBeEnabled();
     expect(identities).toBe(0);
     await page.getByLabel("访问码", { exact: true }).fill("e2e-only-access-code");

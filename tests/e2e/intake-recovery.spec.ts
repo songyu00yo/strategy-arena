@@ -126,7 +126,7 @@ test("explicit UI fixture: model changes first save the current answers, and fai
     if (path.startsWith("/api/intakes/")) return route.fulfill({ json: draft });
     return route.fulfill({ status: 500, json: { error: "Unexpected fixture request" } });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   const answer = page.getByRole("textbox", { name: "哪些条件必须保留？", exact: true });
   await answer.fill("测试：不离职，保留当前收入。");
   await page
@@ -203,7 +203,7 @@ test("explicit UI fixture: unsent question answers survive refresh and failed sy
     if (path.startsWith("/api/intakes/")) return route.fulfill({ json: draft });
     return route.fulfill({ status: 500, json: { error: "Unexpected fixture request" } });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   const field = page.getByRole("textbox", { name: "哪些条件必须保留？", exact: true });
   await field.fill("测试：不离职，保留当前收入。");
   await expect(
@@ -273,7 +273,7 @@ test("explicit UI fixture: summary saves serialize, preserve newer edits and rec
     return route.fulfill({ json: draft });
   });
   try {
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     const constraints = page.getByRole("textbox", { name: "必须满足的限制", exact: true });
     await constraints.fill("测试第一版限制。");
     await firstStarted;
@@ -404,7 +404,7 @@ test("explicit UI fixture: committed submit with a lost response recovers the sa
     }
     return route.fulfill({ json: draft });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await page
     .getByRole("textbox", { name: "必须满足的限制", exact: true })
     .fill("测试提交前最后修正：保留收入。");

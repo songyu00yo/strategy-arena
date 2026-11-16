@@ -85,7 +85,7 @@ test("explicit UI fixture: choose a concrete model, inspect its reason and prese
   await installQuickIntakeFixture(page, snapshot, (draft, body) =>
     select(body.challenge, draft.modelMode, false),
   );
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   // Tools appear once there is text; one character does not start a draft.
   await page.getByLabel("你想解决什么问题？", { exact: true }).fill("测");
   await page.getByRole("button", { name: /^选择模型，当前/ }).click();
@@ -183,7 +183,7 @@ test("explicit UI fixture: all five model choices remain selectable and unavaila
       draft = { ...draft, ...route.request().postDataJSON(), revision: draft.revision + 1 };
     return route.fulfill({ json: draft });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await page
     .getByLabel("你想解决什么问题？", { exact: true })
     .fill("测试：需要选择一个适合学习任务的具体模型");

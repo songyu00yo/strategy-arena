@@ -67,7 +67,7 @@ test("explicit UI fixture: material labels and previews distinguish local text, 
       });
     return route.fulfill({ json: draft });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await page.getByRole("button", { name: /查看材料原文与位置/ }).click();
   const local = page.getByRole("button", { name: /local.xlsx/ });
   await expect(local).toContainText("· 原文");

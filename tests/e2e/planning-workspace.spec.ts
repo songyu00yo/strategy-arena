@@ -1176,8 +1176,19 @@ test("synthetic API: dense public workbench exposes live findings and readable h
   await page.locator(".p-log-entry > summary").first().click();
   await screenshot(page, testInfo, "desktop-project-archive");
   await page.getByLabel("按角色筛选日志", { exact: true }).selectOption("D");
-  await expect(page.locator(".p-log-entry .actor-D").first()).toBeVisible();
-  await expect(page.locator(".p-log-entry .p-log-actor:not(.actor-D)")).toHaveCount(0);
+  // D's archive includes its own findings and the four B → D handoffs.
+  // The synthetic fixture has five D entries and four related B entries.
+  await expect(page.locator(".p-log-entry .p-log-actor")).toHaveText([
+    "D",
+    "D",
+    "B",
+    "D",
+    "B",
+    "D",
+    "B",
+    "D",
+    "B",
+  ]);
   await page.getByLabel("按角色筛选日志", { exact: true }).selectOption("all");
   await page.getByLabel("查找记录和事项", { exact: true }).fill("制作时间");
   await expect(page.locator(".p-item-sheet")).toHaveCount(1);

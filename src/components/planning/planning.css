@@ -564,6 +564,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 26px;
   color: var(--p-muted);
   font-size: 9px;
   white-space: nowrap;

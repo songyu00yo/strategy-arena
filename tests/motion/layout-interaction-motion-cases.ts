@@ -36,6 +36,16 @@ type Pose = {
   }>;
   busy: string | null;
   effects: Array<{ state: string; time: number | null; duration: number | string; keys: object[] }>;
+  heightLayout?: {
+    used: number;
+    inline: string;
+    target: number | null;
+    min: string;
+    max: string;
+    borderBoxFloor: number;
+    marginTop: number;
+    ownEffects: Array<{ state: string; time: number | null; keys: Record<string, unknown>[] }>;
+  };
 };
 type MotionFrame = {
   at: number;
@@ -169,10 +179,11 @@ async function recordMotion(
   selectors: Record<string, string>,
   action: () => Promise<unknown>,
   milliseconds = 800,
+  heightOwners: string[] = [],
 ): Promise<MotionRecord> {
   await installNativeMotionProbe(page, selectors);
   const sampling = page.evaluate(
-    ({ root, selectors, milliseconds }) =>
+    ({ root, selectors, milliseconds, heightOwners }) =>
       new Promise<{ frames: MotionFrame[]; events: MotionFrame[] }>((resolve) => {
         const frames: MotionFrame[] = [];
         const events: MotionFrame[] = [];
@@ -180,7 +191,7 @@ async function recordMotion(
         const sample = (at: number, event = false) => {
           const container = document.querySelector<HTMLElement>(root);
           const origin = container?.getBoundingClientRect();
-          const pose = (node: HTMLElement | null): Pose | null => {
+          const pose = (node: HTMLElement | null, trackHeight = false): Pose | null => {
             if (!node) return null;
             const box = node.getBoundingClientRect();
             const style = getComputedStyle(node);
@@ -217,6 +228,48 @@ async function recordMotion(
                   })()
                 : [],
               busy: node.getAttribute("aria-busy"),
+              ...(trackHeight
+                ? {
+                    heightLayout: {
+                      // CSSOM used height shares height-keyframe coordinates, without transforms.
+                      used: Number.parseFloat(style.height),
+                      inline: node.style.height,
+                      target:
+                        node.dataset.disclosureTargetHeight === undefined
+                          ? null
+                          : Number(node.dataset.disclosureTargetHeight),
+                      min: style.minHeight,
+                      max: style.maxHeight,
+                      borderBoxFloor:
+                        style.boxSizing === "border-box"
+                          ? [
+                              style.paddingTop,
+                              style.paddingBottom,
+                              style.borderTopWidth,
+                              style.borderBottomWidth,
+                            ].reduce((sum, value) => sum + Number.parseFloat(value), 0)
+                          : 0,
+                      marginTop: Number.parseFloat(style.marginTop),
+                      ownEffects: node.getAnimations().flatMap((animation) => {
+                        const effect = animation.effect;
+                        if (!(effect instanceof KeyframeEffect) || effect.target !== node)
+                          return [];
+                        const keys = effect.getKeyframes();
+                        if (!keys.some((key) => "height" in key)) return [];
+                        return [
+                          {
+                            state: animation.playState,
+                            time:
+                              typeof animation.currentTime === "number"
+                                ? animation.currentTime
+                                : null,
+                            keys,
+                          },
+                        ];
+                      }),
+                    },
+                  }
+                : {}),
               effects: node.getAnimations({ subtree: true }).map((animation) => {
                 const duration = animation.effect?.getTiming().duration ?? 0;
                 return {
@@ -243,7 +296,7 @@ async function recordMotion(
             slots: Object.fromEntries(
               Object.entries(selectors).map(([key, selector]) => [
                 key,
-                pose(document.querySelector<HTMLElement>(selector)),
+                pose(document.querySelector<HTMLElement>(selector), heightOwners.includes(key)),
               ]),
             ),
             retiring: retired.map((node) => ({
@@ -279,7 +332,7 @@ async function recordMotion(
         observer.observe(document.body, { childList: true, subtree: true, attributes: true });
         sample(performance.now());
       }),
-    { root, selectors, milliseconds },
+    { root, selectors, milliseconds, heightOwners },
   );
   await action();
   const observed = await sampling;
@@ -509,10 +562,14 @@ export function registerLayoutInteractionMotionTests(mode: "functional" | "displ
       "switch-source",
       ".gi-sources",
       {
+        sources: ".gi-sources",
         preview: ".gi-source-preview",
+        stage: ".gi-source-preview > div > div",
         content: ".gi-source-preview [data-source-preview-content]",
       },
       () => page.getByRole("button", { name: /explicit-two.txt.*第2行/ }).click(),
+      800,
+      ["sources", "preview", "stage", "content"],
     );
     const after = {
       text: await pre.textContent(),
@@ -535,6 +592,94 @@ export function registerLayoutInteractionMotionTests(mode: "functional" | "displ
     expect(after.focused).toBe(true);
     expect(after.oldScroll).toBeGreaterThan(0);
     expect(api.unexpected).toEqual([]);
+
+    expect(
+      await page
+        .locator(".gi-source-preview [data-source-preview-content]")
+        .evaluate((content) =>
+          content.parentElement?.parentElement?.matches(".gi-source-preview > div > div"),
+        ),
+    ).toBe(true);
+    const samples = [...record.frames, ...record.events].sort((left, right) => left.at - right.at);
+    expect(samples.every((frame) => frame.slots.content?.heightLayout?.marginTop === 10)).toBe(
+      true,
+    );
+    let releases = 0;
+    for (const owner of ["sources", "preview", "stage"]) {
+      const points = samples.map((frame) => frame.slots[owner]!.heightLayout!);
+      const final = record.frames.at(-1)!.slots[owner]!.heightLayout!;
+      const handles = record.native.filter(
+        (entry) =>
+          entry.keys.some((key) => "height" in key) &&
+          (owner === "stage"
+            ? entry.ancestors[1] === "div." && entry.ancestors[2] === "div.gi-source-preview"
+            : entry.target === (owner === "sources" ? "div.gi-sources" : "div.gi-source-preview")),
+      );
+      const endpoints = handles.map((entry) =>
+        Number.parseFloat(String(entry.keys.at(-1)!.height)),
+      );
+      const targets = [
+        ...endpoints,
+        ...points.flatMap((point) => (point.target === null ? [] : [point.target])),
+      ];
+      expect(
+        targets.every(Number.isFinite),
+        `${owner} has finite logical height destinations`,
+      ).toBe(true);
+      if (targets.length)
+        expect(
+          Math.max(...targets) - Math.min(...targets),
+          `${owner} keeps one destination during the static source switch`,
+        ).toBeLessThanOrEqual(0.5);
+
+      // Respect actual CSS min/max-height when comparing a height key to its used value.
+      expect(final.min === "auto" || final.min.endsWith("px")).toBe(true);
+      expect(final.max === "none" || final.max.endsWith("px")).toBe(true);
+      const minimum = Math.max(final.borderBoxFloor, Number.parseFloat(final.min) || 0);
+      const maximum = final.max === "none" ? Infinity : Number.parseFloat(final.max);
+      for (const endpoint of endpoints) {
+        const usedEndpoint = Math.max(minimum, Math.min(maximum, endpoint));
+        expect(
+          Math.abs(usedEndpoint - final.used),
+          `${owner} height handle ends at its final auto used height`,
+        ).toBeLessThanOrEqual(0.5);
+      }
+
+      for (let index = 1; index < points.length; index++) {
+        const before = points[index - 1];
+        const current = points[index];
+        if (!before.ownEffects.length || current.ownEffects.length) continue;
+        const auto = points
+          .slice(index)
+          .find((point) => point.inline === "auto" && !point.ownEffects.length);
+        expect(
+          auto,
+          `${owner} returns to auto after releasing its own height effect`,
+        ).toBeDefined();
+        expect(
+          Math.abs(auto!.used - before.used),
+          `${owner} releases to auto without a height jump`,
+        ).toBeLessThanOrEqual(0.5);
+        releases++;
+      }
+      const settled = record.frames.slice(-3).map((frame) => frame.slots[owner]!.heightLayout!);
+      expect(settled).toHaveLength(3);
+      expect(
+        settled.every(
+          (point) => point.inline === "auto" && point.target === null && !point.ownEffects.length,
+        ),
+        `${owner} has three auto-sized rendered frames`,
+      ).toBe(true);
+      expect(
+        Math.max(...settled.map((point) => point.used)) -
+          Math.min(...settled.map((point) => point.used)),
+        `${owner} stays stable after settling`,
+      ).toBeLessThanOrEqual(0.5);
+    }
+    expect(
+      releases,
+      "An actual owner height effect was observed through release to auto",
+    ).toBeGreaterThan(0);
   });
 
   for (const width of [1440, 390]) {

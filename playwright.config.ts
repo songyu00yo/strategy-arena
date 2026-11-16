@@ -33,7 +33,7 @@ export default defineConfig({
           {
             name: "webkit",
             testMatch:
-              /(?:replay-interaction|paper-theater|paper-entry-seal|live-clarification|live-summary-reconfirmation|clarification-long-content)\.spec\.ts/,
+              /(?:replay-interaction|paper-theater|paper-entry-seal|live-clarification|live-summary-reconfirmation|clarification-long-content|layout-interaction-motion)\.spec\.ts/,
             use: { ...devices["Desktop Safari"] },
           },
         ]

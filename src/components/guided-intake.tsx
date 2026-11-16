@@ -2281,7 +2281,10 @@ export function GuidedIntake({
                 key={item.id}
                 type="button"
                 className={source?.id === item.id ? "selected" : ""}
-                onClick={() => setSource(item)}
+                onClick={(event) => {
+                  event.currentTarget.focus({ preventScroll: true });
+                  setSource(item);
+                }}
               >
                 <FileText size={15} />
                 <span>

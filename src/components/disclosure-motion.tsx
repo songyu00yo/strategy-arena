@@ -3,9 +3,30 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { reducedMotion } from "./console/effects";
 
+/** CSSOM used heights retain layout fractions without inheriting ancestor transforms. */
+function layoutHeight(element: HTMLElement, target?: number) {
+  if (typeof getComputedStyle !== "function") return target ?? element.offsetHeight;
+  const style = getComputedStyle(element);
+  if (
+    style.display === "none" ||
+    (typeof element.getClientRects === "function" && !element.getClientRects().length)
+  )
+    return 0;
+  const height = target ?? Number.parseFloat(style.height);
+  if (!Number.isFinite(height) || (target === undefined && !style.height.endsWith("px")))
+    return element.offsetHeight;
+  const edges = [
+    style.paddingTop,
+    style.paddingBottom,
+    style.borderTopWidth,
+    style.borderBottomWidth,
+  ].reduce((sum, value) => sum + (Number.parseFloat(value) || 0), 0);
+  return style.boxSizing === "border-box" ? Math.max(edges, height) : height + edges;
+}
+
 /** Predict the settled height while nested disclosures animate their own layout. */
 export function disclosureTargetHeight(inner: HTMLElement) {
-  let height = inner.offsetHeight;
+  let height = layoutHeight(inner);
   for (const child of inner.querySelectorAll<HTMLElement>(
     '[data-disclosure-motion-active="height"]',
   )) {
@@ -14,7 +35,7 @@ export function disclosureTargetHeight(inner: HTMLElement) {
     );
     if (parent && inner.contains(parent)) continue;
     const target = Number(child.dataset.disclosureTargetHeight);
-    if (Number.isFinite(target)) height += target - child.offsetHeight;
+    if (Number.isFinite(target)) height += layoutHeight(child, target) - layoutHeight(child);
   }
   return Math.max(0, height);
 }
@@ -436,7 +457,10 @@ function TransitionContents({
   }, []);
   return (
     <div ref={stage} style={{ position: "relative", display: "flow-root" }}>
-      <div ref={node}>{shown.children}</div>
+      {/* Keep child margins inside the box measured for the stage destination. */}
+      <div ref={node} style={{ display: "flow-root" }}>
+        {shown.children}
+      </div>
     </div>
   );
 }

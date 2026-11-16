@@ -5,9 +5,7 @@ import { Check, Copy, Download, FileText, LoaderCircle, RefreshCw, X } from "luc
 import type { PlanningController } from "../use-planning";
 import { agentPaperAnchor } from "./paper-motion";
 import { usePaperDialog } from "./use-paper-dialog";
-
-/** Internal execution instructions are never a reader-facing report section. */
-const internalSection = /prompt|提示词|系统指令|开发者指令|给\s*AI|供\s*AI|AI\s*执行说明/iu;
+import { reportPresentation } from "./report-presentation";
 
 export function ReportPaper({
   controller,
@@ -25,39 +23,9 @@ export function ReportPaper({
   const { dialog, close } = usePaperDialog({ anchor: () => agentPaperAnchor("C"), onClose });
   const confirmed = report?.status === "confirmed";
   const outdated = !!report && report.basedOnRevision !== session.revision;
-  const sections = (report?.sections ?? draft?.sections ?? []).filter(
-    (section) => !internalSection.test(section.title),
-  );
-  const title = report?.title || draft?.title || "项目分析";
-  const summary = report?.summary || draft?.summary || "当前已整理的项目理解。";
-  const unresolved = [
-    ...new Set([
-      ...(report?.unresolved ?? []),
-      ...(session.review?.uncertainties ?? []),
-      ...(session.review?.blockers.map((blocker) => blocker.description) ?? []),
-    ]),
-  ];
-  // Build a reader document from presentation fields, never executionPrompt,
-  // raw markdown, source IDs, revisions, fingerprints or request metadata.
-  const documentText = [
-    `# ${title}`,
-    summary,
-    ...sections.map((section) => `## ${section.title}\n\n${section.content}`),
-    report?.tasks.length
-      ? `## 建议步骤\n\n${report.tasks.map((task, index) => `${index + 1}. ${task.title}\n${task.instructions}${task.acceptance.length ? `\n检查要点：${task.acceptance.join("；")}` : ""}`).join("\n\n")}`
-      : "",
-    report?.risks.length
-      ? `## 风险与取舍\n\n${report.risks.map((risk) => `- ${risk}`).join("\n")}`
-      : "",
-    unresolved.length
-      ? `## 待确认事项\n\n${unresolved.map((value) => `- ${value}`).join("\n")}`
-      : "",
-    report?.acceptance.length
-      ? `## 检查要点\n\n${report.acceptance.map((value) => `- ${value}`).join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const presentation = reportPresentation(report, draft, session.review);
+  const { summary, sections, tasks, risks, unresolved, acceptance, documentText } = presentation;
+  const title = presentation.title || "项目分析";
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(documentText);
@@ -141,10 +109,12 @@ export function ReportPaper({
         <h2 id="planning-report-title" data-paper-focus tabIndex={-1}>
           {title}
         </h2>
-        <section className="p-report-overview">
-          <h3>项目理解</h3>
-          <p className="p-report-intro">{summary}</p>
-        </section>
+        {summary && (
+          <section className="p-report-overview">
+            <h3>项目理解</h3>
+            <p className="p-report-intro">{summary}</p>
+          </section>
+        )}
         {outdated && <p className="p-inline-error">要求已变化，请先更新这份分析。</p>}
         {sections.map((section, index) => (
           <section className="p-report-section" key={section.id}>
@@ -172,11 +142,11 @@ export function ReportPaper({
             )}
           </section>
         ))}
-        {!!report?.tasks.length && (
+        {!!tasks.length && (
           <section className="p-report-section">
             <h3>建议步骤</h3>
             <ol className="p-report-tasks">
-              {report.tasks.map((task) => (
+              {tasks.map((task) => (
                 <li key={task.id}>
                   <h4>{task.title}</h4>
                   <p>{task.instructions}</p>
@@ -184,7 +154,7 @@ export function ReportPaper({
                     <small>
                       先完成：
                       {task.dependsOn
-                        .map((itemId) => report.tasks.find((entry) => entry.id === itemId)?.title)
+                        .map((itemId) => tasks.find((entry) => entry.id === itemId)?.title)
                         .filter(Boolean)
                         .join("、")}
                     </small>
@@ -201,11 +171,11 @@ export function ReportPaper({
             </ol>
           </section>
         )}
-        {!!report?.risks.length && (
+        {!!risks.length && (
           <section className="p-report-section">
             <h3>风险与取舍</h3>
             <ul>
-              {report.risks.map((risk, index) => (
+              {risks.map((risk, index) => (
                 <li key={index}>{risk}</li>
               ))}
             </ul>
@@ -221,11 +191,11 @@ export function ReportPaper({
             </ul>
           </section>
         )}
-        {!!report?.acceptance.length && (
+        {!!acceptance.length && (
           <section className="p-report-section">
             <h3>检查要点</h3>
             <ul>
-              {report.acceptance.map((value, index) => (
+              {acceptance.map((value, index) => (
                 <li key={index}>{value}</li>
               ))}
             </ul>

@@ -427,7 +427,12 @@ function reviewed(previous: PlanningSnapshot, operationId: string, ready: boolea
     title: "个人网站项目分析 · 合成样本",
     summary:
       "你想通过个人网站展示自己的作品，让有兴趣的人了解你的能力并取得联系。以小范围的静态作品展示起步具有可行性，素材和时间还需要核对。",
-    sections: structuredClone(next.session.draft!.sections),
+    sections: structuredClone(next.session.draft!.sections).map((section, index) => ({
+      ...section,
+      content: index === 0
+        ? `${section.content}\n\n给 AI 的执行说明：INTERNAL_BODY_MUST_NOT_RENDER`
+        : section.content,
+    })),
     tasks: [
       {
         id: "entry-task",
@@ -749,11 +754,16 @@ test("synthetic API: five-agent workspace, automatic single choice, persisted re
     noMoreQuestions,
     questioned(api.snapshot, noMoreQuestions.body.operationId, false),
   );
+  const lowerRowBeforeExperts = await page.locator(".p-slot-E").boundingBox();
   await finishExperts(api);
+  await expect(page.getByRole("button", { name: "查看分析", exact: true }).first()).toBeVisible();
+  const lowerRowAfterExperts = await page.locator(".p-slot-E").boundingBox();
+  expect(Math.abs(lowerRowAfterExperts!.y - lowerRowBeforeExperts!.y)).toBeLessThan(2);
+  await expect(page.locator(".p-manuscript")).not.toContainText("INTERNAL_BODY_MUST_NOT_RENDER");
   const report = await openReport(page);
   await expect(report.getByRole("checkbox")).toHaveCount(0);
   await expect(
-    report.getByText(/INTERNAL_PROMPT_MUST_NOT_RENDER|INTERNAL_MARKDOWN_MUST_NOT_EXPORT/),
+    report.getByText(/INTERNAL_(?:PROMPT_MUST_NOT_RENDER|MARKDOWN_MUST_NOT_EXPORT|BODY_MUST_NOT_RENDER)/),
   ).toHaveCount(0);
   await expect(report.getByRole("button", { name: "执行提示词", exact: true })).toHaveCount(0);
   await expect(report).toContainText("可投入时间尚未核实");
@@ -1137,6 +1147,21 @@ test("synthetic API: dense public workbench exposes live findings and readable h
   await expect(page.locator('[data-planning-agent="C"]')).toContainText("目前适合先做一个");
   await expect(page.getByRole("button", { name: "执行提示词", exact: true })).toHaveCount(0);
   await screenshot(page, testInfo, "desktop-dense-live-analysis");
+  await page.getByRole("region", { name: "项目档案", exact: true }).evaluate((element) =>
+    element.scrollIntoView({ block: "start", behavior: "instant" }),
+  );
+  await page.locator(".p-log-entry > summary").first().click();
+  await screenshot(page, testInfo, "desktop-project-archive");
+  await page.getByLabel("按角色筛选日志", { exact: true }).selectOption("D");
+  await expect(page.locator(".p-log-entry .actor-D").first()).toBeVisible();
+  await expect(page.locator(".p-log-entry .p-log-actor:not(.actor-D)")).toHaveCount(0);
+  await page.getByLabel("按角色筛选日志", { exact: true }).selectOption("all");
+  await page.getByLabel("查找记录和事项", { exact: true }).fill("制作时间");
+  await expect(page.locator(".p-item-sheet")).toHaveCount(1);
+  await expect(page.locator(".p-item-sheet")).toContainText("制作时间");
+  await page.getByLabel("查找记录和事项", { exact: true }).fill("");
+  await expect(page.locator(".p-item-sheet")).toHaveCount(8);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   await page.setViewportSize({ width: 1280, height: 800 });
   await screenshot(page, testInfo, "laptop-dense-live-analysis");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
@@ -1144,6 +1169,16 @@ test("synthetic API: dense public workbench exposes live findings and readable h
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await screenshot(page, testInfo, "mobile-dense-live-analysis");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole("button", { name: /查看正在分析的/ }).click();
+  await expect(page.locator('[data-planning-agent="C"]')).toBeInViewport({ ratio: 0.5 });
+  await screenshot(page, testInfo, "mobile-current-analysis");
+  await page.getByRole("region", { name: "项目档案", exact: true }).evaluate((element) =>
+    element.scrollIntoView({ block: "start", behavior: "instant" }),
+  );
+  await screenshot(page, testInfo, "mobile-project-archive");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

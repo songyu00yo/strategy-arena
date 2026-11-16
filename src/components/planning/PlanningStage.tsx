@@ -18,6 +18,7 @@ import type {
 import { createMotionLoop, createMotionScope, useReducedMotion } from "../console/motion-runtime";
 import { flyLight } from "../console/effects";
 import { agentPaperAnchor } from "./paper-motion";
+import { reportPresentation } from "./report-presentation";
 
 const ORDER = ["A", "B", "D", "E", "C"] as const;
 const INK: Record<string, string> = {
@@ -49,7 +50,6 @@ const CONCLUSION = {
   infeasible: "当前条件下不可行",
   insufficient_information: "信息不足",
 };
-const internalSection = /prompt|提示词|系统指令|开发者指令|给\s*AI|供\s*AI|AI\s*执行说明/iu;
 type Geometry = { width: number; height: number; nodes: Record<string, { x: number; y: number }> };
 const clock = (value: string) =>
   new Date(value).toLocaleTimeString("zh-CN", {
@@ -228,7 +228,9 @@ export function PlanningStage({
   ].slice(-8);
   const currentReport =
     session.report?.basedOnRevision === session.revision ? session.report : null;
-  const latestDraft = currentReport ?? session.draft;
+  const latestDraft =
+    currentReport || session.draft ? reportPresentation(currentReport, session.draft) : null;
+  const activeAgent = session.agents.find((agent) => agent.status === "running");
 
   return (
     <section className="p-stage" ref={root} aria-label="多 Agent 工作台">
@@ -238,10 +240,28 @@ export function PlanningStage({
           <h2>项目分析室</h2>
           <span className="p-small-label">五个视角 · 同一份项目资料</span>
         </div>
-        <span className="p-live-legend">
-          <i className={session.status === "working" ? "is-live" : ""} />
-          {session.status === "working" ? "正在分析" : "工作记录"}
-        </span>
+        {session.status === "working" && activeAgent ? (
+          <button
+            type="button"
+            className="p-live-legend p-current-agent-link"
+            aria-label={`查看正在分析的${activeAgent.name}`}
+            onClick={() => {
+              const paper = root.current?.querySelector<HTMLElement>(
+                `[data-planning-agent="${activeAgent.id}"]`,
+              );
+              paper?.focus({ preventScroll: true });
+              paper?.scrollIntoView({ behavior: reduce ? "instant" : "smooth", block: "center" });
+            }}
+          >
+            <i className="is-live" />
+            正在分析 · {activeAgent.id}
+            <ArrowDownRight size={11} />
+          </button>
+        ) : (
+          <span className="p-live-legend">
+            <i />工作记录
+          </span>
+        )}
       </div>
       <div className="p-collaboration-strip" aria-label="最近协作">
         <span className="p-strip-label">最近交接</span>
@@ -348,6 +368,7 @@ export function PlanningStage({
                 data-board={id}
                 data-status={agent?.status ?? "idle"}
                 aria-label={`${id} · ${agent?.name ?? ROLE[id]}`}
+                tabIndex={-1}
               >
                 <div className="p-registration" aria-hidden="true">
                   <i />
@@ -543,7 +564,7 @@ export function PlanningStage({
             <span className="p-manuscript-mark">摘</span>
             <div>
               <span className="p-small-label">当前项目摘要</span>
-              <h3>{latestDraft?.title || "原始想法"}</h3>
+              <h3>{latestDraft ? latestDraft.title || "项目分析" : "原始想法"}</h3>
             </div>
             <span className="p-manuscript-state">
               {currentReport
@@ -556,34 +577,38 @@ export function PlanningStage({
             </span>
           </header>
           <div className="p-manuscript-body">
-            <p>{latestDraft?.summary || session.goal}</p>
+            {latestDraft ? (
+              latestDraft.summary && <p>{latestDraft.summary}</p>
+            ) : (
+              <p>{session.goal}</p>
+            )}
             {latestDraft?.sections.length ? (
               <div className="p-manuscript-sections">
-                {latestDraft.sections
-                  .filter((section) => !internalSection.test(section.title))
-                  .map((section) => (
-                    <details key={section.id}>
-                      <summary>
-                        <span>{section.title}</span>
-                        <ChevronDown size={12} />
-                      </summary>
-                      <p>{section.content}</p>
-                    </details>
-                  ))}
+                {latestDraft.sections.map((section) => (
+                  <details key={section.id}>
+                    <summary>
+                      <span>{section.title}</span>
+                      <ChevronDown size={12} />
+                    </summary>
+                    <p>{section.content}</p>
+                  </details>
+                ))}
               </div>
             ) : (
-              <div className="p-manuscript-origin">
-                <span>来自你的原话</span>
-                <time dateTime={session.createdAt}>{clock(session.createdAt)}</time>
-              </div>
+              !latestDraft && (
+                <div className="p-manuscript-origin">
+                  <span>来自你的原话</span>
+                  <time dateTime={session.createdAt}>{clock(session.createdAt)}</time>
+                </div>
+              )
             )}
-            {!!session.draft?.changes.length && (
+            {!!latestDraft?.changes.length && (
               <details className="p-draft-changes">
                 <summary>
                   最近一次更新
                   <ChevronDown size={12} />
                 </summary>
-                {session.draft.changes.slice(-3).map((change, index) => (
+                {latestDraft.changes.slice(-3).map((change, index) => (
                   <div key={index}>
                     {change.before && <p className="p-change-before">{change.before}</p>}
                     <p>{change.after}</p>

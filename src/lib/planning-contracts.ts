@@ -3,8 +3,8 @@
  * This file defines data only. It does not implement APIs or authorize actions.
  * Backend owns this contract; frontend consumes it without manufacturing events.
  */
-export const PLANNING_CONTRACT_VERSION = "1.0.0" as const;
-export const PLANNING_AGENT_IDS = ["A", "B", "C"] as const;
+export const PLANNING_CONTRACT_VERSION = "2.0.0" as const;
+export const PLANNING_AGENT_IDS = ["A", "B", "D", "E", "C"] as const;
 export type PlanningAgentId = (typeof PLANNING_AGENT_IDS)[number];
 export type PlanningActor = PlanningAgentId | "user" | "system";
 export type PlanningStatus =
@@ -23,6 +23,39 @@ export type PlanningDimension =
   | "style"
   | "constraints"
   | "delivery";
+
+export type PlanningCoverageArea =
+  | "goal"
+  | "resources"
+  | "time_cost"
+  | "constraints"
+  | "risks"
+  | "implementation"
+  | "mvp";
+export interface PlanningCoverageEntry {
+  area: PlanningCoverageArea;
+  status: "covered" | "partial" | "unknown";
+  reason: string;
+  itemIds: string[];
+  /** An assessment can explicitly identify unknown information without verifying it. */
+  assessedBy: PlanningAgentId | null;
+}
+export interface PlanningProgress {
+  round: number;
+  questionLimit: number;
+  questionsIssued: number;
+  /** Unknown and skipped responses count toward this total. */
+  questionsAnswered: number;
+  /** Limit minus answered: includes both outstanding questions and unissued slots. */
+  questionsRemaining: number;
+  /** Additional question slots: withdrawn questions do not refund a slot. */
+  questionSlotsRemaining: number;
+  activeQuestions: number;
+  stage: "understanding" | "clarifying" | "feasibility" | "production" | "synthesizing" | "report";
+  budgetExhausted: boolean;
+  endedEarly: boolean;
+  coverage: PlanningCoverageEntry[];
+}
 
 export interface PlanningSource {
   kind: "goal" | "answer" | "note" | "material" | "analysis";
@@ -128,6 +161,22 @@ export interface PlanningDraft {
   changes: { itemIds: string[]; before: string; after: string; reason: string }[];
 }
 
+export interface PlanningExpertResult {
+  id: string;
+  agentId: "D" | "E";
+  round: number;
+  basedOnRevision: number;
+  contentFingerprint: string;
+  summary: string;
+  conclusion: "feasible" | "conditional" | "infeasible" | "insufficient_information";
+  sections: PlanningSection[];
+  risks: string[];
+  unknowns: string[];
+  nextSteps: string[];
+  minimumViableVersion: string;
+  createdAt: string;
+}
+
 export interface PlanningReview {
   id: string;
   basedOnRevision: number;
@@ -155,7 +204,13 @@ export interface PlanningReport {
   title: string;
   summary: string;
   sections: PlanningSection[];
-  tasks: { id: string; title: string; instructions: string; dependsOn: string[]; acceptance: string[] }[];
+  tasks: {
+    id: string;
+    title: string;
+    instructions: string;
+    dependsOn: string[];
+    acceptance: string[];
+  }[];
   risks: string[];
   unresolved: string[];
   acceptance: string[];
@@ -171,6 +226,9 @@ export interface PlanningEvent {
   operationId: string | null;
   kind:
     | "session_created"
+    | "session_upgraded"
+    | "round_started"
+    | "questions_closed"
     | "agent_started"
     | "agent_completed"
     | "question_issued"
@@ -202,6 +260,7 @@ export interface PlanningCapabilities {
   canPreview: boolean;
   canConfirm: boolean;
   canStop: boolean;
+  canStartRound: boolean;
   reason: string;
 }
 
@@ -212,8 +271,11 @@ export interface PlanningSession {
   revision: number;
   goal: string;
   modelMode: string;
+  productScope: "analysis_and_guidance";
   status: PlanningStatus;
+  progress: PlanningProgress;
   agents: PlanningAgentActivity[];
+  expertResults: PlanningExpertResult[];
   items: PlanningItem[];
   /** Resolve every referenced source by kind + id, including older answers and notes. */
   sourceRecords: PlanningSourceRecord[];
@@ -223,7 +285,7 @@ export interface PlanningSession {
   review: PlanningReview | null;
   report: PlanningReport | null;
   capabilities: PlanningCapabilities;
-  nextAction: "advance" | "answer" | "review" | "confirm" | "none";
+  nextAction: "advance" | "answer" | "review" | "confirm" | "start_round" | "none";
   activeOperationId: string | null;
   error: { code: string; message: string } | null;
   createdAt: string;
@@ -256,6 +318,7 @@ export type PlanningAction = PlanningActionBase &
     | { kind: "answer"; answers: PlanningAnswerInput[] }
     | { kind: "note"; text: string; itemIds: string[] }
     | { kind: "preview" }
+    | { kind: "start_round" }
     | { kind: "confirm"; reportId: string; fingerprint: string }
     | { kind: "stop" }
   );

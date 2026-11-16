@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   PLANNING_CONTRACT_VERSION,
+  PLANNING_AGENT_IDS,
   type CreatePlanningInput,
   type PlanningAction,
   type PlanningAgentId,
   type PlanningAnswerInput,
   type PlanningDimension,
+  type PlanningCoverageArea,
+  type PlanningCoverageEntry,
   type PlanningEvent,
   type PlanningItem,
   type PlanningQuestion,
@@ -19,9 +22,11 @@ import {
   CreatePlanningSchema,
   PlanningActionSchema,
   PlanningAnalysisOutputSchema,
+  PlanningExpertOutputSchema,
   PlanningQuestionsOutputSchema,
   PlanningReviewOutputSchema,
   type PlanningAnalysisOutput,
+  type PlanningExpertOutput,
   type PlanningQuestionsOutput,
   type PlanningReviewOutput,
 } from "../planning-schemas";
@@ -50,7 +55,47 @@ const DIMENSIONS: PlanningDimension[] = [
   "constraints",
   "delivery",
 ];
-const NAMES = { A: "理解与拆解", B: "构思与提问", C: "查漏与交付" } as const;
+const NAMES = {
+  A: "项目理解",
+  B: "关键取舍",
+  D: "可行性分析",
+  E: "制作路径",
+  C: "综合交付",
+} as const;
+const RESPONSIBILITIES = {
+  A: "目标 · 受众 · 范围",
+  B: "选项 · 优先级 · 取舍",
+  D: "资源 · 时间 · 风险",
+  E: "第一版 · 步骤 · 检查",
+  C: "结论 · 条件 · 待确认",
+} as const;
+const COVERAGE_AREAS: PlanningCoverageArea[] = [
+  "goal",
+  "resources",
+  "time_cost",
+  "constraints",
+  "risks",
+  "implementation",
+  "mvp",
+];
+const COVERAGE_NAMES: Record<PlanningCoverageArea, string> = {
+  goal: "项目目标",
+  resources: "现有资源",
+  time_cost: "时间与成本",
+  constraints: "限制条件",
+  risks: "风险",
+  implementation: "制作路径",
+  mvp: "最小可行版本",
+};
+const INITIAL_QUESTION_LIMIT = 8;
+const ADDITIONAL_QUESTION_LIMIT = 3;
+type RoundState = {
+  number: number;
+  limit: number;
+  questionKeys: string[];
+  closed: boolean;
+  endedEarly: boolean;
+};
 type PrivatePlanning = {
   session: PlanningSession;
   snapshotVersion: number;
@@ -61,6 +106,7 @@ type PrivatePlanning = {
   config?: ModelConfig;
   configHash?: string;
   reportHistory: PlanningReport[];
+  roundState: RoundState;
 };
 type Operation = {
   id: string;
@@ -73,7 +119,11 @@ type Operation = {
   role: PlanningAgentId | null;
   updated_at: number;
 };
-type Output = PlanningAnalysisOutput | PlanningQuestionsOutput | PlanningReviewOutput;
+type Output =
+  | PlanningAnalysisOutput
+  | PlanningQuestionsOutput
+  | PlanningExpertOutput
+  | PlanningReviewOutput;
 type CallResult = { value: Output; usage: ModelUsage; formatNormalization?: unknown };
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -110,16 +160,160 @@ function read(sessionId: string, owner: string): PrivatePlanning {
     .prepare("SELECT body FROM planning_sessions WHERE id=? AND owner=?")
     .get(sessionId, owner) as { body: string } | undefined;
   if (!row) throw new ArenaError("未找到这份规划，或当前浏览器没有访问权限。", 404, "NOT_FOUND");
-  return JSON.parse(row.body) as PrivatePlanning;
+  const state = JSON.parse(row.body) as PrivatePlanning;
+  if (!state.roundState || state.session.contractVersion !== PLANNING_CONTRACT_VERSION) {
+    const s = state.session;
+    state.roundState ??= {
+      number: 1,
+      limit: INITIAL_QUESTION_LIMIT,
+      questionKeys: s.questions.map(questionKey),
+      closed:
+        Boolean(s.report) ||
+        (!s.questions.some((question) => question.status === "active") &&
+          s.questions.length >= INITIAL_QUESTION_LIMIT),
+      endedEarly: Boolean(s.report) && s.questions.length < INITIAL_QUESTION_LIMIT,
+    };
+    s.contractVersion = PLANNING_CONTRACT_VERSION;
+    s.productScope = "analysis_and_guidance";
+    s.expertResults ??= [];
+    s.progress ??= initialProgress();
+    s.agents = PLANNING_AGENT_IDS.map((role) => {
+      const existing = s.agents.find((agent) => agent.id === role);
+      return existing
+        ? { ...existing, name: NAMES[role], responsibility: RESPONSIBILITIES[role] }
+        : initialAgent(role);
+    });
+    if (!s.activeOperationId && state.nextRole === "C" && !s.report) {
+      state.roundState.closed = true;
+      state.nextRole = "D";
+    }
+    if (
+      !s.activeOperationId &&
+      !["working", "uncertain"].includes(s.status) &&
+      state.roundState.questionKeys.length >= state.roundState.limit
+    ) {
+      closeQuestions(state, false, "system");
+      if (!s.report) {
+        state.nextRole = "A";
+        if (!["failed", "paused"].includes(s.status)) s.status = "ready";
+      }
+    }
+    emit(
+      state,
+      "session_upgraded",
+      "system",
+      "已有内容已接入新的分析流程",
+      "保留历史回答与报告；新增可行性和制作路径分析，不补造历史专家结论。",
+    );
+    save(state);
+  }
+  return state;
 }
 function operation(operationId: string): Operation | undefined {
   return db().prepare("SELECT * FROM planning_operations WHERE id=?").get(operationId) as
     | Operation
     | undefined;
 }
-function unresolvedItems(session: PlanningSession) {
-  return session.items.filter(
-    (item) => item.required && ["open", "needs_review", "deferred"].includes(item.status),
+function questionKey(question: Pick<PlanningQuestion, "id" | "version">) {
+  return `${question.id}:${question.version}`;
+}
+function initialAgent(role: PlanningAgentId): PlanningSession["agents"][number] {
+  return {
+    id: role,
+    name: NAMES[role],
+    responsibility: RESPONSIBILITIES[role],
+    status: "idle",
+    taskId: null,
+    operationId: null,
+    taskLabel: "等待开始",
+    summary: "",
+    preview: "",
+    startedAt: null,
+    finishedAt: null,
+  };
+}
+function emptyCoverage(): PlanningCoverageEntry[] {
+  return COVERAGE_AREAS.map((area) => ({
+    area,
+    status: "unknown",
+    reason: "尚未分析此方面。",
+    itemIds: [],
+    assessedBy: null,
+  }));
+}
+function initialProgress(): PlanningSession["progress"] {
+  return {
+    round: 1,
+    questionLimit: INITIAL_QUESTION_LIMIT,
+    questionsIssued: 0,
+    questionsAnswered: 0,
+    questionsRemaining: INITIAL_QUESTION_LIMIT,
+    questionSlotsRemaining: INITIAL_QUESTION_LIMIT,
+    activeQuestions: 0,
+    stage: "understanding",
+    budgetExhausted: false,
+    endedEarly: false,
+    coverage: emptyCoverage(),
+  };
+}
+function updateProgress(state: PrivatePlanning) {
+  const s = state.session,
+    round = state.roundState;
+  const keys = new Set(round.questionKeys);
+  const answered = new Set(
+    s.answers
+      .map((answer) => `${answer.questionId}:${answer.questionVersion}`)
+      .filter((key) => keys.has(key)),
+  ).size;
+  const stage = {
+    A: "understanding",
+    B: "clarifying",
+    D: "feasibility",
+    E: "production",
+    C: "synthesizing",
+  } as const;
+  s.progress = {
+    ...s.progress,
+    round: round.number,
+    questionLimit: round.limit,
+    questionsIssued: keys.size,
+    questionsAnswered: answered,
+    questionsRemaining: Math.max(0, round.limit - answered),
+    questionSlotsRemaining: Math.max(0, round.limit - keys.size),
+    activeQuestions: s.questions.filter((question) => question.status === "active").length,
+    stage: s.report
+      ? "report"
+      : s.questions.some((question) => question.status === "active")
+        ? "clarifying"
+        : stage[state.nextRole],
+    budgetExhausted: keys.size >= round.limit,
+    endedEarly: round.endedEarly,
+  };
+}
+function updateCoverage(
+  state: PrivatePlanning,
+  entries: PlanningAnalysisOutput["analysisCoverage"],
+  role: PlanningAgentId,
+) {
+  const known = new Set(state.session.items.map((item) => item.id));
+  for (const entry of entries) {
+    const index = state.session.progress.coverage.findIndex(
+      (current) => current.area === entry.area,
+    );
+    state.session.progress.coverage[index] = {
+      ...entry,
+      itemIds: entry.itemIds.filter((key) => known.has(key)),
+      assessedBy: role,
+    };
+  }
+}
+function currentExperts(state: PrivatePlanning) {
+  const fingerprint = planningContentFingerprint(state.session);
+  return state.session.expertResults.filter(
+    (entry) =>
+      entry.round === state.roundState.number &&
+      entry.basedOnRevision === state.session.revision &&
+      entry.contentFingerprint === fingerprint,
   );
 }
 function canConfirm(state: PrivatePlanning) {
@@ -130,8 +324,8 @@ function canConfirm(state: PrivatePlanning) {
   if (session.activeOperationId || ["working", "uncertain", "completed"].includes(session.status))
     return false;
   if (
-    unresolvedItems(session).length ||
-    session.questions.some((question) => question.status === "active")
+    session.questions.some((question) => question.status === "active") ||
+    !["D", "E"].every((role) => currentExperts(state).some((expert) => expert.agentId === role))
   )
     return false;
   const fingerprint = planningContentFingerprint(session);
@@ -145,28 +339,35 @@ function canConfirm(state: PrivatePlanning) {
 }
 function capabilities(state: PrivatePlanning) {
   const s = state.session;
+  updateProgress(state);
   const locked = Boolean(s.activeOperationId) || s.status === "working" || s.status === "uncertain";
   const active = s.questions.some((question) => question.status === "active");
+  const finished = Boolean(s.report);
   s.capabilities = {
-    canAdvance: !locked && s.status !== "completed" && !active,
+    canAdvance: !locked && !finished && s.status !== "completed" && !active,
     canAnswer: !locked && active && s.status !== "completed",
     canAddNote: !locked,
-    canPreview: !locked && s.items.length > 0 && s.status !== "completed",
+    canPreview:
+      !locked &&
+      s.status !== "completed" &&
+      (!state.roundState.closed || (finished && !canConfirm(state))),
     canConfirm: canConfirm(state),
     canStop: s.status === "working",
+    canStartRound: !locked && finished,
     reason:
       s.status === "uncertain"
         ? "上一请求的结果或费用尚未核实，保留已有内容并暂停新的模型请求。"
         : s.activeOperationId
           ? "正在完成当前请求。"
           : active
-            ? "请先回答当前问题，也可以查看阶段草稿。"
+            ? "可以回答当前问题，也可以直接生成已有信息的分析。"
             : "",
   };
-  if (locked || ["paused", "completed", "failed"].includes(s.status)) s.nextAction = "none";
+  if (locked || ["paused", "failed"].includes(s.status)) s.nextAction = "none";
   else if (active) s.nextAction = "answer";
   else if (s.capabilities.canConfirm) s.nextAction = "confirm";
-  else s.nextAction = state.nextRole === "C" ? "review" : "advance";
+  else if (finished) s.nextAction = "start_round";
+  else s.nextAction = "advance";
 }
 function save(state: PrivatePlanning) {
   state.snapshotVersion++;
@@ -219,6 +420,8 @@ function archiveReport(state: PrivatePlanning) {
   if (state.session.report) state.reportHistory.push(structuredClone(state.session.report));
   state.session.report = null;
   state.session.review = null;
+  state.session.expertResults = [];
+  state.session.progress.coverage = emptyCoverage();
 }
 function checkRevision(state: PrivatePlanning, revision: number) {
   if (state.session.revision !== revision)
@@ -331,26 +534,24 @@ export function createPlanning(owner: string, input: CreatePlanningInput): Plann
       nextRole: "A",
       stopped: false,
       reportHistory: [],
+      roundState: {
+        number: 1,
+        limit: INITIAL_QUESTION_LIMIT,
+        questionKeys: [],
+        closed: false,
+        endedEarly: false,
+      },
       session: {
         contractVersion: PLANNING_CONTRACT_VERSION,
         id: sessionId,
         revision: 0,
         goal: parsed.goal,
         modelMode: parsed.modelMode,
+        productScope: "analysis_and_guidance",
         status: "ready",
-        agents: (["A", "B", "C"] as const).map((role) => ({
-          id: role,
-          name: NAMES[role],
-          responsibility: NAMES[role],
-          status: "idle",
-          taskId: null,
-          operationId: null,
-          taskLabel: "等待开始",
-          summary: "",
-          preview: "",
-          startedAt: null,
-          finishedAt: null,
-        })),
+        progress: initialProgress(),
+        agents: PLANNING_AGENT_IDS.map(initialAgent),
+        expertResults: [],
         items: [],
         sourceRecords: [
           {
@@ -373,6 +574,7 @@ export function createPlanning(owner: string, input: CreatePlanningInput): Plann
           canPreview: false,
           canConfirm: false,
           canStop: false,
+          canStartRound: false,
           reason: "",
         },
         nextAction: "advance",
@@ -476,13 +678,30 @@ function applyAnalysis(state: PrivatePlanning, output: PlanningAnalysisOutput, s
   for (const proposed of output.items) {
     const old = map.get(proposed.id);
     if (old?.status === "confirmed") continue;
+    const lastAnswer = state.session.answers.findLast((answer) =>
+      answer.question.itemIds.includes(proposed.id),
+    );
+    const userDeferred = lastAnswer && lastAnswer.state !== "answered";
     const item: PlanningItem = {
       ...proposed,
-      status:
-        proposed.status === "not_applicable" && !proposed.reason.trim() ? "open" : proposed.status,
+      status: userDeferred
+        ? "deferred"
+        : proposed.status === "not_applicable" && !proposed.reason.trim()
+          ? "open"
+          : proposed.status,
       dependsOn: [...new Set(proposed.dependsOn)],
-      sources: sources(state, proposed.sources, sourceId, proposed.description),
+      sources: [
+        ...new Map(
+          [
+            ...(old?.sources.filter((source) => source.kind !== "analysis") ?? []),
+            ...sources(state, proposed.sources, sourceId, proposed.description),
+          ].map((source) => [hash(source), source]),
+        ).values(),
+      ],
       confirmation: null,
+      reason: userDeferred
+        ? "用户尚未作出这个决定；以下分析不能替代用户决定。" + proposed.reason
+        : proposed.reason,
     };
     if (JSON.stringify(old) !== JSON.stringify(item)) changed.add(item.id);
     map.set(item.id, item);
@@ -498,11 +717,11 @@ function applyAnalysis(state: PrivatePlanning, output: PlanningAnalysisOutput, s
     archiveReport(state);
     emit(state, "requirements_changed", "A", "需求事项已更新", output.summary, {
       itemIds: [...changed],
-      to: "B",
+      to: state.roundState.closed ? "D" : "B",
     });
   }
   state.session.draft = {
-    title: "正在形成的执行方案",
+    title: "目前对项目的理解",
     summary: output.summary,
     sections: state.session.items.map((item) => ({
       id: `item-${item.id}`,
@@ -518,13 +737,30 @@ function applyAnalysis(state: PrivatePlanning, output: PlanningAnalysisOutput, s
       reason: map.get(key)!.reason,
     })),
   };
-  state.nextRole = "B";
+  updateCoverage(state, output.analysisCoverage, "A");
+  if (!state.roundState.closed && state.roundState.questionKeys.length >= state.roundState.limit)
+    closeQuestions(state, false, "system");
+  state.nextRole = state.roundState.closed ? "D" : "B";
   state.session.status = state.session.questions.some((question) => question.status === "active")
     ? "awaiting_user"
     : "ready";
 }
 function applyQuestions(state: PrivatePlanning, output: PlanningQuestionsOutput) {
-  const questions: PlanningQuestion[] = output.questions.map((input) => {
+  const slots = state.roundState.closed
+    ? 0
+    : Math.max(0, state.roundState.limit - state.roundState.questionKeys.length);
+  const candidates = output.questions
+    .filter(
+      (input) =>
+        !state.session.answers.some(
+          (answer) =>
+            answer.question.id === input.id &&
+            answer.question.title === input.title &&
+            hash(answer.question.options) === hash(input.options),
+        ),
+    )
+    .slice(0, slots);
+  const questions: PlanningQuestion[] = candidates.map((input) => {
     if (input.itemIds.length !== 1)
       throw new ArenaError(
         "每道问题只能对应一个明确决定，请重新整理本步。",
@@ -578,6 +814,8 @@ function applyQuestions(state: PrivatePlanning, output: PlanningQuestionsOutput)
       askedBy: "B",
       answerTo: "A",
       status: "active",
+      allowUnknown: true,
+      allowSkip: true,
     };
   });
   if (new Set(questions.map((question) => question.id)).size !== questions.length)
@@ -590,6 +828,7 @@ function applyQuestions(state: PrivatePlanning, output: PlanningQuestionsOutput)
     for (const old of state.session.questions)
       if (old.status === "active") old.status = "withdrawn";
     state.session.questions.push(...questions);
+    state.roundState.questionKeys.push(...questions.map(questionKey));
     for (const question of questions)
       emit(state, "question_issued", "B", question.title, question.reason, {
         from: "B",
@@ -599,20 +838,108 @@ function applyQuestions(state: PrivatePlanning, output: PlanningQuestionsOutput)
         itemIds: question.itemIds,
       });
     state.session.status = "awaiting_user";
-  } else state.session.status = "ready";
-  state.nextRole = questions.length ? "A" : "C";
+  } else {
+    closeQuestions(state, false, "B");
+    state.session.status = "ready";
+  }
+  state.nextRole = questions.length ? "A" : "D";
+}
+function closeQuestions(state: PrivatePlanning, early: boolean, actor: PlanningEvent["actor"]) {
+  const alreadyClosed = state.roundState.closed;
+  const unanswered = state.session.questions.filter((question) => question.status === "active");
+  if (alreadyClosed && !unanswered.length) return;
+  state.roundState.closed = true;
+  if (!alreadyClosed) state.roundState.endedEarly = early;
+  if (unanswered.length) {
+    archiveReport(state);
+    state.session.revision++;
+    for (const question of unanswered) question.status = "withdrawn";
+  }
+  const questionAgent = state.session.agents.find((agent) => agent.id === "B");
+  if (questionAgent?.status === "awaiting_user") questionAgent.status = "completed";
+  if (alreadyClosed) return;
+  emit(
+    state,
+    "questions_closed",
+    actor,
+    "本轮提问已结束",
+    early
+      ? "按你的选择，直接分析已有信息；未回答的内容会作为未知保留。"
+      : "不再追加本轮问题，接下来整理可行性与制作路径。",
+    { to: "D", itemIds: unanswered.flatMap((question) => question.itemIds) },
+  );
+}
+function startRound(
+  state: PrivatePlanning,
+  action: Extract<PlanningAction, { kind: "start_round" }>,
+) {
+  capabilities(state);
+  if (!state.session.capabilities.canStartRound)
+    throw new ArenaError(
+      "请先完成当前分析，再开启额外三题的细化。",
+      409,
+      "PLANNING_ACTION_UNAVAILABLE",
+    );
+  closeQuestions(state, false, "user");
+  archiveReport(state);
+  state.roundState = {
+    number: state.roundState.number + 1,
+    limit: ADDITIONAL_QUESTION_LIMIT,
+    questionKeys: [],
+    closed: false,
+    endedEarly: false,
+  };
+  state.session.revision++;
+  state.session.status = "ready";
+  state.session.error = null;
+  state.session.agents = PLANNING_AGENT_IDS.map(initialAgent);
+  state.nextRole = "A";
+  state.stopped = false;
+  emit(
+    state,
+    "round_started",
+    "user",
+    "继续细化已开启",
+    "本轮最多追加三题，已有回答与来源继续保留。",
+    { operationId: action.operationId, to: "A" },
+  );
+}
+function applyExpert(
+  state: PrivatePlanning,
+  role: "D" | "E",
+  output: PlanningExpertOutput,
+  sourceId: string,
+) {
+  const s = state.session;
+  const known = new Set(s.items.map((item) => item.id));
+  s.expertResults = s.expertResults.filter((entry) => entry.agentId !== role);
+  s.expertResults.push({
+    id: sourceId,
+    agentId: role,
+    round: state.roundState.number,
+    basedOnRevision: s.revision,
+    contentFingerprint: planningContentFingerprint(s),
+    summary: output.summary,
+    conclusion: output.conclusion,
+    sections: output.sections.map((section) => ({
+      ...section,
+      itemIds: section.itemIds.filter((key) => known.has(key)),
+      sources: sources(state, section.sources, sourceId, section.content),
+    })),
+    risks: output.risks,
+    unknowns: output.unknowns,
+    nextSteps: output.nextActions,
+    minimumViableVersion: output.minimumViableVersion,
+    createdAt: now(),
+  });
+  updateCoverage(state, output.analysisCoverage, role);
+  state.nextRole = role === "D" ? "E" : "C";
+  s.status = "ready";
 }
 function reportMarkdown(
   report: Pick<
     PlanningReport,
-    | "title"
-    | "summary"
-    | "sections"
-    | "tasks"
-    | "risks"
-    | "unresolved"
-    | "acceptance"
-    | "executionPrompt"
+    "title" | "summary" | "sections" | "tasks" | "risks" | "unresolved" | "acceptance"
   >,
 ) {
   const lines = [
@@ -620,9 +947,9 @@ function reportMarkdown(
     "",
     report.summary,
     "",
-    "## 采用与执行边界",
+    "## 阅读说明",
     "",
-    "本正文记录生成时的内容与来源。整份方案是否已被采用，以报告的用户确认回执为准；整体确认只采用列明的具体方案，不会自动解决或批准未决事项。",
+    "这是一份基于当前信息的项目分析与制作指引。采用本分析不会自动解决未知事项，也不表示任何制作或部署已经执行。",
   ];
   for (const section of report.sections) {
     lines.push("", `## ${section.title}`, "", section.content);
@@ -631,13 +958,20 @@ function reportMarkdown(
         "",
         "来源：",
         "",
-        ...section.sources.map((source) => `- ${source.kind} · ${source.id}：${source.quote}`),
+        ...section.sources.map(
+          (source) =>
+            `- ${source.kind === "analysis" ? "分析建议" : "提供的信息"}：${source.quote}`,
+        ),
       );
   }
-  lines.push("", "## 执行任务", "");
+  lines.push("", "## 建议的制作步骤", "");
   report.tasks.forEach((task, index) => {
     lines.push(`### ${index + 1}. ${task.title}`, "", task.instructions);
-    if (task.dependsOn.length) lines.push("", `依赖任务：${task.dependsOn.join("、")}`);
+    if (task.dependsOn.length)
+      lines.push(
+        "",
+        `先完成：${task.dependsOn.map((key) => report.tasks.find((entry) => entry.id === key)?.title ?? "前置步骤").join("、")}`,
+      );
     if (task.acceptance.length)
       lines.push("", "验收：", "", ...task.acceptance.map((entry) => `- ${entry}`));
     lines.push("");
@@ -653,11 +987,12 @@ function reportMarkdown(
       "",
       ...(entries.length ? entries.map((entry) => `- ${entry}`) : ["当前未列出额外事项。"]),
     );
-  lines.push("", "## 执行提示词", "", report.executionPrompt, "");
+  lines.push("");
   return lines.join("\n");
 }
 function applyReview(state: PrivatePlanning, output: PlanningReviewOutput) {
   const s = state.session;
+  updateCoverage(state, output.analysisCoverage, "C");
   const known = new Set(s.items.map((item) => item.id));
   const coverage = DIMENSIONS.map((dimension) => {
     const entry = output.coverage.find((value) => value.dimension === dimension);
@@ -669,42 +1004,42 @@ function applyReview(state: PrivatePlanning, output: PlanningReviewOutput) {
     ...blocker,
     itemIds: blocker.itemIds.filter((key) => known.has(key)),
   }));
-  for (const item of unresolvedItems(s))
-    blockers.push({
-      id: `required-${item.id}`,
-      itemIds: [item.id],
-      description: `必需事项「${item.title}」尚未解决。`,
-    });
   for (const question of s.questions.filter((entry) => entry.status === "active"))
     blockers.push({
       id: `question-${question.id}-${question.version}`,
       itemIds: question.itemIds,
       description: `仍待用户回答：${question.title}`,
     });
-  for (const entry of coverage.filter((value) => value.status === "open"))
+  for (const entry of s.progress.coverage.filter((value) => !value.assessedBy))
     blockers.push({
-      id: `coverage-${entry.dimension}`,
+      id: `coverage-${entry.area}`,
       itemIds: entry.itemIds,
-      description: entry.reason,
+      description: `分析尚未检查${COVERAGE_NAMES[entry.area]}。`,
     });
-  if (!output.report.tasks.length || !output.report.acceptance.length)
+  const experts = currentExperts(state);
+  for (const role of ["D", "E"] as const)
+    if (!experts.some((expert) => expert.agentId === role))
+      blockers.push({
+        id: `expert-${role}`,
+        itemIds: [],
+        description: `缺少基于当前信息的${NAMES[role]}。`,
+      });
+  if (!output.report.acceptance.length)
     blockers.push({
-      id: "execution-detail",
+      id: "analysis-verification",
       itemIds: [],
-      description: "报告还缺少具体执行任务或整体验收方法。",
+      description: "报告还缺少检验建议是否有效的方法。",
     });
+  for (const section of output.report.sections) {
+    if (sources(state, section.sources).length !== section.sources.length)
+      blockers.push({
+        id: `source-${section.id}`,
+        itemIds: section.itemIds.filter((key) => known.has(key)),
+        description: `「${section.title}」引用了无法对应原文的依据，尚不能把这部分当作可靠结论。`,
+      });
+  }
   assertGraph(output.report.tasks);
   const contentFingerprint = planningContentFingerprint(s);
-  s.review = {
-    id: id(),
-    basedOnRevision: s.revision,
-    contentFingerprint,
-    ready: output.ready && blockers.length === 0,
-    coverage,
-    blockers,
-    risks: output.risks,
-    uncertainties: output.uncertainties,
-  };
   if (s.report) state.reportHistory.push(structuredClone(s.report));
   const sections = output.report.sections.map((section) => ({
     ...section,
@@ -713,38 +1048,84 @@ function applyReview(state: PrivatePlanning, output: PlanningReviewOutput) {
   }));
   const statusLabel = (item: PlanningItem) =>
     item.status === "confirmed"
-      ? `用户已确认（确认事件 ${item.confirmation?.eventId ?? "未提供"}）`
+      ? "已有用户明确确认"
       : item.status === "proposed"
-        ? "具体方案；整体采用状态由本报告的用户确认回执确定"
+        ? "分析建议，不能当作用户已作出的决定"
         : item.status === "not_applicable"
-          ? "本任务不适用；理由随本报告一并审阅"
-          : "未决，不能作为已批准的执行要求";
+          ? "分析认为本项目不适用"
+          : "尚未确定，分析中保留为未知";
   const sourceLabel = (item: PlanningItem) =>
     item.sources.length
-      ? item.sources.map((source) => `${source.kind}/${source.id}：${source.quote}`).join("；")
+      ? item.sources
+          .map(
+            (source) =>
+              `${source.kind === "analysis" ? "分析建议" : (s.sourceRecords.find((entry) => entry.kind === source.kind && entry.id === source.id)?.label ?? "提供的信息")}：${source.quote}`,
+          )
+          .join("；")
       : "尚无可引用来源，不当作用户已说过的事实";
   const settledItems = s.items.filter((item) => ["confirmed", "proposed"].includes(item.status));
   const pendingItems = s.items.filter((item) =>
     ["open", "needs_review", "deferred"].includes(item.status),
   );
+  const unanswered = s.questions.filter(
+    (question) =>
+      state.roundState.questionKeys.includes(questionKey(question)) &&
+      !s.answers.some(
+        (answer) =>
+          answer.questionId === question.id && answer.questionVersion === question.version,
+      ),
+  );
+  const deferredAnswers = s.answers.filter(
+    (answer) =>
+      answer.state !== "answered" &&
+      answer.question.itemIds.some((key) => pendingItems.some((item) => item.id === key)),
+  );
   const unresolved = [
     ...new Set([
       ...output.report.unresolved,
+      ...output.uncertainties,
       ...blockers.map((blocker) => blocker.description),
       ...pendingItems.map((item) => `${item.title}：${item.description}`),
+      ...unanswered.map((question) => `本轮未回答：${question.title}`),
+      ...deferredAnswers.map(
+        (answer) =>
+          `${answer.question.title}：${answer.state === "unknown" ? "用户暂时不知道" : "用户选择跳过"}，不能推断用户已作决定。`,
+      ),
+      ...experts.flatMap((expert) => expert.unknowns),
+      ...s.progress.coverage
+        .filter((entry) => entry.status !== "covered")
+        .map((entry) => `${COVERAGE_NAMES[entry.area]}：${entry.reason}`),
     ]),
   ];
+  s.review = {
+    id: id(),
+    basedOnRevision: s.revision,
+    contentFingerprint,
+    ready: output.ready && blockers.length === 0,
+    coverage,
+    blockers,
+    risks: [...new Set([...output.risks, ...experts.flatMap((expert) => expert.risks)])],
+    uncertainties: unresolved,
+  };
   sections.push({
     id: "authoritative-requirements",
-    title: "逐项要求与依据（生成时记录）",
+    title: "已知条件与待定项",
     content: s.items
-      .map(
-        (item) =>
-          `### ${item.title}\n\n${item.description}\n\n生成时状态：${statusLabel(item)}。${item.reason}\n\n依据：${sourceLabel(item)}`,
-      )
-      .join("\n\n"),
+      .map((item) => {
+        const label =
+          item.status === "confirmed"
+            ? "用户已定"
+            : item.status === "proposed"
+              ? "建议"
+              : item.status === "not_applicable"
+                ? "不适用"
+                : "待定";
+        const description = item.description.replace(/\s+/g, " ");
+        return `- ${item.title}（${label}）：${description.length > 160 ? `${description.slice(0, 160)}…` : description}`;
+      })
+      .join("\n"),
     itemIds: s.items.map((item) => item.id),
-    sources: s.items.flatMap((item) => item.sources),
+    sources: [],
   });
   const report: PlanningReport = {
     ...output.report,
@@ -757,10 +1138,11 @@ function applyReview(state: PrivatePlanning, output: PlanningReviewOutput) {
     confirmedAt: null,
     markdown: "",
     unresolved,
+    risks: [...new Set([...output.report.risks, ...experts.flatMap((expert) => expert.risks)])],
     executionPrompt: [
-      "执行前先核对本报告的用户确认回执。没有整体确认时仅可继续讨论，不能把具体建议当作已授权实施；有确认回执时按确认后的具体方案执行。未决事项在任何情况下都不能自行补造或默认采用。",
+      "这是项目分析与制作指引的内部交接材料。本系统没有执行制作或部署，用户采用报告只代表采用当前分析，不构成对每条 AI 建议或后续制作的授权。制作须有用户另外的明确指令；未知和跳过事项不能补造或默认采用。",
       `原始目标：${s.goal}`,
-      "具体方案与依据：",
+      "已有明确方案及其来源状态（AI 建议不是用户决定）：",
       ...settledItems.map(
         (item) =>
           `- ${item.title}：${item.description}\n  生成时状态：${statusLabel(item)}\n  依据：${sourceLabel(item)}`,
@@ -780,15 +1162,13 @@ function applyReview(state: PrivatePlanning, output: PlanningReviewOutput) {
     state,
     "review_completed",
     "C",
-    s.review.ready ? "查漏完成，可以审阅" : "阶段查漏已完成",
+    s.review.ready ? "项目分析已整理" : "已整理当前分析及其缺口",
     output.summary,
     { to: "user", itemIds: blockers.flatMap((blocker) => blocker.itemIds) },
   );
-  emit(state, "report_ready", "C", "执行方案已整理", report.summary, { to: "user" });
-  s.status = s.questions.some((question) => question.status === "active")
-    ? "awaiting_user"
-    : "review_ready";
-  state.nextRole = s.review.ready ? "C" : "A";
+  emit(state, "report_ready", "C", "分析与制作指引已整理", report.summary, { to: "user" });
+  s.status = "review_ready";
+  state.nextRole = "C";
 }
 
 function validateAnswer(question: PlanningQuestion, answer: PlanningAnswerInput) {
@@ -897,10 +1277,10 @@ function saveAnswers(state: PrivatePlanning, action: Extract<PlanningAction, { k
     for (const item of s.items.filter((entry) => question.itemIds.includes(entry.id))) {
       item.sources = [...item.sources, { kind: "answer", id: saved.id, quote: text }];
       if (answer.state === "answered") {
-        item.description = `前文整理（其中的分析建议未因本次回答而整体获确认）：\n${item.description}\n\n本次用户实际回答：\n${text}`;
+        item.description = `此前分析：\n${item.description}\n\n用户回答：\n${text}`;
         item.status = "needs_review";
         item.confirmation = null;
-        item.reason = "已保存用户实际回答；需要据此核对整项范围，不能把部分回答当作整项确认。";
+        item.reason = "已收到回答，待更新分析。";
       } else {
         item.status = "deferred";
         item.confirmation = null;
@@ -912,11 +1292,20 @@ function saveAnswers(state: PrivatePlanning, action: Extract<PlanningAction, { k
     }
   }
   state.nextRole = "A";
+  if (
+    !s.questions.some((question) => question.status === "active") &&
+    state.roundState.questionKeys.length >= state.roundState.limit
+  )
+    closeQuestions(state, false, "system");
   s.status = s.questions.some((question) => question.status === "active")
     ? "awaiting_user"
     : "ready";
+  if (s.status === "ready") {
+    const questionAgent = s.agents.find((agent) => agent.id === "B");
+    if (questionAgent?.status === "awaiting_user") questionAgent.status = "completed";
+  }
   s.error = null;
-  emit(state, "requirements_changed", "user", "方案将依据你的回答继续细化", "", {
+  emit(state, "requirements_changed", "user", "将依据你的回答更新项目理解", "", {
     operationId: action.operationId,
     to: "A",
     itemIds: [...changedIds],
@@ -942,6 +1331,8 @@ function saveNote(state: PrivatePlanning, action: Extract<PlanningAction, { kind
     if (affected.has(item.id)) item.sources.push({ kind: "note", id: noteId, quote: action.text });
   for (const question of s.questions)
     if (question.status === "active") question.status = "withdrawn";
+  const questionAgent = s.agents.find((agent) => agent.id === "B");
+  if (questionAgent?.status === "awaiting_user") questionAgent.status = "completed";
   state.nextRole = "A";
   state.stopped = false;
   s.status = "ready";
@@ -963,17 +1354,17 @@ function confirm(state: PrivatePlanning, action: Extract<PlanningAction, { kind:
     state.session.report.fingerprint !== action.fingerprint
   )
     throw new ArenaError(
-      "只能确认已经通过查漏的当前报告，请先审阅最新内容。",
+      "只能采用已经完成分析核对的当前报告，请先审阅最新内容。",
       409,
       "REPORT_NOT_CONFIRMABLE",
     );
   const s = state.session;
-  const event = emit(
+  emit(
     state,
     "report_confirmed",
     "user",
-    "执行方案已确认",
-    "本次确认对应你刚刚审阅的完整报告。",
+    "已采用这份分析",
+    "本次采用对应你刚刚审阅的报告；AI 建议和未知事项仍保留各自的来源与状态。",
     {
       operationId: action.operationId,
       from: "user",
@@ -981,12 +1372,6 @@ function confirm(state: PrivatePlanning, action: Extract<PlanningAction, { kind:
       itemIds: s.items.map((item) => item.id),
     },
   );
-  for (const item of s.items) {
-    if (item.status === "proposed" || item.status === "not_applicable") {
-      if (item.status === "proposed") item.status = "confirmed";
-      item.confirmation = { answerId: null, eventId: event.id, revision: s.revision };
-    }
-  }
   s.report!.status = "confirmed";
   s.report!.confirmedAt = now();
   s.status = "completed";
@@ -1003,7 +1388,23 @@ function frozenConfiguration(state: PrivatePlanning) {
   const { configured, ...identity } = config;
   void configured;
   const fingerprint = hash(identity);
-  if (state.configHash && state.configHash !== fingerprint)
+  const modelIdentity = (value: ModelConfig) => {
+    const {
+      configured: ignoredConfigured,
+      promptVersion: ignoredPrompt,
+      schemaVersion: ignoredSchema,
+      ...rest
+    } = value;
+    void ignoredConfigured;
+    void ignoredPrompt;
+    void ignoredSchema;
+    return hash(rest);
+  };
+  if (
+    state.configHash &&
+    state.configHash !== fingerprint &&
+    (!state.config || modelIdentity(state.config) !== modelIdentity(config))
+  )
     throw new ArenaError(
       "本规划的模型配置已经变化，请新建规划，已有内容仍可查看。",
       409,
@@ -1014,24 +1415,48 @@ function frozenConfiguration(state: PrivatePlanning) {
   return config;
 }
 function requestFor(state: PrivatePlanning, role: PlanningAgentId): StructuredRequest<Output> {
+  updateProgress(state);
+  const experts = currentExperts(state);
+  const names = {
+    A: "planning_analyze",
+    B: "planning_questions",
+    D: "planning_feasibility",
+    E: "planning_production",
+    C: "planning_review",
+  };
   return {
-    name:
-      role === "A" ? "planning_analyze" : role === "B" ? "planning_questions" : "planning_review",
+    name: names[role],
     schema: (role === "A"
       ? PlanningAnalysisOutputSchema
       : role === "B"
         ? PlanningQuestionsOutputSchema
-        : PlanningReviewOutputSchema) as z.ZodType<Output>,
+        : role === "D" || role === "E"
+          ? PlanningExpertOutputSchema
+          : PlanningReviewOutputSchema) as z.ZodType<Output>,
     system: PLANNING_PROMPTS[role],
     config: state.config,
     input: {
       originalGoal: state.session.goal,
+      productScope: "只交付项目理解、可行性分析和制作指引，不执行制作或部署。",
+      outputTokenBudget: state.config?.maxOutputTokens,
       revision: state.session.revision,
+      progress: state.session.progress,
+      collectionClosed: state.roundState.closed,
+      expertResults: experts,
       items: state.session.items,
       answers: state.session.answers,
       sources: state.session.sourceRecords.filter(
         (source) =>
           source.kind !== "analysis" ||
+          experts.some(
+            (expert) =>
+              expert.id === source.id ||
+              expert.sections.some((section) =>
+                section.sources.some(
+                  (reference) => reference.kind === "analysis" && reference.id === source.id,
+                ),
+              ),
+          ) ||
           state.session.items.some((item) =>
             item.sources.some(
               (reference) => reference.kind === "analysis" && reference.id === source.id,
@@ -1098,6 +1523,12 @@ export async function actPlanning(
       save(state);
       return { state, run: false as const };
     }
+    if (action.kind === "start_round") {
+      startRound(state, action);
+      insertOperation(state, owner, action, action.kind);
+      save(state);
+      return { state, run: false as const };
+    }
     capabilities(state);
     if (action.kind === "advance" && !state.session.capabilities.canAdvance)
       throw new ArenaError(
@@ -1107,11 +1538,25 @@ export async function actPlanning(
       );
     if (action.kind === "preview" && !state.session.capabilities.canPreview)
       throw new ArenaError(
-        "请先形成需求事项，再查看阶段报告。",
+        "当前分析正在形成或已经完成，请查看当前进度。",
         409,
         "PLANNING_ACTION_UNAVAILABLE",
       );
-    const role: PlanningAgentId = action.kind === "preview" ? "C" : state.nextRole;
+    if (action.kind === "preview") {
+      const hadReport = Boolean(state.session.report);
+      closeQuestions(state, true, "user");
+      if (hadReport) {
+        if (state.session.report) state.reportHistory.push(structuredClone(state.session.report));
+        state.session.report = null;
+        state.session.review = null;
+        state.nextRole = ["D", "E"].every((entry) =>
+          currentExperts(state).some((expert) => expert.agentId === entry),
+        )
+          ? "C"
+          : "D";
+      } else if (state.nextRole === "B") state.nextRole = "D";
+    }
+    const role = state.nextRole;
     frozenConfiguration(state);
     const request = requestFor(state, role);
     const callId = id();
@@ -1126,7 +1571,6 @@ export async function actPlanning(
       taskId: callId,
       operationId: action.operationId,
       taskLabel: NAMES[role],
-      summary: "",
       preview: "",
       startedAt: now(),
       finishedAt: null,
@@ -1139,18 +1583,28 @@ export async function actPlanning(
       .run(callId, action.operationId, role, "pending", JSON.stringify(reservation), Date.now());
     emit(state, "agent_started", role, `${NAMES[role]}开始`, "", { to: role });
     save(state);
-    return { state, run: true as const, role, request, callId };
+    return {
+      state,
+      run: true as const,
+      role,
+      request,
+      callId,
+      basedOnRevision: state.session.revision,
+    };
   });
   if (!claimed.run) return snapshot(claimed.state);
   const { role, callId, request } = claimed;
   let result: CallResult | undefined;
   let lastPreview = 0;
+  const publicPreview = new Map<string, string>();
   try {
     result = await generateStructured({
       ...request,
       attemptId: callId,
       onPreview: (preview) => {
-        if (preview.field !== "summary" || Date.now() - lastPreview < 150) return;
+        if (preview.field !== "summary" && !/^nextActions\.\d+$/.test(preview.field)) return;
+        publicPreview.set(preview.field, preview.text);
+        if (Date.now() - lastPreview < 150) return;
         lastPreview = Date.now();
         try {
           atomic(() => {
@@ -1160,10 +1614,16 @@ export async function actPlanning(
               state.session.status !== "working"
             )
               return;
-            state.session.agents.find((agent) => agent.id === role)!.preview = preview.text.slice(
-              0,
-              2000,
-            );
+            state.session.agents.find((agent) => agent.id === role)!.preview = [
+              publicPreview.get("summary") ?? "",
+              ...[...publicPreview]
+                .filter(([key]) => key.startsWith("nextActions."))
+                .sort(([left], [right]) => Number(left.split(".")[1]) - Number(right.split(".")[1]))
+                .map(([, text]) => `• ${text}`),
+            ]
+              .filter(Boolean)
+              .join("\n\n")
+              .slice(0, 6000);
             db()
               .prepare("UPDATE planning_operations SET updated_at=? WHERE id=? AND state='pending'")
               .run(Date.now(), action.operationId);
@@ -1196,15 +1656,28 @@ export async function actPlanning(
       agent.status = "completed";
       agent.finishedAt = now();
       agent.preview = "";
-      agent.summary = output.summary;
-      if (!state.stopped && state.session.revision === action.revision) {
+      agent.summary = [output.summary, ...output.nextActions.map((point) => `• ${point}`)].join(
+        "\n\n",
+      );
+      if (!state.stopped && state.session.revision === claimed.basedOnRevision) {
         const completed = emit(
           state,
           "agent_completed",
           role,
           `${NAMES[role]}已完成`,
           output.summary,
-          { to: role === "A" ? "B" : "user" },
+          {
+            to:
+              role === "A"
+                ? state.roundState.closed
+                  ? "D"
+                  : "B"
+                : role === "D"
+                  ? "E"
+                  : role === "E"
+                    ? "C"
+                    : "user",
+          },
         );
         state.session.sourceRecords.push({
           id: completed.id,
@@ -1213,11 +1686,19 @@ export async function actPlanning(
           text:
             "items" in output
               ? [output.summary, ...output.items.map((item) => item.description)].join("\n\n")
-              : JSON.stringify(output),
+              : "sections" in output
+                ? [
+                    output.summary,
+                    ...output.nextActions,
+                    ...output.sections.map((section) => section.content),
+                  ].join("\n\n")
+                : JSON.stringify(output),
           createdAt: now(),
         });
         if (role === "A") applyAnalysis(state, output as PlanningAnalysisOutput, completed.id);
         else if (role === "B") applyQuestions(state, output as PlanningQuestionsOutput);
+        else if (role === "D" || role === "E")
+          applyExpert(state, role, output as PlanningExpertOutput, completed.id);
         else applyReview(state, output as PlanningReviewOutput);
         if (role === "B" && state.session.status === "awaiting_user")
           agent.status = "awaiting_user";

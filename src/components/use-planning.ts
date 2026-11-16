@@ -78,6 +78,7 @@ export function usePlanning() {
   const journalRef = useRef<Journal | null>(null);
   const registry = useRef(new Set<AbortController>());
   const operationRequests = useRef(new Map<string, AbortController>());
+  const lastRememberedAt = useRef(0);
 
   const request = useCallback(async <T>(url: string, body?: unknown): Promise<T> => {
     const controller = new AbortController();
@@ -159,26 +160,61 @@ export function usePlanning() {
         !acceptPlanningSnapshot(value, current.current)
       )
         return false;
+      const previous = current.current;
+      const changed = !previous || value.snapshotVersion !== previous.snapshotVersion;
       const fresh = restore ? [] : newPlanningEvents(value, cursor.current);
       cursor.current = Math.max(
         cursor.current,
         value.eventCursor,
         ...value.events.map((event) => event.seq),
       );
-      current.current = value;
-      setSnapshot(value);
+      // Polling the same persisted version must not rebuild the entire workbench
+      // while the user is reading or a paper is moving. Receipts below still run:
+      // a POST can return the same version that a polling GET already observed.
+      if (changed) {
+        current.current = value;
+        setSnapshot(value);
+      }
       if (fresh.length) setArrivals((previous) => [...previous, ...fresh].slice(-80));
       if (journalRef.current && operationObserved(value, journalRef.current)) {
         const completedOperationId = journalRef.current.body.operationId;
+        const succeeded =
+          !["failed", "uncertain"].includes(value.session.status) &&
+          value.events.some(
+            (event) =>
+              event.operationId === completedOperationId &&
+              [
+                "session_created",
+                "answer_saved",
+                "note_saved",
+                "agent_completed",
+                "report_confirmed",
+                "round_started",
+              ].includes(event.kind),
+          );
         journalRef.current = null;
         saveJournal(null);
         setUnknownRequest(null);
+        if (succeeded) {
+          // The POST may have failed before this GET arrived. Its proven success
+          // also releases the recovery gate, otherwise automatic work stays stuck.
+          setBlocked(false);
+          setError("");
+        }
         // A persisted completion is authoritative even if that POST's connection
         // never closes. Only its exact controller is interrupted; post() recognizes
         // the already-observed receipt and releases its lock as a normal success.
         operationRequests.current.get(completedOperationId)?.abort();
       }
-      remember(value);
+      if (
+        changed &&
+        (value.session.status !== "working" ||
+          previous?.session.status !== value.session.status ||
+          Date.now() - lastRememberedAt.current > 5000)
+      ) {
+        lastRememberedAt.current = Date.now();
+        remember(value);
+      }
       return true;
     },
     [remember],
@@ -413,6 +449,7 @@ export function usePlanning() {
         note: "canAddNote",
         preview: "canPreview",
         confirm: "canConfirm",
+        start_round: "canStartRound",
       } as const;
       if (!value.session.capabilities[allowed[command.kind]]) {
         setError(value.session.capabilities.reason || "当前状态暂时不能执行这项操作。");
@@ -478,7 +515,7 @@ export function usePlanning() {
           document.hidden
             ? 8000
             : current.current?.session.status === "working" || lock.current
-              ? 1100
+              ? 650
               : 4000,
         );
     };

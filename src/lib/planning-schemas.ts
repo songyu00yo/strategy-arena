@@ -11,6 +11,13 @@ export const PlanningDimensionSchema = z.enum([
   "constraints",
   "delivery",
 ]);
+export const PlanningCoverageOutputSchema = z.object({
+  area: z.enum(["goal", "resources", "time_cost", "constraints", "risks", "implementation", "mvp"]),
+  status: z.enum(["covered", "partial", "unknown"]),
+  reason: z.string().min(1).max(1200),
+  itemIds: z.array(identifier).max(40).default([]),
+});
+const publicNextActions = z.array(z.string().min(1).max(500)).max(8).default([]);
 export const PlanningSourceSchema = z.object({
   kind: z.enum(["goal", "answer", "note", "material", "analysis"]),
   id: identifier,
@@ -55,6 +62,7 @@ export const PlanningActionSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ ...actionBase, kind: z.literal("preview") }).strict(),
+  z.object({ ...actionBase, kind: z.literal("start_round") }).strict(),
   z
     .object({
       ...actionBase,
@@ -68,6 +76,8 @@ export const PlanningActionSchema = z.discriminatedUnion("kind", [
 
 export const PlanningAnalysisOutputSchema = z.object({
   summary: z.string().min(1).max(2000),
+  nextActions: publicNextActions,
+  analysisCoverage: z.array(PlanningCoverageOutputSchema).max(7).default([]),
   items: z
     .array(
       z.object({
@@ -87,21 +97,22 @@ export const PlanningAnalysisOutputSchema = z.object({
 });
 export const PlanningQuestionsOutputSchema = z.object({
   summary: z.string().min(1).max(2000),
+  nextActions: publicNextActions,
   questions: z
     .array(
       z.object({
         id: identifier,
         itemIds: z.array(identifier).min(1).max(6),
-        title: z.string().min(1).max(400),
-        reason: z.string().max(1000),
+        title: z.string().min(1).max(240),
+        reason: z.string().max(400),
         type: z.enum(["single", "multiple", "text", "number"]),
         options: z
           .array(
             z.object({
               id: identifier,
-              label: z.string().min(1).max(150),
-              description: z.string().max(1600),
-              consequences: z.array(z.string().max(600)).max(6).default([]),
+              label: z.string().min(1).max(80),
+              description: z.string().max(500),
+              consequences: z.array(z.string().max(250)).max(3).default([]),
             }),
           )
           .max(8),
@@ -122,8 +133,20 @@ export const PlanningSectionOutputSchema = z.object({
   itemIds: z.array(identifier).max(40).default([]),
   sources: z.array(PlanningSourceSchema).max(20).default([]),
 });
+export const PlanningExpertOutputSchema = z.object({
+  summary: z.string().min(1).max(2000),
+  nextActions: publicNextActions,
+  analysisCoverage: z.array(PlanningCoverageOutputSchema).max(7).default([]),
+  conclusion: z.enum(["feasible", "conditional", "infeasible", "insufficient_information"]),
+  sections: z.array(PlanningSectionOutputSchema).min(1).max(10),
+  risks: z.array(z.string().max(1600)).max(15),
+  unknowns: z.array(z.string().max(1600)).max(20),
+  minimumViableVersion: z.string().min(1).max(4000),
+});
 export const PlanningReviewOutputSchema = z.object({
   summary: z.string().min(1).max(2000),
+  nextActions: publicNextActions,
+  analysisCoverage: z.array(PlanningCoverageOutputSchema).max(7).default([]),
   ready: z.boolean(),
   coverage: z
     .array(
@@ -169,4 +192,5 @@ export const PlanningReviewOutputSchema = z.object({
 });
 export type PlanningAnalysisOutput = z.infer<typeof PlanningAnalysisOutputSchema>;
 export type PlanningQuestionsOutput = z.infer<typeof PlanningQuestionsOutputSchema>;
+export type PlanningExpertOutput = z.infer<typeof PlanningExpertOutputSchema>;
 export type PlanningReviewOutput = z.infer<typeof PlanningReviewOutputSchema>;

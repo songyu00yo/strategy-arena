@@ -45,7 +45,7 @@ export function planningAnswerError(
   answer: PlanningAnswerInput,
 ): string | null {
   if (answer.questionId !== question.id || answer.questionVersion !== question.version)
-    return "这张问题纸已经更新，请先查看最新问题。";
+    return "问题已更新，请查看最新内容。";
   if (answer.state === "unknown")
     return question.allowUnknown ? null : "这项决定需要一个明确回答。";
   if (answer.state === "skipped") return question.allowSkip ? null : "这项决定目前不能跳过。";
@@ -53,7 +53,7 @@ export function planningAnswerError(
     return "选项已变化，请重新查看。";
   if (question.type === "number")
     return answer.number !== null && Number.isFinite(answer.number) ? null : "请填写一个有效数字。";
-  if (question.type === "text") return answer.text.trim() ? null : "写下你的想法后再递回。";
+  if (question.type === "text") return answer.text.trim() ? null : "请填写回答。";
   if (question.type === "single" && answer.optionIds.length > 1) return "这项决定只选择一个方向。";
   // A user's own proposal is a real answer, even when none of the proposed options fits.
   if (answer.text.trim() && !answer.optionIds.length) return null;

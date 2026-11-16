@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PlanningAction,
   PlanningAnswerInput,
+  PlanningCoverageArea,
   PlanningDimension,
   PlanningSnapshot,
 } from "../src/lib/planning-contracts";
@@ -23,7 +24,12 @@ vi.mock("../src/lib/server/billing", async (original) => ({
 
 import { closeDb, db } from "../src/lib/server/db";
 import { ModelCallError } from "../src/lib/server/model";
-import { actPlanning, createPlanning, getPlanning } from "../src/lib/server/planning";
+import {
+  actPlanning,
+  createPlanning,
+  getPlanning,
+  planningContentFingerprint,
+} from "../src/lib/server/planning";
 
 const owner = "planning-fixture-owner";
 const goal = "保留原版纸面视觉，帮助用户把模糊想法逐层细化，并输出可交给 AI 的执行方案。";
@@ -46,6 +52,28 @@ let snapshot: PlanningSnapshot;
 let proposed = false;
 let questionItemIds: string[] | null = null;
 let questionsEnabled = true;
+let questionTag = "";
+let includeCoverage = true;
+
+function analysisCoverage() {
+  const areas: PlanningCoverageArea[] = [
+    "goal",
+    "resources",
+    "time_cost",
+    "constraints",
+    "risks",
+    "implementation",
+    "mvp",
+  ];
+  return includeCoverage
+    ? areas.map((area) => ({
+        area,
+        status: "covered",
+        reason: "明确标注的测试分析依据，不代表外部验证。",
+        itemIds: [],
+      }))
+    : [];
+}
 
 function result(value: unknown) {
   return {
@@ -104,6 +132,8 @@ function analysis(current = snapshot) {
   ];
   return {
     summary: "根据用户原始目标和当前回答继续细化；这是明确的测试输出。",
+    analysisCoverage: analysisCoverage(),
+    nextActions: ["先明确项目要解决的问题，再据当前信息分析可行性。"],
     items: seeds.map((seed) => {
       const previous = current.session.items.find((item) => item.id === seed.id);
       const answered = current.session.answers.some(
@@ -132,9 +162,9 @@ function questions(current = snapshot) {
     summary: "把当前未决事项变成用户能理解的具体选择。",
     questions: questionsEnabled
       ? itemIds.map((itemId) => ({
-          id: `choose_${itemId}`,
+          id: `choose_${itemId}${questionTag}`,
           itemIds: [itemId],
-          title: `请决定${itemId}的具体行为`,
+          title: `请决定${itemId}的具体行为${questionTag}`,
           reason: "不同选择会改变后续实现。",
           type: "single",
           options: [
@@ -162,10 +192,32 @@ function questions(current = snapshot) {
   };
 }
 
+function expert(role: "D" | "E", current = snapshot) {
+  return {
+    summary: role === "D" ? "当前目标有条件可行，资源仍需核实。" : "先验证最小工作流，再逐步完善。",
+    nextActions: ["用最小版本验证用户能否理解提问。", "资源核实前不承诺工期和成本。"],
+    analysisCoverage: analysisCoverage(),
+    conclusion: "conditional",
+    sections: [
+      {
+        id: `expert-${role}-scope`,
+        title: role === "D" ? "可行性依据" : "制作顺序",
+        content: "根据现有目标与约束，先做最小验证，再决定扩展。",
+        itemIds: current.session.items.map((item) => item.id),
+        sources: [source(current)],
+      },
+    ],
+    risks: ["资源未核实时扩大范围会增加成本。"],
+    unknowns: ["实际可投入的时间与预算仍需核实。"],
+    minimumViableVersion: "先验证一条完整的需求理解和分析阅读流程。",
+  };
+}
+
 function review(current = snapshot, ready = true) {
   return {
     summary: "对当前方案做明确标注的合成查漏，不代表真实模型质量。",
     ready,
+    analysisCoverage: analysisCoverage(),
     coverage: dimensions.map((dimension) => ({
       dimension,
       status: "covered",
@@ -255,9 +307,42 @@ async function reachReport() {
   create();
   await apply({ kind: "advance" });
   await apply({ kind: "advance" });
-  await apply({ kind: "preview" });
+  await finishAnalysis();
   expect(snapshot.session.report).not.toBeNull();
   return snapshot;
+}
+
+async function finishAnalysis() {
+  for (
+    let step = 0;
+    step < 6 && snapshot.session.status === "ready" && snapshot.session.nextAction === "advance";
+    step++
+  )
+    await apply({ kind: "advance" });
+  expect(snapshot.session.status).toBe("review_ready");
+}
+
+function storedState() {
+  const row = db()
+    .prepare("SELECT body FROM planning_sessions WHERE id=?")
+    .get(snapshot.session.id) as { body: string };
+  return JSON.parse(row.body);
+}
+
+function saveLegacyState(legacy: ReturnType<typeof storedState>) {
+  delete legacy.roundState;
+  delete legacy.session.progress;
+  delete legacy.session.expertResults;
+  delete legacy.session.productScope;
+  legacy.session.contractVersion = "1.0.0";
+  legacy.session.agents = legacy.session.agents.filter((agent: { id: string }) =>
+    ["A", "B", "C"].includes(agent.id),
+  );
+  legacy.config.promptVersion = "requirements-planning-1.0.0";
+  legacy.config.schemaVersion = "1.0.0";
+  db()
+    .prepare("UPDATE planning_sessions SET body=? WHERE id=?")
+    .run(JSON.stringify(legacy), snapshot.session.id);
 }
 
 beforeEach(() => {
@@ -266,6 +351,8 @@ beforeEach(() => {
   proposed = false;
   questionItemIds = null;
   questionsEnabled = true;
+  questionTag = "";
+  includeCoverage = true;
   directory = mkdtempSync(join(tmpdir(), "planning-service-"));
   for (const [key, value] of Object.entries({
     ARENA_DATABASE_PATH: join(directory, "planning.sqlite"),
@@ -291,11 +378,15 @@ beforeEach(() => {
           ? analysis()
           : request.name === "planning_questions"
             ? questions()
-            : request.name === "planning_review"
-              ? review()
-              : (() => {
-                  throw new Error(`Unexpected model action: ${request.name}`);
-                })();
+            : request.name === "planning_feasibility"
+              ? expert("D")
+              : request.name === "planning_production"
+                ? expert("E")
+                : request.name === "planning_review"
+                  ? review()
+                  : (() => {
+                      throw new Error(`Unexpected model action: ${request.name}`);
+                    })();
       return result(request.schema.parse(value));
     },
   );
@@ -303,6 +394,7 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDb();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   rmSync(directory, { recursive: true, force: true });
@@ -318,7 +410,15 @@ describe("planning sessions with explicit structured-model test doubles", () => 
       nextAction: "advance",
       activeOperationId: null,
     });
-    expect(snapshot.session.agents.map((agent) => agent.id)).toEqual(["A", "B", "C"]);
+    expect(snapshot.session.agents.map((agent) => agent.id)).toEqual(["A", "B", "D", "E", "C"]);
+    expect(snapshot.session.progress).toMatchObject({
+      round: 1,
+      questionLimit: 8,
+      questionsIssued: 0,
+      questionsAnswered: 0,
+      questionsRemaining: 8,
+      questionSlotsRemaining: 8,
+    });
     expect(snapshot.events.some((event) => event.kind === "session_created")).toBe(true);
     expect(() => getPlanning(snapshot.session.id, "other-owner")).toThrow();
     await expect(
@@ -361,11 +461,11 @@ describe("planning sessions with explicit structured-model test doubles", () => 
     expect(snapshot.session.items.filter((item) => item.status === "proposed")).toHaveLength(4);
     expect(snapshot.session.items.every((item) => item.confirmation === null)).toBe(true);
     await apply({ kind: "advance" });
-    await apply({ kind: "preview" });
+    await finishAnalysis();
     const report = snapshot.session.report!;
     await apply({ kind: "confirm", reportId: report.id, fingerprint: report.fingerprint });
-    expect(snapshot.session.items.filter((item) => item.status === "confirmed")).toHaveLength(4);
-    expect(snapshot.session.items.filter((item) => item.confirmation !== null)).toHaveLength(4);
+    expect(snapshot.session.items.filter((item) => item.status === "proposed")).toHaveLength(4);
+    expect(snapshot.session.items.every((item) => item.confirmation === null)).toBe(true);
   });
 
   it("records unknown and skipped answers without treating either as user confirmation", async () => {
@@ -381,6 +481,470 @@ describe("planning sessions with explicit structured-model test doubles", () => 
       expect(item.status).not.toBe("confirmed");
     }
     expect(snapshot.session.capabilities.canConfirm).toBe(false);
+  });
+
+  it("enforces eight questions, counts unknown and skipped, then runs D E C without another question", async () => {
+    create();
+    questionItemIds = ["entry", "questions", "style"];
+    await apply({ kind: "advance" });
+    let answered = 0;
+    for (let batch = 0; batch < 3; batch++) {
+      questionTag = `第${batch + 1}批关键取舍`;
+      await apply({ kind: "advance" });
+      const active = snapshot.session.questions.filter((question) => question.status === "active");
+      expect(active).toHaveLength(batch === 2 ? 2 : 3);
+      const inputs = active.map((_, index) =>
+        answerInput(index % 2 ? "skipped" : "unknown", index),
+      );
+      await apply({ kind: "answer", answers: inputs });
+      answered += active.length;
+      expect(snapshot.session.progress.questionsAnswered).toBe(answered);
+      expect(snapshot.session.progress.questionsRemaining).toBe(8 - answered);
+      await apply({ kind: "advance" });
+    }
+    expect(snapshot.session.progress).toMatchObject({
+      questionLimit: 8,
+      questionsIssued: 8,
+      questionsAnswered: 8,
+      questionsRemaining: 0,
+      questionSlotsRemaining: 0,
+      budgetExhausted: true,
+      stage: "feasibility",
+    });
+    await finishAnalysis();
+    expect(snapshot.session.questions).toHaveLength(8);
+    expect(fixture.generate.mock.calls.map(([request]) => request.name).slice(-3)).toEqual([
+      "planning_feasibility",
+      "planning_production",
+      "planning_review",
+    ]);
+    expect(snapshot.session.capabilities.canAdvance).toBe(false);
+    expect(snapshot.session.capabilities.canConfirm).toBe(true);
+    expect(snapshot.session.report?.unresolved.join("\n")).toContain("用户暂时不知道");
+    expect(snapshot.session.report?.unresolved.join("\n")).toContain("用户选择跳过");
+    const before = structuredClone(snapshot.session.items);
+    const report = snapshot.session.report!;
+    await apply({ kind: "confirm", reportId: report.id, fingerprint: report.fingerprint });
+    expect(snapshot.session.items).toEqual(before);
+    expect(snapshot.session.items.filter((item) => item.status === "deferred")).toHaveLength(3);
+    expect(snapshot.session.items.every((item) => item.confirmation === null)).toBe(true);
+    const calls = fixture.generate.mock.calls.length;
+    await expect(
+      actPlanning(snapshot.session.id, owner, action({ kind: "advance" })),
+    ).rejects.toThrow();
+    expect(fixture.generate).toHaveBeenCalledTimes(calls);
+  });
+
+  it("opens only an explicit three-question extension and preserves per-round counts and idempotency", async () => {
+    await reachQuestions();
+    await apply({ kind: "answer", answers: [answerInput("unknown")] });
+    await apply({ kind: "preview" });
+    await finishAnalysis();
+    const previousAnswers = snapshot.session.answers.length;
+    const calls = fixture.generate.mock.calls.length;
+    const newRound = action({ kind: "start_round" });
+    snapshot = await actPlanning(snapshot.session.id, owner, newRound);
+    const duplicate = await actPlanning(snapshot.session.id, owner, newRound);
+    expect(duplicate.session.progress).toEqual(snapshot.session.progress);
+    expect(fixture.generate).toHaveBeenCalledTimes(calls);
+    expect(snapshot.session.progress).toMatchObject({
+      round: 2,
+      questionLimit: 3,
+      questionsIssued: 0,
+      questionsAnswered: 0,
+      questionsRemaining: 3,
+      questionSlotsRemaining: 3,
+    });
+    expect(snapshot.session.answers).toHaveLength(previousAnswers);
+    expect(snapshot.events.filter((event) => event.kind === "round_started")).toHaveLength(1);
+    await expect(
+      actPlanning(snapshot.session.id, owner, action({ kind: "start_round" })),
+    ).rejects.toThrow();
+    questionTag = "进一步核对";
+    questionItemIds = ["entry", "questions", "style"];
+    await apply({ kind: "advance" });
+    await apply({ kind: "advance" });
+    await apply({
+      kind: "answer",
+      answers: [answerInput("unknown", 0), answerInput("skipped", 1), answerInput("unknown", 2)],
+    });
+    await apply({ kind: "advance" });
+    await finishAnalysis();
+    expect(snapshot.session.progress).toMatchObject({
+      round: 2,
+      questionLimit: 3,
+      questionsIssued: 3,
+      questionsAnswered: 3,
+      questionsRemaining: 0,
+      questionSlotsRemaining: 0,
+    });
+    expect(snapshot.session.answers).toHaveLength(previousAnswers + 3);
+    expect(snapshot.session.expertResults.every((expert) => expert.round === 2)).toBe(true);
+  });
+
+  it("passes actual feasibility output into production and both outputs into synthesis", async () => {
+    await reachReport();
+    const requests = fixture.generate.mock.calls.map(([request]) => request);
+    expect(requests.map((request) => request.name)).toEqual([
+      "planning_analyze",
+      "planning_questions",
+      "planning_feasibility",
+      "planning_production",
+      "planning_review",
+    ]);
+    expect(requests[3].input.expertResults).toHaveLength(1);
+    expect(requests[3].input.expertResults[0]).toMatchObject({
+      agentId: "D",
+      summary: "当前目标有条件可行，资源仍需核实。",
+    });
+    expect(
+      requests[4].input.expertResults.map((expert: { agentId: string }) => expert.agentId),
+    ).toEqual(["D", "E"]);
+    expect(
+      snapshot.session.expertResults.every(
+        (expert) => expert.basedOnRevision === snapshot.session.revision,
+      ),
+    ).toBe(true);
+    expect(
+      snapshot.events
+        .filter((event) => event.kind === "agent_completed")
+        .map((event) => event.actor),
+    ).toEqual(["A", "B", "D", "E", "C"]);
+    expect(snapshot.session.report?.unresolved).toContain("实际可投入的时间与预算仍需核实。");
+    expect(snapshot.session.report?.sections.some((section) => section.id === "expert-D")).toBe(
+      false,
+    );
+    expect(snapshot.session.report?.sections.at(-1)?.title).toBe("已知条件与待定项");
+  });
+
+  it("delivers and adopts an infeasible conclusion without inventing an unconditional making task", async () => {
+    proposed = true;
+    questionsEnabled = false;
+    create();
+    await apply({ kind: "advance" });
+    await apply({ kind: "advance" });
+    const feasibility = {
+      ...expert("D"),
+      conclusion: "infeasible",
+      summary: "现有约束下无法完成原范围，应先缩减或验证。",
+    };
+    const production = {
+      ...expert("E"),
+      conclusion: "infeasible",
+      summary: "当前只建议最小验证，不建议直接制作完整产品。",
+    };
+    const synthesis = review();
+    synthesis.report.summary = "当前约束下原范围不可行，可以先做最小验证。";
+    synthesis.report.tasks = [];
+    fixture.generate
+      .mockResolvedValueOnce(result(feasibility))
+      .mockResolvedValueOnce(result(production))
+      .mockResolvedValueOnce(result(synthesis));
+    await finishAnalysis();
+    expect(snapshot.session.review?.ready).toBe(true);
+    const before = structuredClone(snapshot.session.items);
+    const report = snapshot.session.report!;
+    await apply({ kind: "confirm", reportId: report.id, fingerprint: report.fingerprint });
+    expect(snapshot.session.items).toEqual(before);
+    expect(snapshot.session.report?.tasks).toEqual([]);
+  });
+
+  it("does not refund issued question slots after a note withdraws them", async () => {
+    questionItemIds = ["entry", "questions", "style"];
+    await reachQuestions();
+    expect(snapshot.session.progress.questionSlotsRemaining).toBe(5);
+    await apply({ kind: "note", text: "补充：现阶段只关注最小可行版本。", itemIds: [] });
+    expect(snapshot.session.progress).toMatchObject({
+      questionsIssued: 3,
+      questionsAnswered: 0,
+      questionSlotsRemaining: 5,
+      activeQuestions: 0,
+    });
+    questionTag = "补充后";
+    await apply({ kind: "advance" });
+    await apply({ kind: "advance" });
+    expect(snapshot.session.progress).toMatchObject({
+      questionsIssued: 6,
+      questionsAnswered: 0,
+      questionSlotsRemaining: 2,
+      activeQuestions: 3,
+    });
+  });
+
+  it("retains D output when E fails and retries E without repeating the feasibility call", async () => {
+    proposed = true;
+    questionsEnabled = false;
+    create();
+    for (let step = 0; step < 3; step++) await apply({ kind: "advance" });
+    const feasibility = structuredClone(snapshot.session.expertResults);
+    fixture.generate.mockRejectedValueOnce(new ModelCallError("制作路径的明确测试失败", false));
+    await apply({ kind: "advance" });
+    expect(snapshot.session.status).toBe("failed");
+    expect(snapshot.session.expertResults).toEqual(feasibility);
+    await apply({ kind: "advance" });
+    await finishAnalysis();
+    expect(fixture.generate.mock.calls.map(([request]) => request.name)).toEqual([
+      "planning_analyze",
+      "planning_questions",
+      "planning_feasibility",
+      "planning_production",
+      "planning_production",
+      "planning_review",
+    ]);
+    expect(snapshot.session.expertResults.map((expert) => expert.agentId)).toEqual(["D", "E"]);
+  });
+
+  it("does not adopt a model's ready claim when analysis coverage was never checked", async () => {
+    includeCoverage = false;
+    await reachReport();
+    expect(snapshot.session.review?.ready).toBe(false);
+    expect(
+      snapshot.session.review?.blockers.filter((blocker) => blocker.id.startsWith("coverage-")),
+    ).toHaveLength(7);
+    expect(snapshot.session.capabilities.canConfirm).toBe(false);
+    expect(snapshot.session.capabilities.canAdvance).toBe(false);
+    expect(snapshot.session.nextAction).toBe("start_round");
+    expect(snapshot.session.report?.unresolved.join("\n")).toContain("时间与成本");
+  });
+
+  it("rejects unsupported report source attribution while preserving a readable analysis", async () => {
+    proposed = true;
+    questionsEnabled = false;
+    create();
+    for (let i = 0; i < 4; i++) await apply({ kind: "advance" });
+    const invalid = review();
+    invalid.report.sections[0].sources = [
+      { kind: "goal", id: source().id, quote: "用户从未说过这句话" },
+    ];
+    fixture.generate.mockResolvedValueOnce(result(invalid));
+    await apply({ kind: "advance" });
+    expect(snapshot.session.review?.ready).toBe(false);
+    expect(snapshot.session.review?.blockers.some((blocker) => blocker.id === "source-scope")).toBe(
+      true,
+    );
+    expect(snapshot.session.report?.unresolved.join("\n")).toContain("无法对应原文");
+    expect(snapshot.session.report?.sections[0].sources).toEqual([]);
+  });
+
+  it("upgrades a saved three-role session without inventing expert outputs or losing sources", async () => {
+    await reachQuestions();
+    const row = db()
+      .prepare("SELECT body FROM planning_sessions WHERE id=?")
+      .get(snapshot.session.id) as { body: string };
+    const legacy = JSON.parse(row.body);
+    delete legacy.roundState;
+    delete legacy.session.progress;
+    delete legacy.session.expertResults;
+    delete legacy.session.productScope;
+    legacy.session.contractVersion = "1.0.0";
+    legacy.session.agents = legacy.session.agents.filter((agent: { id: string }) =>
+      ["A", "B", "C"].includes(agent.id),
+    );
+    legacy.config.promptVersion = "requirements-planning-1.0.0";
+    legacy.config.schemaVersion = "1.0.0";
+    db()
+      .prepare("UPDATE planning_sessions SET body=? WHERE id=?")
+      .run(JSON.stringify(legacy), snapshot.session.id);
+    const before = structuredClone(snapshot);
+    closeDb();
+    snapshot = getPlanning(snapshot.session.id, owner);
+    expect(snapshot.session.contractVersion).toBe("2.0.0");
+    expect(snapshot.session.agents.map((agent) => agent.id)).toEqual(["A", "B", "D", "E", "C"]);
+    expect(snapshot.session.expertResults).toEqual([]);
+    expect(snapshot.session.questions).toEqual(before.session.questions);
+    expect(snapshot.session.sourceRecords).toEqual(before.session.sourceRecords);
+    expect(snapshot.session.progress.questionsIssued).toBe(1);
+    expect(snapshot.events.filter((event) => event.kind === "session_upgraded")).toHaveLength(1);
+    await apply({ kind: "answer", answers: [answerInput()] });
+    await apply({ kind: "advance" });
+    expect(snapshot.session.status).toBe("ready");
+    expect(snapshot.events.filter((event) => event.kind === "session_upgraded")).toHaveLength(1);
+  });
+
+  it.each(["preview", "start_round"] as const)(
+    "retires legacy active questions before %s without fabricating answers or changing the archived report",
+    async (kind) => {
+      await reachQuestions();
+      const originalQuestions = structuredClone(snapshot.session.questions);
+      const originalSources = structuredClone(snapshot.session.sourceRecords);
+      const legacy = storedState();
+      const generated = review(snapshot, false);
+      const oldReport = {
+        ...generated.report,
+        id: "explicit-legacy-preview",
+        basedOnRevision: snapshot.session.revision,
+        contentFingerprint: planningContentFingerprint(snapshot.session),
+        fingerprint: "explicit-legacy-report-fingerprint",
+        status: "draft",
+        confirmedAt: null,
+        markdown: "# 明确标注的旧版阶段报告测试数据",
+      };
+      legacy.session.report = oldReport;
+      legacy.session.review = {
+        id: "legacy-review",
+        basedOnRevision: oldReport.basedOnRevision,
+        contentFingerprint: oldReport.contentFingerprint,
+        ready: false,
+        coverage: generated.coverage,
+        blockers: generated.blockers,
+        risks: generated.risks,
+        uncertainties: [],
+      };
+      legacy.session.status = "awaiting_user";
+      legacy.nextRole = "A";
+      saveLegacyState(legacy);
+      snapshot = getPlanning(snapshot.session.id, owner);
+      expect(snapshot.session.questions).toEqual(originalQuestions);
+      expect(snapshot.session.report?.fingerprint).toBe(oldReport.fingerprint);
+      const request = action({ kind });
+      snapshot = await actPlanning(snapshot.session.id, owner, request);
+      expect(snapshot.session.answers).toEqual([]);
+      expect(snapshot.session.questions.filter((question) => question.status === "active")).toEqual(
+        [],
+      );
+      expect(
+        snapshot.session.questions.map((question) => ({ ...question, status: "active" })),
+      ).toEqual(originalQuestions);
+      expect(snapshot.session.sourceRecords.slice(0, originalSources.length)).toEqual(
+        originalSources,
+      );
+      expect(
+        storedState().reportHistory.filter((report: { id: string }) => report.id === oldReport.id),
+      ).toEqual([oldReport]);
+      const duplicate = await actPlanning(snapshot.session.id, owner, request);
+      expect(duplicate.snapshotVersion).toBe(snapshot.snapshotVersion);
+      expect(
+        storedState().reportHistory.filter((report: { id: string }) => report.id === oldReport.id),
+      ).toHaveLength(1);
+      if (kind === "preview") {
+        expect(snapshot.session.capabilities.canAdvance).toBe(true);
+        expect(fixture.generate.mock.calls.at(-1)![0].name).toBe("planning_feasibility");
+        await finishAnalysis();
+        const current = snapshot.session.report!;
+        expect(current.contentFingerprint).toBe(planningContentFingerprint(snapshot.session));
+        expect(current.fingerprint).not.toBe(oldReport.fingerprint);
+        expect(current.unresolved.join("\n")).toContain(originalQuestions[0].title);
+        await expect(
+          actPlanning(
+            snapshot.session.id,
+            owner,
+            action({ kind: "confirm", reportId: oldReport.id, fingerprint: oldReport.fingerprint }),
+          ),
+        ).rejects.toThrow();
+        await apply({ kind: "confirm", reportId: current.id, fingerprint: current.fingerprint });
+        expect(snapshot.session.status).toBe("completed");
+        expect(snapshot.session.answers).toEqual([]);
+      } else {
+        expect(snapshot.session.progress).toMatchObject({
+          round: 2,
+          questionLimit: 3,
+          questionsIssued: 0,
+          questionsAnswered: 0,
+          questionSlotsRemaining: 3,
+          activeQuestions: 0,
+        });
+        questionTag = "新一轮";
+        await apply({ kind: "advance" });
+        await apply({ kind: "advance" });
+        expect(snapshot.session.progress).toMatchObject({
+          round: 2,
+          questionLimit: 3,
+          questionsIssued: 1,
+          questionsAnswered: 0,
+          questionSlotsRemaining: 2,
+          activeQuestions: 1,
+        });
+        expect(snapshot.session.questions[0].status).toBe("withdrawn");
+        expect(snapshot.session.answers).toEqual([]);
+      }
+    },
+  );
+
+  it("closes an over-budget legacy session with truthful historical counts and no implicit extra round", async () => {
+    await reachQuestions();
+    const legacy = storedState();
+    const active = structuredClone(snapshot.session.questions[0]);
+    legacy.session.questions = [];
+    legacy.session.answers = [];
+    for (let index = 0; index < 9; index++) {
+      const question = {
+        ...active,
+        id: `legacy-answered-${index}`,
+        title: `旧版问题${index + 1}`,
+        status: "answered",
+      };
+      const answerId = `legacy-answer-${index}`;
+      legacy.session.questions.push(question);
+      legacy.session.answers.push({
+        questionId: question.id,
+        questionVersion: 1,
+        state: "unknown",
+        optionIds: [],
+        text: "",
+        number: null,
+        id: answerId,
+        question: { ...question, status: "active" },
+        createdAt: snapshot.session.createdAt,
+        revision: snapshot.session.revision,
+      });
+      legacy.session.sourceRecords.push({
+        id: answerId,
+        kind: "answer",
+        label: question.title,
+        text: `${question.title}\n用户暂时不知道`,
+        createdAt: snapshot.session.createdAt,
+      });
+    }
+    legacy.session.questions.push(active);
+    saveLegacyState(legacy);
+    snapshot = getPlanning(snapshot.session.id, owner);
+    expect(snapshot.session.progress).toMatchObject({
+      round: 1,
+      questionLimit: 8,
+      questionsIssued: 10,
+      questionsAnswered: 9,
+      questionsRemaining: 0,
+      questionSlotsRemaining: 0,
+      activeQuestions: 0,
+    });
+    expect(snapshot.session.answers).toHaveLength(9);
+    expect(snapshot.session.questions.at(-1)?.status).toBe("withdrawn");
+    expect(snapshot.session.status).toBe("ready");
+    const calls = fixture.generate.mock.calls.length;
+    await finishAnalysis();
+    expect(fixture.generate.mock.calls.slice(calls).map(([request]) => request.name)).toEqual([
+      "planning_analyze",
+      "planning_feasibility",
+      "planning_production",
+      "planning_review",
+    ]);
+    expect(snapshot.session.progress).toMatchObject({
+      round: 1,
+      questionsIssued: 10,
+      questionsAnswered: 9,
+    });
+    expect(snapshot.session.answers).toHaveLength(9);
+    expect(snapshot.events.some((event) => event.kind === "round_started")).toBe(false);
+  });
+
+  it("keeps an explicit unknown unresolved after an unrelated note even if A proposes a value", async () => {
+    await reachQuestions();
+    await apply({ kind: "answer", answers: [answerInput("unknown")] });
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 1000);
+    await apply({ kind: "note", text: "只修改项目标题，其余信息没有变化。", itemIds: [] });
+    proposed = true;
+    await apply({ kind: "preview" });
+    await finishAnalysis();
+    expect(snapshot.session.items.find((item) => item.id === "entry")?.status).toBe("deferred");
+    expect(snapshot.session.report?.unresolved.join("\n")).toContain("用户暂时不知道");
+    const report = snapshot.session.report!;
+    await apply({ kind: "confirm", reportId: report.id, fingerprint: report.fingerprint });
+    expect(snapshot.session.items.find((item) => item.id === "entry")).toMatchObject({
+      status: "deferred",
+      confirmation: null,
+    });
+    expect(snapshot.session.report?.unresolved.join("\n")).toContain("用户暂时不知道");
   });
 
   it("accepts the user's own direction without forcing an option or claiming the issue is resolved", async () => {
@@ -405,28 +969,38 @@ describe("planning sessions with explicit structured-model test doubles", () => 
     expect(JSON.stringify(request.input)).toContain(text);
   });
 
-  it("keeps unanswered questions intact during preview and rejects an ungrounded ready claim", async () => {
+  it("ends questions early without fabricating answers and discloses them in the analysis", async () => {
     await reachQuestions();
     const active = structuredClone(
       snapshot.session.questions.filter((question) => question.status === "active"),
     );
     await apply({ kind: "preview" });
+    await finishAnalysis();
     expect(snapshot.session.answers).toEqual([]);
     expect(snapshot.session.questions.filter((question) => question.status === "active")).toEqual(
-      active,
+      [],
     );
-    expect(snapshot.session.review?.ready).toBe(false);
-    expect(snapshot.session.capabilities.canConfirm).toBe(false);
+    expect(
+      snapshot.session.questions
+        .filter((question) => question.status === "withdrawn")
+        .map((question) => question.title),
+    ).toEqual(active.map((question) => question.title));
+    expect(snapshot.session.progress.endedEarly).toBe(true);
+    expect(snapshot.session.report?.unresolved.join("\n")).toContain(active[0].title);
+    expect(snapshot.session.review?.ready).toBe(true);
+    expect(snapshot.session.capabilities.canConfirm).toBe(true);
     expect(snapshot.session.report?.status).toBe("draft");
   });
 
-  it("only confirms the exact current reviewed report and keeps execution instructions in the deliverable", async () => {
+  it("only adopts the exact current analysis and keeps internal instructions out of user markdown", async () => {
     await reachReport();
     const report = snapshot.session.report!;
     expect(snapshot.session.capabilities.canConfirm).toBe(true);
     expect(report.status).toBe("draft");
     expect(report.markdown).toContain("纸面需求工作台执行方案");
     expect(report.executionPrompt).toContain("实际用户回答驱动");
+    expect(report.markdown).not.toContain(report.executionPrompt);
+    expect(report.markdown).not.toContain("## 执行提示词");
     await expect(
       actPlanning(
         snapshot.session.id,
@@ -467,13 +1041,11 @@ describe("planning sessions with explicit structured-model test doubles", () => 
     ).rejects.toThrow();
   });
 
-  it("marks a dependent confirmed item for reconsideration when its prerequisite changes", async () => {
+  it("invalidates dependent analysis after a correction without promoting adoption to item confirmation", async () => {
     await reachReport();
     const report = snapshot.session.report!;
     await apply({ kind: "confirm", reportId: report.id, fingerprint: report.fingerprint });
-    expect(snapshot.session.items.find((item) => item.id === "questions")?.status).toBe(
-      "confirmed",
-    );
+    expect(snapshot.session.items.find((item) => item.id === "questions")?.status).toBe("proposed");
     await apply({
       kind: "note",
       text: "进入时机有变化，先进入工作台再开始分析。",
@@ -559,10 +1131,48 @@ describe("planning sessions with explicit structured-model test doubles", () => 
     expect(preview.session.agents.find((agent) => agent.id === "A")?.preview).toContain(
       "进入工作台",
     );
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 200);
+    request.onPreview({ field: "reasoning", text: "不得展示的内部内容" });
+    request.onPreview({ field: "nextActions.0", text: "先用最小流程验证用户能否理解问题。" });
+    const publicOutput = getPlanning(snapshot.session.id, owner).session.agents.find(
+      (agent) => agent.id === "A",
+    )?.preview;
+    expect(publicOutput).toContain("先用最小流程");
+    expect(publicOutput).toContain("进入工作台");
+    expect(publicOutput).not.toContain("不得展示");
+    clock.mockRestore();
     finish(result(analysis()));
     snapshot = await running;
     expect(snapshot.snapshotVersion).toBeGreaterThan(preview.snapshotVersion);
     expect(snapshot.session.agents.find((agent) => agent.id === "A")?.preview).toBe("");
+  });
+
+  it("keeps the previous public summary readable while the same agent updates it", async () => {
+    await reachQuestions();
+    const previous = snapshot.session.agents.find((agent) => agent.id === "A")!.summary;
+    await apply({ kind: "answer", answers: [answerInput()] });
+    let finish!: (value: ReturnType<typeof result>) => void;
+    fixture.generate.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const running = actPlanning(snapshot.session.id, owner, action({ kind: "advance" }));
+    const working = getPlanning(snapshot.session.id, owner);
+    expect(working.session.agents.find((agent) => agent.id === "A")).toMatchObject({
+      status: "running",
+      summary: previous,
+      preview: "",
+    });
+    const updated = { ...analysis(), summary: "现在已根据用户回答明确进入时机。" };
+    finish(result(updated));
+    snapshot = await running;
+    expect(snapshot.session.agents.find((agent) => agent.id === "A")?.summary).toContain(
+      updated.summary,
+    );
+    expect(snapshot.session.agents.find((agent) => agent.id === "A")?.summary).not.toContain(
+      previous,
+    );
   });
 
   it("preserves successful analysis when question generation fails and retries only the missing action", async () => {

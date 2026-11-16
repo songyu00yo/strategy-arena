@@ -1,11 +1,10 @@
-import { createMotionScope } from "../console/motion-runtime";
 import { reducedMotion } from "../console/effects";
 
 type Point = { x: number; y: number };
 type Quad = [Point, Point, Point, Point];
+const flights = new WeakMap<HTMLElement, () => void>();
 
-// The same projected-corner method used by the original StepCard. Keeping the four
-// actual corners avoids a visible jump when paper leaves a tilted Agent board.
+/** Read projected corners once, including the Agent board's parent perspective. */
 export function paperCorners(element: HTMLElement): Quad {
   const markers = [
     [0, 0],
@@ -37,65 +36,123 @@ function projection(width: number, height: number, q: Quad) {
   const det = dx1 * dy2 - dx2 * dy1;
   const g = Math.abs(det) > 0.0001 ? (dx3 * dy2 - dx2 * dy3) / det : 0;
   const h = Math.abs(det) > 0.0001 ? (dx1 * dy3 - dx3 * dy1) / det : 0;
-  const m = [
-    (b.x - a.x + g * b.x) / width,
-    (d.x - a.x + h * d.x) / height,
-    a.x,
-    (b.y - a.y + g * b.y) / width,
-    (d.y - a.y + h * d.y) / height,
-    a.y,
-    g / width,
-    h / height,
-    1,
-  ];
-  return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,1)`;
+  return `matrix3d(${(b.x - a.x + g * b.x) / width},${(b.y - a.y + g * b.y) / width},0,${g / width},${(d.x - a.x + h * d.x) / height},${(d.y - a.y + h * d.y) / height},0,${h / height},0,0,1,0,${a.x},${a.y},0,1)`;
 }
 
+export function settlePaper(panel: HTMLElement) {
+  flights.get(panel)?.();
+  panel.style.transform = "none";
+  panel.style.opacity = "1";
+  panel.style.willChange = "";
+}
+
+/** Seven spatial samples describe a curl; native easing supplies a continuous time curve.
+ * Only transform and opacity animate. No per-frame layout, shadow paint or global hold. */
 export function animatePaper(
   panel: HTMLElement,
   anchor: HTMLElement | null,
   opening: boolean,
   done?: () => void,
   start?: Quad,
+  options: { continuation?: boolean } = {},
 ) {
-  const scope = createMotionScope("interaction");
+  const previous = flights.get(panel);
+  const currentPose = start ?? (!opening || previous ? paperCorners(panel) : undefined);
+  const currentOpacity = previous ? Number(getComputedStyle(panel).opacity) : 1;
+  previous?.();
+  panel.style.transform = "none";
+  panel.style.opacity = "1";
+  panel.style.transformOrigin = "0 0";
   if (reducedMotion()) {
     done?.();
-    return () => scope.dispose();
+    return () => {};
   }
   const box = panel.getBoundingClientRect();
-  const own = paperCorners(panel);
-  const destination =
-    anchor && anchor.getBoundingClientRect().width
-      ? paperCorners(anchor)
-      : (own.map((point) => ({ x: point.x + 32, y: point.y + 26 })) as Quad);
-  const from = start ?? (opening ? destination : own);
+  if (!box.width || !box.height) {
+    done?.();
+    return () => {};
+  }
+  const own: Quad = [
+    { x: box.left, y: box.top },
+    { x: box.right, y: box.top },
+    { x: box.right, y: box.bottom },
+    { x: box.left, y: box.bottom },
+  ];
+  const anchorBox = anchor?.getBoundingClientRect();
+  const visibleAnchor =
+    anchor &&
+    anchorBox &&
+    anchorBox.width > 0 &&
+    anchorBox.height > 0 &&
+    anchorBox.bottom > 0 &&
+    anchorBox.top < innerHeight &&
+    anchorBox.right > 0 &&
+    anchorBox.left < innerWidth;
+  const destination = visibleAnchor
+    ? paperCorners(anchor)
+    : (own.map((point) => ({ x: point.x + 28, y: point.y + 18 })) as Quad);
+  const incoming = options.continuation
+    ? (own.map((point, index) => ({
+        x: point.x + (index === 1 || index === 2 ? 30 : 14),
+        y: point.y + (index < 2 ? 18 : 8),
+      })) as Quad)
+    : destination;
+  const from = currentPose ?? (opening ? incoming : own);
   const to = opening ? own : destination;
-  const frames = Array.from({ length: 41 }, (_, index): Keyframe => {
-    const t = index / 40;
-    const ease = t === 1 ? 1 : 1 - (1 + 7.8 * t) * Math.exp(-7.8 * t);
-    const rise = -62 * Math.sin(Math.PI * ease) ** 2;
-    const quad = from.map((point, i) => ({
-      x: point.x + (to[i].x - point.x) * ease - box.left,
-      y: point.y + (to[i].y - point.y) * ease + rise - box.top,
+  const distance = Math.hypot(to[0].x - from[0].x, to[0].y - from[0].y);
+  const lift = Math.min(options.continuation ? 16 : 38, distance * 0.06);
+  const frames = [0, 0.16, 0.36, 0.58, 0.78, 0.92, 1].map((progress): Keyframe => {
+    const arc = Math.sin(Math.PI * progress);
+    const quad = from.map((point, index) => ({
+      x: point.x + (to[index].x - point.x) * progress - box.left,
+      y:
+        point.y +
+        (to[index].y - point.y) * progress -
+        box.top -
+        lift * arc +
+        (index === 1 || index === 2 ? arc * 7 : 0),
     })) as Quad;
     return {
-      transform: projection(box.width, box.height, quad),
-      opacity: opening ? Math.min(1, t * 5) : t > 0.82 ? (1 - t) / 0.18 : 1,
-      boxShadow: `0 ${Math.sin(Math.PI * ease) * 24 + 4}px ${Math.sin(Math.PI * ease) * 48 + 6}px rgb(21 19 15 / ${0.1 + Math.sin(Math.PI * ease) * 0.12})`,
+      offset: progress,
+      transform: progress === 1 && opening ? "none" : projection(box.width, box.height, quad),
+      opacity: opening
+        ? currentPose
+          ? currentOpacity + (1 - currentOpacity) * progress
+          : Math.min(1, 0.12 + progress * 4)
+        : currentOpacity * (progress < 0.78 ? 1 : (1 - progress) / 0.22),
     };
   });
-  panel.style.transformOrigin = "0 0";
-  const flight = scope.animate(panel, frames, {
-    duration: opening ? 900 : 760,
-    easing: "linear",
+  panel.style.willChange = "transform, opacity";
+  const flight = panel.animate(frames, {
+    duration: options.continuation ? (opening ? 180 : 220) : opening ? 460 : 320,
+    easing: "cubic-bezier(.18,.74,.24,1)",
     fill: "both",
   });
-  flight.onfinish = () => {
+  let disposed = false;
+  const cancel = () => {
+    if (disposed) return;
+    disposed = true;
+    // Keep the current pose before cancelling fill; replacement flights never flash home.
+    const style = getComputedStyle(panel);
+    panel.style.transform = style.transform;
+    panel.style.opacity = style.opacity;
+    flight.onfinish = null;
     flight.cancel();
+    panel.style.willChange = "";
+    if (flights.get(panel) === cancel) flights.delete(panel);
+  };
+  flights.set(panel, cancel);
+  flight.onfinish = () => {
+    if (disposed) return;
+    disposed = true;
+    panel.style.transform = opening ? "none" : String(frames.at(-1)!.transform);
+    panel.style.opacity = opening ? "1" : "0";
+    flight.cancel();
+    panel.style.willChange = "";
+    flights.delete(panel);
     done?.();
   };
-  return () => scope.dispose();
+  return cancel;
 }
 
 export const agentPaperAnchor = (id: string) =>

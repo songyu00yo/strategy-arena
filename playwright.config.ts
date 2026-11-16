@@ -27,6 +27,11 @@ export default defineConfig({
         channel: process.env.PLAYWRIGHT_CHANNEL === "chrome" ? "chrome" : undefined,
       },
     },
+    {
+      name: "webkit-planning",
+      testMatch: "planning-workspace.spec.ts",
+      use: { ...devices["Desktop Safari"] },
+    },
   ],
   webServer: {
     command: "node scripts/start-e2e-server.mjs",

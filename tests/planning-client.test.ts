@@ -5,6 +5,7 @@ import type {
   PlanningQuestion,
   PlanningSnapshot,
 } from "../src/lib/planning-contracts";
+import { PLANNING_CONTRACT_VERSION } from "../src/lib/planning-contracts";
 import {
   acceptPlanningSnapshot,
   activePlanningQuestion,
@@ -65,12 +66,27 @@ function snapshot(snapshotVersion: number, sessionId = "fixture-session"): Plann
   return {
     snapshotVersion,
     session: {
-      contractVersion: "1.0.0",
+      contractVersion: PLANNING_CONTRACT_VERSION,
       id: sessionId,
       revision: 3,
       goal: "保留纸面视觉并尽早进入工作台",
       modelMode: "gpt-6.1-terra",
       status: "awaiting_user",
+      productScope: "analysis_and_guidance",
+      progress: {
+        round: 1,
+        questionLimit: 8,
+        questionsIssued: 1,
+        questionsAnswered: 0,
+        questionsRemaining: 8,
+        questionSlotsRemaining: 7,
+        activeQuestions: 1,
+        stage: "clarifying",
+        budgetExhausted: false,
+        endedEarly: false,
+        coverage: [],
+      },
+      expertResults: [],
       agents: [],
       items: [],
       sourceRecords: [],
@@ -86,6 +102,7 @@ function snapshot(snapshotVersion: number, sessionId = "fixture-session"): Plann
         canPreview: true,
         canConfirm: false,
         canStop: false,
+        canStartRound: false,
         reason: "等待用户回答",
       },
       nextAction: "answer",

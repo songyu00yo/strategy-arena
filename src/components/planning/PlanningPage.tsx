@@ -53,7 +53,16 @@ export function PlanningPage() {
   }, [providers]);
 
   const create = async () => {
-    if (goal.trim().length < 2 || pending || controller.restoring) return;
+    if (
+      goal.trim().length < 2 ||
+      pending ||
+      controller.restoring ||
+      !controller.health ||
+      requiresAccess ||
+      unavailable ||
+      controller.unknownRequest
+    )
+      return;
     if (await controller.create(goal, modelMode)) {
       try {
         sessionStorage.removeItem(GOAL_KEY);
@@ -88,7 +97,7 @@ export function PlanningPage() {
           </span>
           <span>方案擂台</span>
         </button>
-        <span className="p-header-motto">让想法，有处落笔。</span>
+        <span className="p-header-section">{session ? "项目工作台" : "想法簿"}</span>
         <nav className="header-right" aria-label="工作台导航">
           {session && (
             <button
@@ -120,8 +129,7 @@ export function PlanningPage() {
           <div className="goal-landing p-goal-landing">
             <section className="goal-landing-center">
               <div className="home-intro">
-                <p className="p-home-kicker">一个还没想清楚的念头，也可以开始。</p>
-                <h1>你想解决什么问题？</h1>
+                <h1>你想做些什么？</h1>
               </div>
               <GoalFocusStage>
                 <form
@@ -132,16 +140,27 @@ export function PlanningPage() {
                   }}
                 >
                   <label htmlFor="planning-goal" className="sr-only">
-                    你想解决什么问题？
+                    你想做些什么？
                   </label>
+                  <div className="p-goal-margin" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </div>
                   <textarea
                     id="planning-goal"
                     ref={goalInput}
                     value={goal}
                     rows={4}
                     maxLength={6000}
-                    placeholder="先说个大概。我们一起把它想清楚。"
+                    placeholder="写下你的想法…"
                     disabled={pending || controller.restoring}
+                    onKeyDown={(event) => {
+                      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                        event.preventDefault();
+                        void create();
+                      }
+                    }}
                     onChange={(event) => {
                       setGoal(event.target.value);
                       try {
@@ -149,49 +168,51 @@ export function PlanningPage() {
                       } catch {}
                     }}
                   />
-                  {goal.trim().length > 0 && (
-                    <div className="p-goal-tools">
-                      <ModelSelector
-                        mode={modelMode}
-                        onChange={(value) => {
-                          typedModel.current = true;
-                          setModelMode(value);
-                        }}
-                        providers={providers}
-                        challenge={{
-                          goal,
-                          constraints: "",
-                          preferences: "",
-                          options: [],
-                          materials: "",
-                          domain: "general",
-                          budget: null,
-                          timeHours: null,
-                        }}
-                        disabled={pending || controller.restoring}
-                      />
-                      <button
-                        type="submit"
-                        className="primary-button"
-                        disabled={
-                          goal.trim().length < 2 ||
-                          pending ||
-                          controller.restoring ||
-                          !controller.health ||
-                          requiresAccess ||
-                          unavailable ||
-                          controller.unknownRequest
-                        }
-                      >
-                        {pending ? (
-                          <LoaderCircle size={17} className="spin" />
-                        ) : (
-                          <ArrowRight size={17} />
-                        )}
-                        {pending ? "正在铺开工作台" : "开始分析"}
-                      </button>
-                    </div>
-                  )}
+                  <div className="p-goal-tools">
+                    <ModelSelector
+                      mode={modelMode}
+                      onChange={(value) => {
+                        typedModel.current = true;
+                        setModelMode(value);
+                      }}
+                      providers={providers}
+                      challenge={{
+                        goal,
+                        constraints: "",
+                        preferences: "",
+                        options: [],
+                        materials: "",
+                        domain: "general",
+                        budget: null,
+                        timeHours: null,
+                      }}
+                      disabled={pending || controller.restoring}
+                    />
+                    <button
+                      type="submit"
+                      className="primary-button"
+                      disabled={
+                        goal.trim().length < 2 ||
+                        pending ||
+                        controller.restoring ||
+                        !controller.health ||
+                        requiresAccess ||
+                        unavailable ||
+                        controller.unknownRequest
+                      }
+                    >
+                      {pending ? (
+                        <LoaderCircle size={17} className="spin" />
+                      ) : (
+                        <ArrowRight size={17} />
+                      )}
+                      {pending ? "正在打开" : "开始分析"}
+                    </button>
+                  </div>
+                  <div className="p-goal-caption">
+                    <span>⌘ / Ctrl + Enter</span>
+                    <span>{goal.length} / 6000</span>
+                  </div>
                   {controller.restoring && (
                     <p className="p-home-status" role="status">
                       <LoaderCircle size={14} className="spin" />
@@ -231,11 +252,6 @@ export function PlanningPage() {
                   )}
                 </form>
               </GoalFocusStage>
-              <div className="p-home-footnote">
-                <span>不必先写完整需求</span>
-                <i />
-                <span>你的每次选择，都会留下依据</span>
-              </div>
               {controller.history.length > 0 && (
                 <section className="p-history">
                   <button
@@ -245,18 +261,27 @@ export function PlanningPage() {
                     onClick={() => setHistoryOpen(!historyOpen)}
                   >
                     <Clock3 size={14} />
-                    继续之前的想法<span>{controller.history.length}</span>
+                    最近的想法<span>{controller.history.length}</span>
                   </button>
                   {historyOpen && (
                     <ul>
-                      {controller.history.map((item) => (
+                      {controller.history.map((item, index) => (
                         <li key={item.id}>
                           <button
                             type="button"
                             disabled={pending || controller.unknownRequest}
                             onClick={() => void controller.load(item.id)}
                           >
+                            <span className="p-history-number">
+                              {String(index + 1).padStart(2, "0")}
+                            </span>
                             <span>{item.goal}</span>
+                            <time dateTime={item.updatedAt}>
+                              {new Date(item.updatedAt).toLocaleDateString("zh-CN", {
+                                month: "2-digit",
+                                day: "2-digit",
+                              })}
+                            </time>
                             <ArrowUpRight size={14} />
                           </button>
                         </li>

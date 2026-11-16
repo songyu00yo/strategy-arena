@@ -1,4 +1,4 @@
-// Demo mode (pnpm demo). Every /api request is answered here with scripted content. None is forwarded,
+// Legacy demo (pnpm demo). Every /api request is answered here with scripted content. None is forwarded,
 // so demo mode cannot reach a model or spend money. Pages and assets come from the production build.
 import http from "node:http";
 import { randomUUID } from "node:crypto";
@@ -14,7 +14,7 @@ export const DEMO_MODEL = {
   promptVersion: "demo",
   schemaVersion: "1.0.0",
 };
-const BANNER_TEXT = "演示模式 · 全部是预设内容，未调用模型";
+const BANNER_TEXT = "旧版演示模式 · 全部是预设内容，未调用模型";
 const BANNER = `<script>setTimeout(()=>{const b=document.createElement('div');b.textContent=${JSON.stringify(BANNER_TEXT)};b.setAttribute('role','note');b.style.cssText='position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:9999;padding:3px 12px;border-radius:99px;background:#0b0d10;color:#fff;font:12px/1.5 system-ui;pointer-events:none';document.body.appendChild(b)},0)</script>`;
 const DEFAULT_CHALLENGE = {
   goal: "演示问题：比较三条可执行路线。",
@@ -246,8 +246,18 @@ export function createDemoServer({ target, stepMs = 3000 }) {
     return json(res, 200, snapshot(arena, stepMs));
   }
   return http.createServer((req, res) => {
-    const path = new URL(req.url, "http://demo").pathname;
+    const url = new URL(req.url, "http://demo");
+    const path = url.pathname;
     if (path === "/api" || path.startsWith("/api/")) return void api(req, res, path);
+    if (
+      path === "/" &&
+      ["GET", "HEAD"].includes(req.method) &&
+      !["legacy", "arena", "examples"].some((key) => url.searchParams.has(key))
+    ) {
+      url.searchParams.set("legacy", "1");
+      res.writeHead(307, { location: `/${url.search}`, "cache-control": "no-store" });
+      return void res.end();
+    }
     const headers = { ...req.headers, host: `127.0.0.1:${target}`, "accept-encoding": "identity" };
     const upstream = http.request(
       { host: "127.0.0.1", port: target, path: req.url, method: req.method, headers },

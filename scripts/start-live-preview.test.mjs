@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -14,6 +15,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { assertPortFree, prepareLivePreview, proxyEnvironment } from "./start-live-preview.mjs";
+
+// Derive fixtures and missing-file cases from the repository, independently of the launcher's list.
+const migrationFiles = readdirSync(new URL("../migrations/", import.meta.url), { recursive: true })
+  .filter((path) => path.endsWith(".sql"))
+  .map((path) => join("migrations", path))
+  .sort();
 
 // Only temporary synthetic release/ledger files; no models or real credentials.
 const billingFixture = {
@@ -51,15 +58,7 @@ function fixture(t) {
     node: process.version,
   };
   writeFileSync(join(release, "release-info.json"), JSON.stringify(info));
-  for (const file of [
-    "server.js",
-    ".next/BUILD_ID",
-    ".next/static/fixture",
-    "migrations/001_initial.sql",
-    "migrations/002_intakes.sql",
-    "migrations/003_decision_reviews.sql",
-    "migrations/billing/002_limit_audit.sql",
-  ]) {
+  for (const file of ["server.js", ".next/BUILD_ID", ".next/static/fixture", ...migrationFiles]) {
     mkdirSync(dirname(join(release, file)), { recursive: true });
     writeFileSync(join(release, file), "fixture");
   }
@@ -384,10 +383,24 @@ test("CLI check uses the actual read-only billing API and never starts the synth
   assert.equal(existsSync(join(directory, "data")), false);
 });
 
-for (const migration of ["002_intakes.sql", "003_decision_reviews.sql"])
+for (const migration of migrationFiles)
   test(`rejects a bundle missing ${migration} before starting or creating data`, async (t) => {
     const { directory, options, deps } = fixture(t);
-    rmSync(join(options.release, "migrations", migration));
-    await assert.rejects(prepareLivePreview(options, deps), /Standalone release is incomplete/);
+    rmSync(join(options.release, migration));
+    let ledgerReads = 0;
+    await assert.rejects(
+      prepareLivePreview(
+        { ...options, check: false },
+        {
+          ...deps,
+          readBillingStatus: () => {
+            ledgerReads++;
+            return billingFixture;
+          },
+        },
+      ),
+      { message: `Standalone release is incomplete; missing ${migration}.` },
+    );
+    assert.equal(ledgerReads, 0);
     assert.equal(existsSync(join(directory, "data")), false);
   });

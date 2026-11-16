@@ -1,4 +1,4 @@
-// pnpm demo: starts the arena with scripted content for the home-page samples. It calls no model.
+// pnpm demo: starts the legacy arena with scripted sample content. It calls no model.
 // Use --rebuild to force a fresh build, --port=<n> to choose the page's port.
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
@@ -14,7 +14,7 @@ const serverDir = join(root, "server");
 const fresh = !args.includes("--rebuild") && demoReleaseIsCurrent(process.cwd(), serverDir);
 
 if (!fresh) {
-  console.log("正在构建正式版，大约需要一分钟……");
+  console.log("正在构建旧版演示页面……");
   execFileSync(process.execPath, ["scripts/build.mjs"], { stdio: "inherit" });
   rmSync(root, { recursive: true, force: true });
   mkdirSync(serverDir, { recursive: true });
@@ -50,6 +50,6 @@ server.on("error", (error) => {
   stop();
 });
 server.listen(port, "127.0.0.1", () => {
-  console.log(`\n演示已启动：http://127.0.0.1:${port}`);
+  console.log(`\n旧版演示已启动：http://127.0.0.1:${port}/?legacy=1`);
   console.log("全部内容都是预设的，不调用模型。按 Ctrl+C 停止。\n");
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { ArenaVersion } from "@/lib/contracts";
 import type { StepContext } from "@/lib/step-context";
 import { DisclosureMotion } from "./disclosure-motion";
@@ -44,51 +44,6 @@ export function StepFollowUpDialog({
   const [failure, setFailure] = useState("");
   const motion = useRef<OverlayMotionHandle>(null);
   const submitting = useRef(false);
-  const submitButton = useRef<HTMLButtonElement>(null);
-  useLayoutEffect(() => {
-    const button = submitButton.current;
-    if (!button) return;
-    const original = button.style.minWidth;
-    const reserve = () => {
-      if (!button.getClientRects().length) return;
-      const probe = button.cloneNode(false) as HTMLButtonElement;
-      probe.inert = true;
-      probe.setAttribute("aria-hidden", "true");
-      Object.assign(probe.style, {
-        position: "absolute",
-        visibility: "hidden",
-        width: "max-content",
-        minWidth: "0",
-        maxWidth: "none",
-        margin: "0",
-        transition: "none",
-        animation: "none",
-        transform: "none",
-      });
-      button.parentElement!.appendChild(probe);
-      try {
-        const width = Math.max(
-          ...["补充后重新推演", "正在创建新版本…"].map((label) => {
-            probe.textContent = label;
-            return parseFloat(getComputedStyle(probe).width);
-          }),
-        );
-        const next = `${width}px`;
-        if (button.style.minWidth !== next) button.style.minWidth = next;
-      } finally {
-        probe.remove();
-      }
-    };
-    reserve();
-    const observer = new ResizeObserver(reserve);
-    observer.observe(button);
-    const frame = requestAnimationFrame(reserve);
-    return () => {
-      observer.disconnect();
-      cancelAnimationFrame(frame);
-      button.style.minWidth = original;
-    };
-  }, []);
   const close = () => {
     if (!motion.current?.close()) onClose();
   };
@@ -168,7 +123,7 @@ export function StepFollowUpDialog({
                   onClose();
                   onAdjustConditions();
                 };
-                if (!motion.current?.replace(handoff)) handoff();
+                if (!motion.current?.close(handoff)) handoff();
               }}
             >
               调整条件
@@ -190,7 +145,6 @@ export function StepFollowUpDialog({
             取消
           </button>
           <button
-            ref={submitButton}
             type="submit"
             className="primary-button"
             disabled={pending || disabled || text.trim().length < 3 || text.trim().length > 1000}

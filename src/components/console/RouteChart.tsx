@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import type { ArenaVersion } from "@/lib/contracts";
 import { comparisonMeta } from "@/components/status";
 import { ROUTE_COLOR } from "./effects";
-import { CLARIFICATION_ROLES, latestShownRevision, type Beat } from "./beats";
+import { latestShownRevision, type Beat } from "./beats";
 
 const ROUTES = ["A", "B", "C"] as const;
 
@@ -48,9 +48,8 @@ export function RouteChart({
   onStep: (index: number) => void;
 }) {
   const shown = beats.slice(0, index + 1);
-  const clarification = version.workflow === "clarification";
   const seen = new Set(shown.map((b) => b.id));
-  const attacks = shown.filter((b) => b.stage === "attack" && b.attack).map((b) => b.attack!);
+  const attacks = shown.filter((b) => b.stage === "attack").map((b) => b.attack!);
   const verdict = seen.has("judge") ? version.verdict : null;
   const routes = ROUTES.map((id) => {
     const proposal = seen.has(`p:${id}`) ? version.strategies.find((s) => s.id === id) : undefined;
@@ -76,76 +75,40 @@ export function RouteChart({
     budget,
   );
   const jumpTo = (id: string) => {
-    const target = clarification
-      ? shown.findLast((beat) => beat.clarificationRun?.role === id)
-      : (latestShownRevision(shown, id) ?? shown.find((beat) => beat.id === `p:${id}`));
+    const target = latestShownRevision(shown, id) ?? shown.find((beat) => beat.id === `p:${id}`);
     if (target) onStep(shown.indexOf(target));
   };
   return (
-    <section className="c-compare" aria-label={clarification ? "角色审查记录" : "三路对比"}>
+    <section className="c-compare" aria-label="三路对比">
       <h2>
-        {clarification ? "角色审查记录" : "三路对比"}{" "}
-        <span>
-          {clarification
-            ? "点击角色查看实际调用与完整输出"
-            : "工时和费用均为估算，竖线表示你的上限，点击路线查看详情"}
-        </span>
+        三路对比 <span>工时和费用均为估算，竖线表示你的上限，点击路线查看详情</span>
       </h2>
       <div className="c-chart">
         <div className="head" aria-hidden="true">
-          <span>{clarification ? "角色" : "路线"}</span>
-          <span>{clarification ? "轮次" : "工时"}</span>
-          <span>{clarification ? "用量记录" : "费用"}</span>
-          <span>{clarification ? "输出记录" : "质疑结果"}</span>
-          <span>{clarification ? "状态" : "裁判"}</span>
+          <span>路线</span>
+          <span>工时</span>
+          <span>费用</span>
+          <span>质疑结果</span>
+          <span>裁判</span>
         </div>
         {routes.map(({ id, view, upheld, refuted, open }) => {
           const comparison = verdict?.comparisons.find((c) => c.strategyId === id);
-          const run = shown.findLast(
-            (beat) => beat.clarificationRun?.role === id,
-          )?.clarificationRun;
           return (
             <button
               key={id}
               type="button"
-              aria-label={
-                clarification
-                  ? `查看 ${id} ${CLARIFICATION_ROLES[id]} 的详情`
-                  : `查看路线 ${id} 的详情`
-              }
-              disabled={clarification ? !run : !view}
+              aria-label={`查看路线 ${id} 的详情`}
+              disabled={!view}
               className={`row ${verdict?.preferred === id ? "pick" : ""}`}
               style={{ "--route": ROUTE_COLOR[id].replaceAll(",", " ") } as CSSProperties}
               onClick={() => jumpTo(id)}
             >
               <span className="name">
                 <b>{id}</b>
-                <em>
-                  {clarification
-                    ? CLARIFICATION_ROLES[id]
-                    : (view?.title.replace(/^路线\s*[ABC][：:]\s*/, "") ?? "等待提案")}
-                </em>
+                <em>{view?.title.replace(/^路线\s*[ABC][：:]\s*/, "") ?? "等待提案"}</em>
               </span>
-              <Bar
-                value={clarification ? run?.round : view?.estimatedHours}
-                max={
-                  clarification
-                    ? Math.max(1, ...shown.map((beat) => beat.clarificationRun?.round ?? 0))
-                    : maxHours
-                }
-                limit={clarification ? null : timeHours}
-                unit={clarification ? "轮" : "小时"}
-              />
-              <Bar
-                value={clarification ? run?.usage.length : view?.estimatedCost}
-                max={
-                  clarification
-                    ? Math.max(1, ...shown.map((beat) => beat.clarificationRun?.usage.length ?? 0))
-                    : maxCost
-                }
-                limit={clarification ? null : budget}
-                unit={clarification ? "次" : "¥"}
-              />
+              <Bar value={view?.estimatedHours} max={maxHours} limit={timeHours} unit="小时" />
+              <Bar value={view?.estimatedCost} max={maxCost} limit={budget} unit="¥" />
               <span className="tally" title={`成立 ${upheld}，尚无定论 ${open}，已反驳 ${refuted}`}>
                 {Array.from({ length: upheld }, (_, i) => (
                   <i key={`u${i}`} className="is-supported" />
@@ -157,23 +120,13 @@ export function RouteChart({
                   <i key={`f${i}`} className="is-refuted" />
                 ))}
                 <small>
-                  {clarification
-                    ? run
-                      ? `依据修订 ${run.basedOnRevision}`
-                      : "尚无记录"
-                    : upheld + open + refuted
-                      ? `成立 ${upheld} · 未决 ${open} · 反驳 ${refuted}`
-                      : "—"}
+                  {upheld + open + refuted
+                    ? `成立 ${upheld} · 未决 ${open} · 反驳 ${refuted}`
+                    : "—"}
                 </small>
               </span>
               <span className={`judge ${comparison?.status ?? ""}`}>
-                {clarification
-                  ? run
-                    ? { completed: "已完成", failed: "失败", uncertain: "待核对" }[run.status]
-                    : "未调用"
-                  : comparison
-                    ? comparisonMeta[comparison.status].label
-                    : "—"}
+                {comparison ? comparisonMeta[comparison.status].label : "—"}
               </span>
             </button>
           );

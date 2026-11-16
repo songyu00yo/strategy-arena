@@ -7,7 +7,7 @@ import {
   ArrowUpRight,
   BookOpen,
   BriefcaseBusiness,
-  CalendarDays,
+  Clapperboard,
   Code2,
 } from "lucide-react";
 import { RECORDED_EXAMPLES } from "@/lib/recorded-examples";
@@ -17,10 +17,10 @@ import { Modal } from "./modal";
 import "./recorded-examples.css";
 
 const ICONS: Record<string, typeof BookOpen> = {
-  "personal-website": Code2,
-  presentation: BriefcaseBusiness,
-  "user-guide": BookOpen,
-  "event-registration": CalendarDays,
+  learning: BookOpen,
+  career: BriefcaseBusiness,
+  creation: Clapperboard,
+  "course-site": Code2,
 };
 
 function ExampleGallery() {
@@ -73,12 +73,12 @@ function ExampleGallery() {
     };
   }, []);
   return (
-    <section ref={section} className="recorded-examples in-dialog" aria-label="选择需求梳理示例">
+    <section ref={section} className="recorded-examples in-dialog" aria-label="选择真实案例">
       <header className="recorded-examples-heading">
         <div>
-          <p>从模糊目标开始，看提问、模拟回答、查漏和需求交接。</p>
+          <p>从填写目标开始，看三条路线如何提案、质疑和修订。</p>
         </div>
-        <p>真实模型运行的模拟案例 · 回看新增调用为 0</p>
+        <p>已保存的真实记录 · 回放新增用量为 0</p>
       </header>
       <div className="recorded-examples-grid">
         {RECORDED_EXAMPLES.map((example) => {
@@ -87,13 +87,8 @@ function ExampleGallery() {
             <Link
               key={example.slug}
               href={`/examples/${example.slug}`}
-              onNavigate={(event) => {
-                event.preventDefault();
-                // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Native document transitions keep destination controls live.
-                window.location.assign(`/examples/${example.slug}`);
-              }}
               className="recorded-example-card"
-              aria-label={`回看${example.direction}需求梳理示例：${example.title}`}
+              aria-label={`播放${example.direction}案例：${example.title}`}
             >
               <div className="recorded-card-top">
                 <span>{example.direction}</span>
@@ -136,10 +131,10 @@ export function RecordedExamples() {
         aria-expanded={!!trigger}
         onClick={(event) => setTrigger(event.currentTarget)}
       >
-        先看需求梳理示例 <ArrowRight size={14} />
+        先看真实案例 <ArrowRight size={14} />
       </button>
       {trigger && (
-        <Modal title="先看需求梳理示例" trigger={trigger} onClose={() => setTrigger(null)} wide>
+        <Modal title="先看一场真实推演" trigger={trigger} onClose={() => setTrigger(null)} wide>
           <ExampleGallery />
         </Modal>
       )}

@@ -2,7 +2,6 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ArenaVersion, ModelDraft } from "@/lib/contracts";
-import { CLARIFICATION_ROLES } from "./console/beats";
 import "./agent-progress.css";
 
 const labels: Record<string, string> = {
@@ -35,38 +34,16 @@ function AgentPlan({
   version: ArenaVersion;
   web?: { webConfigured: boolean; provider?: "deepseek" | "tavily" };
 }) {
-  const agent = version.agent;
-  const clarification = version.workflow === "clarification" ? version.clarification : undefined;
-  const entries = clarification
-    ? clarification.runs.map((run) => ({
-        ...run,
-        label: `${run.role} ${CLARIFICATION_ROLES[run.role]}`,
-      }))
-    : agent!.actions.map((action) => ({
-        ...action,
-        label: `${labels[action.kind]}${roleOf(action.role)}`,
-      }));
+  const agent = version.agent!;
   const [open, setOpen] = useState(false);
   const chain = useRef<HTMLOListElement>(null);
-  const plan = agent?.plans.at(-1);
-  const summary = clarification?.runs.at(-1)?.summary ?? plan?.summary;
-  const questions = clarification
-    ? (version.requirements?.unresolved ??
-      clarification.items
-        .filter((item) => !clarification.retiredIds.includes(item.id))
-        .map((item) => item.title))
-    : plan?.questions;
-  const stopReason = clarification
-    ? clarification.draftOnly
-      ? "当前为含未决事项的交接草稿。"
-      : "本版本按确认记录交接。"
-    : agent?.stopReason;
-  const running = entries.findIndex((action) => action.status === "running");
-  const reached = entries.reduce(
+  const plan = agent.plans.at(-1);
+  const running = agent.actions.findIndex((action) => action.status === "running");
+  const reached = agent.actions.reduce(
     (last, action, index) => (action.status === "pending" ? last : index),
     -1,
   );
-  const now = running >= 0 ? entries[running] : undefined;
+  const now = running >= 0 ? agent.actions[running] : undefined;
 
   // Keep the step that is running in view without moving the page.
   useEffect(() => {
@@ -86,15 +63,15 @@ function AgentPlan({
       data-open={open ? "true" : undefined}
     >
       <div className="ap-head">
-        <strong className="ap-title">{clarification ? "需求审查记录" : "自主推演"}</strong>
+        <strong className="ap-title">自主推演</strong>
         <span className="ap-count">
-          {clarification
-            ? `${clarification.rounds.length} 轮 · ${clarification.runs.length} 条角色调用记录`
-            : `${agent!.plans.length} 次规划 · ${agent!.toolsUsed}/${agent!.limits.tools} 次工具调用 · ${agent!.externalToolsUsed}/${agent!.limits.externalTools} 次联网`}
+          {agent.plans.length} 次规划 · {agent.toolsUsed}/{agent.limits.tools} 次工具调用 ·{" "}
+          {agent.externalToolsUsed}/{agent.limits.externalTools} 次联网
         </span>
         {now && (
           <span className="ap-now" role="status">
-            {now.label} 执行中
+            {labels[now.kind]}
+            {roleOf(now.role)} 执行中
           </span>
         )}
         <button
@@ -103,24 +80,21 @@ function AgentPlan({
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
-          {open
-            ? clarification
-              ? "收起记录"
-              : "收起规划"
-            : clarification
-              ? "看审查记录"
-              : "看规划"}
+          {open ? "收起规划" : "看规划"}
         </button>
       </div>
       <ol className="agent-actions" ref={chain}>
-        {entries.map((action, index) => (
+        {agent.actions.map((action, index) => (
           <li
             key={action.id}
             data-state={action.status}
             data-passed={index < reached ? "true" : undefined}
           >
             <i aria-hidden="true" />
-            <span>{action.label}</span>
+            <span>
+              {labels[action.kind]}
+              {roleOf(action.role)}
+            </span>
             <small>
               第 {action.round} 轮 · {states[action.status]}
             </small>
@@ -136,18 +110,18 @@ function AgentPlan({
                 : "联网搜索待配置，当前可检索已解析材料并计算。"}
             </p>
           )}
-          {summary && <p className="ap-summary">{summary}</p>}
-          {questions?.length ? (
+          {plan && <p className="ap-summary">{plan.summary}</p>}
+          {plan?.questions.length ? (
             <div className="ap-questions">
-              <b>{clarification ? "待决定事项" : "本轮核验问题"}</b>
+              <b>本轮核验问题</b>
               <ul>
-                {questions.map((question) => (
+                {plan.questions.map((question) => (
                   <li key={question}>{question}</li>
                 ))}
               </ul>
             </div>
           ) : null}
-          {stopReason && <p role="status">{stopReason}</p>}
+          {agent.stopReason && <p role="status">{agent.stopReason}</p>}
         </div>
       </div>
     </section>
@@ -203,10 +177,7 @@ export function AgentProgress({
   /** "plan" is the band above the stage; "drafts" is the live text in the side rail. */
   part: "plan" | "drafts";
 }) {
-  if (part === "plan")
-    return version.agent || (version.workflow === "clarification" && version.clarification) ? (
-      <AgentPlan version={version} web={web} />
-    ) : null;
+  if (part === "plan") return version.agent ? <AgentPlan version={version} web={web} /> : null;
   const currentDrafts = drafts.filter(
     (draft) =>
       draft.versionId === version.id &&

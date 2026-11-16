@@ -13,10 +13,8 @@ import { Check, ChevronDown } from "lucide-react";
 import type { Challenge, ModelMode, ModelOption } from "@/lib/contracts";
 import { MODEL_CATALOG, isModelId } from "@/lib/model-catalog";
 import { routeModel } from "@/lib/model-routing";
-import { capturePaperContents, DisclosureMotion } from "./disclosure-motion";
-import { createMotionScope } from "./console/motion-runtime";
+import { DisclosureMotion } from "./disclosure-motion";
 import { reducedMotion } from "./console/effects";
-import { moveScroll } from "./motion-scroll";
 import styles from "./model-selector.module.css";
 
 /** Keep keyboard navigation inside the floating menu's own scroll container. */
@@ -27,46 +25,9 @@ function revealOption(host: HTMLElement, option: HTMLElement) {
     top += node.offsetTop;
     node = node.offsetParent as HTMLElement | null;
   }
-  if (top < host.scrollTop + 8) moveScroll(host, { top: Math.max(0, top - 8) }, { duration: 180 });
+  if (top < host.scrollTop + 8) host.scrollTop = Math.max(0, top - 8);
   else if (top + option.offsetHeight > host.scrollTop + host.clientHeight - 8)
-    moveScroll(host, { top: top + option.offsetHeight - host.clientHeight + 8 }, { duration: 180 });
-}
-
-type LabelCapture = {
-  width: number;
-  height: number;
-  rows: { node: HTMLElement; height: number }[];
-  positions: { node: HTMLElement; x: number; y: number }[];
-  contents: ReturnType<typeof capturePaperContents>;
-};
-
-/** Read the currently composed button and its original flex-row neighbours. */
-function captureModelLabel(button: HTMLButtonElement, field: HTMLFieldSetElement): LabelCapture {
-  const parent = field.parentElement;
-  const row =
-    parent && ["flex", "inline-flex"].includes(getComputedStyle(parent).display) ? parent : null;
-  const parentFooter = row?.parentElement;
-  const footer =
-    parentFooter && getComputedStyle(parentFooter).display === "flex" ? parentFooter : null;
-  const nodes = row ? [...row.children] : [field];
-  if (footer) nodes.push(...[...footer.children].filter((node) => node !== row));
-  return {
-    width: parseFloat(getComputedStyle(button).width),
-    height: parseFloat(getComputedStyle(button).height),
-    rows: [row, footer]
-      .filter((node): node is HTMLElement => !!node)
-      .map((node) => ({
-        node,
-        height: parseFloat(getComputedStyle(node).height),
-      })),
-    positions: nodes
-      .filter((node): node is HTMLElement => node instanceof HTMLElement)
-      .map((node) => {
-        const box = node.getBoundingClientRect();
-        return { node, x: box.left, y: box.top };
-      }),
-    contents: capturePaperContents(button),
-  };
+    host.scrollTop = top + option.offsetHeight - host.clientHeight + 8;
 }
 
 export function ModelSelector({
@@ -90,7 +51,6 @@ export function ModelSelector({
   const [expanded, setExpanded] = useState(false);
   const [showReason, setShowReason] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const selector = useRef<HTMLFieldSetElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const flight = useRef<Animation | null>(null);
@@ -103,139 +63,6 @@ export function ModelSelector({
   const selectedId = isModelId(mode) ? mode : route.modelId;
   const selectedModel = MODEL_CATALOG.find((model) => model.id === selectedId)!;
   const label = mode === "auto" ? "自动选择" : selectedModel.label;
-  const labelCapture = useRef<LabelCapture | null>(null);
-  const [shownLabel, setShownLabel] = useState({ label, revision: 0 });
-  useLayoutEffect(() => {
-    const button = trigger.current;
-    const field = selector.current;
-    if (shownLabel.label === label || !button || !field) return;
-    labelCapture.current = reducedMotion() ? null : captureModelLabel(button, field);
-    setShownLabel({ label, revision: shownLabel.revision + 1 });
-  }, [label, shownLabel.label, shownLabel.revision]);
-  useLayoutEffect(() => {
-    const button = trigger.current;
-    const field = selector.current;
-    const captured = labelCapture.current;
-    if (!button || !field) return;
-    const name = button.querySelector<HTMLElement>("[data-model-label]");
-    // The old keyed CSS entrance is consumed by this native content handoff.
-    if (shownLabel.revision && name) name.style.animation = "none";
-    if (!captured) return;
-    const scope = createMotionScope("interaction");
-    const original = {
-      fieldWidth: field.style.width,
-      buttonWidth: button.style.width,
-      buttonMinWidth: button.style.minWidth,
-      buttonMaxWidth: button.style.maxWidth,
-      buttonFlexShrink: button.style.flexShrink,
-    };
-    const rows = captured.rows.map(({ node, height }) => ({
-      node,
-      height,
-      original: node.style.height,
-      target: parseFloat(getComputedStyle(node).height),
-    }));
-    const target = {
-      fieldWidth: parseFloat(getComputedStyle(field).width),
-      buttonWidth: parseFloat(getComputedStyle(button).width),
-    };
-    let disposed = false;
-    const finish = () => {
-      if (disposed) return;
-      disposed = true;
-      media.removeEventListener("change", preference);
-      removeEventListener("resize", resize);
-      scope.dispose();
-      field.style.width = original.fieldWidth;
-      button.style.width = original.buttonWidth;
-      button.style.minWidth = original.buttonMinWidth;
-      button.style.maxWidth = original.buttonMaxWidth;
-      button.style.flexShrink = original.buttonFlexShrink;
-      rows.forEach(({ node, original }) => {
-        node.style.height = original;
-      });
-      delete button.dataset.modelLabelMotion;
-      if (labelCapture.current === captured) labelCapture.current = null;
-    };
-    function resize() {
-      if (disposed) return;
-      labelCapture.current = captureModelLabel(button!, field!);
-      setShownLabel((current) => ({ ...current, revision: current.revision + 1 }));
-    }
-    const media = matchMedia("(prefers-reduced-motion: reduce)");
-    const preference = () => {
-      if (media.matches) finish();
-    };
-    if (media.matches) return finish;
-    // Reserve this switch's natural destination while its visible button resizes.
-    // Flex sizing must not clamp a retiring wider button to the narrow destination.
-    field.style.width = `${target.fieldWidth}px`;
-    button.style.minWidth = "0";
-    button.style.maxWidth = "none";
-    button.style.flexShrink = "0";
-    button.style.width = `${captured.width}px`;
-    rows.forEach(({ node, height }) => {
-      node.style.height = `${height}px`;
-    });
-    const positions = captured.positions
-      .filter(({ node }) => node.isConnected)
-      .map((before) => {
-        const box = before.node.getBoundingClientRect();
-        return { ...before, dx: before.x - box.left, dy: before.y - box.top };
-      });
-    const copy = scope.own(captured.contents.copy);
-    copy.dataset.modelLabelRetiring = "true";
-    Object.assign(copy.style, {
-      position: "absolute",
-      left: "0",
-      top: "0",
-      margin: "0",
-      minWidth: "0",
-      maxWidth: "none",
-      width: `${captured.width}px`,
-      height: `${captured.height}px`,
-      borderColor: "transparent",
-      background: "transparent",
-      boxShadow: "none",
-      transform: "none",
-      translate: "none",
-      opacity: "1",
-      pointerEvents: "none",
-      zIndex: "1",
-    });
-    button.appendChild(copy);
-    captured.contents.restoreScroll();
-    button.dataset.modelLabelMotion = "true";
-    const timing: KeyframeAnimationOptions = {
-      duration: 220,
-      easing: "cubic-bezier(.22,1,.3,1)",
-      fill: "both",
-    };
-    const animations = [
-      scope.animate(
-        button,
-        [{ width: `${captured.width}px` }, { width: `${target.buttonWidth}px` }],
-        timing,
-      ),
-      scope.animate(copy, [{ opacity: 1 }, { opacity: 0 }], timing),
-      ...positions
-        .filter(({ dx, dy }) => Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05)
-        .map(({ node, dx, dy }) =>
-          scope.animate(node, [{ translate: `${dx}px ${dy}px` }, { translate: "none" }], timing),
-        ),
-    ];
-    rows.forEach(({ node, height, target }) => {
-      animations.push(
-        scope.animate(node, [{ height: `${height}px` }, { height: `${target}px` }], timing),
-      );
-    });
-    for (const node of [name, button.querySelector<HTMLElement>(":scope > svg")])
-      if (node) animations.push(scope.animate(node, [{ opacity: 0 }, { opacity: 1 }], timing));
-    media.addEventListener("change", preference);
-    addEventListener("resize", resize);
-    void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish);
-    return finish;
-  }, [shownLabel.revision]);
   const selectedIndex =
     mode === "auto"
       ? MODEL_CATALOG.length
@@ -327,7 +154,7 @@ export function ModelSelector({
               { transform: rest, opacity: 0 },
             ],
         {
-          duration: open ? 260 : 180,
+          duration: open ? 480 : 220,
           easing: open ? "cubic-bezier(.16,1,.3,1)" : "cubic-bezier(.4,0,1,1)",
           fill: "both",
         },
@@ -354,12 +181,7 @@ export function ModelSelector({
     const content = reason.current;
     if (!expanded || !showReason || !followReason.current || !host || !content) return;
     const reveal = () => {
-      if (followReason.current)
-        moveScroll(
-          host,
-          { top: Math.max(0, host.scrollHeight - host.clientHeight) },
-          { duration: 180 },
-        );
+      if (followReason.current) host.scrollTop = Math.max(0, host.scrollHeight - host.clientHeight);
     };
     const observer = new ResizeObserver(reveal);
     observer.observe(content);
@@ -461,11 +283,7 @@ export function ModelSelector({
     else if (event.key === "Enter" || event.key === " ") options[index].click();
   };
   return (
-    <fieldset
-      ref={selector}
-      className={`${styles.selector} ${compact ? styles.compact : ""}`}
-      disabled={disabled}
-    >
+    <fieldset className={`${styles.selector} ${compact ? styles.compact : ""}`} disabled={disabled}>
       <legend className={compact ? styles.visuallyHidden : ""}>本轮使用的模型</legend>
       <button
         ref={trigger}
@@ -493,9 +311,9 @@ export function ModelSelector({
         }}
       >
         {/* Keyed by the model: each switch remounts the label and its glint so both replay. */}
-        <span key={`glint-${shownLabel.label}`} className={styles.glint} aria-hidden="true" />
-        <span key={shownLabel.label} className={styles.label} data-model-label>
-          {shownLabel.label}
+        <span key={`glint-${label}`} className={styles.glint} aria-hidden="true" />
+        <span key={label} className={styles.label}>
+          {label}
         </span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>

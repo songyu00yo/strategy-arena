@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { atomic, closeDb, db } from "../src/lib/server/db";
+import { closeDb, db } from "../src/lib/server/db";
 import {
   IntakeAnalysisSchema,
   UpdateIntakeSchema,
@@ -27,7 +27,6 @@ import {
   addIntakeAttachment,
   analyzeIntake,
   createIntake,
-  createFollowUpIntake,
   getIntake,
   getIntakeAttachment,
   removeIntakeAttachment,
@@ -87,7 +86,6 @@ function result(value: unknown) {
 beforeEach(() => {
   closeDb();
   vi.resetAllMocks();
-  vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", undefined);
   for (const [key, value] of Object.entries({
     ARENA_DATABASE_PATH: ":memory:",
     OPENAI_API_KEY: "synthetic",
@@ -139,7 +137,7 @@ describe("guided task preparation with synthetic model output", () => {
     expect(draft.answers).toEqual(recorded);
   });
 
-  it("finishing a partially saved round preserves omitted draft answers without confirming them", async () => {
+  it("finishing a partially saved round replaces omitted answers with one explicit skipped record", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     fixture.generate.mockResolvedValueOnce(
       result(analysis({ ready: false, questions: [question()] })),
@@ -152,12 +150,7 @@ describe("guided task preparation with synthetic model output", () => {
     });
     draft = updateIntake(draft.id, "alice", { revision: draft.revision, answers: [] });
     expect(draft.answers).toHaveLength(1);
-    expect(draft.answers[0]).toMatchObject({
-      questionId: "budget",
-      state: "answered",
-      value: "100元",
-      confirmation: "pending",
-    });
+    expect(draft.answers[0]).toMatchObject({ questionId: "budget", state: "skipped", value: "" });
   });
 
   it("accepts the optional draft-save mode only with answers, keeping legacy completion compatible", () => {
@@ -180,7 +173,7 @@ describe("guided task preparation with synthetic model output", () => {
     expect(() => getIntake(draft.id, "bob")).toThrow("无权访问");
     expect(draft).not.toHaveProperty("config");
   });
-  it("continues beyond two rounds and only summarizes early on explicit request", async () => {
+  it("asks at most two rounds, records skipped/unknown answers, then summarizes", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     fixture.generate.mockResolvedValueOnce(
       result(analysis({ ready: false, questions: [question()] })),
@@ -197,22 +190,13 @@ describe("guided task preparation with synthetic model output", () => {
     draft = await analyzeIntake(draft.id, "alice", operation(draft));
     expect(draft.questions.map((item) => item.id)).toEqual(["permission"]);
     expect(draft.round).toBe(2);
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "complete",
-      answers: [{ questionId: "permission", state: "skipped", value: "" }],
-    });
+    draft = updateIntake(draft.id, "alice", { revision: draft.revision, answers: [] });
     fixture.generate.mockResolvedValueOnce(
       result(analysis({ ready: false, questions: [question("another")] })),
     );
     draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    expect(draft).toMatchObject({ status: "questions", round: 3 });
+    expect(draft).toMatchObject({ status: "summary", questions: [] });
     expect(draft.answers.map((answer) => answer.state)).toEqual(["unknown", "skipped"]);
-    expect(fixture.generate.mock.calls.at(-1)?.[0].input.mustSummarize).toBe(false);
-    draft = await analyzeIntake(draft.id, "alice", operation(draft, true));
-    expect(draft.status).toBe("summary");
-    expect(draft.answers.at(-1)).toMatchObject({ questionId: "another", state: "skipped" });
-    expect(draft.answers.every((answer) => answer.confirmation !== "confirmed")).toBe(true);
     expect(fixture.generate.mock.calls.at(-1)?.[0].input.mustSummarize).toBe(true);
   });
   it("validates current choice questions and invalidates them on goal edits", async () => {
@@ -231,7 +215,7 @@ describe("guided task preparation with synthetic model output", () => {
         revision: draft.revision,
         answers: [{ questionId: "budget", state: "answered", value: "999元" }],
       }),
-    ).toThrow("请选择有效选项");
+    ).toThrow("答案格式");
     draft = updateIntake(draft.id, "alice", {
       revision: draft.revision,
       goal: "使用现有设备修复无法开机的电脑",
@@ -284,7 +268,7 @@ describe("guided task preparation with synthetic model output", () => {
     ).toThrow("单独保存任务摘要");
     expect(restored).not.toHaveProperty("summaryEdits");
   });
-  it("preserves unresolved answers and explicit summary corrections when switching models", async () => {
+  it("preserves answers, skipped states, round limits and explicit summary corrections when switching models", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     fixture.generate.mockResolvedValueOnce(
       result(analysis({ ready: false, questions: [question("headcount")] })),
@@ -330,7 +314,7 @@ describe("guided task preparation with synthetic model output", () => {
         }),
       ),
     );
-    draft = await analyzeIntake(draft.id, "alice", operation(draft, true));
+    draft = await analyzeIntake(draft.id, "alice", operation(draft));
     expect(draft).toMatchObject({ round: 2, status: "summary", questions: [] });
     expect(draft.challenge).toMatchObject({
       goal: editedGoal,
@@ -342,24 +326,12 @@ describe("guided task preparation with synthetic model output", () => {
     const call = fixture.generate.mock.calls.at(-1)![0];
     expect(call.input).toMatchObject({
       mustSummarize: true,
-      answeredQuestionIds: [],
+      answeredQuestionIds: ["headcount", "permission"],
       summaryEdits: {
-        provenance: "user-edited-draft",
+        provenance: "user-confirmed-summary",
         fields: { constraints: "只有两名成员，不得增人" },
       },
     });
-    expect(call.input.answers).toEqual([
-      expect.objectContaining({
-        questionId: "headcount",
-        state: "unknown",
-        needsReconfirmation: true,
-      }),
-      expect.objectContaining({
-        questionId: "permission",
-        state: "skipped",
-        needsReconfirmation: true,
-      }),
-    ]);
     expect(call.config.id).toBe("gpt-6.1-sol");
     expect(call.input.materials).toContain("当前硬限制：只有两名成员，不得增人");
     draft = updateIntake(draft.id, "alice", {
@@ -774,497 +746,8 @@ describe("attachment sources and atomic confirmation", () => {
   });
 });
 
-describe("explicit confirmation and linked follow-up with synthetic model output", () => {
-  it.each([
-    {
-      selectedMode: "真实报名",
-      confirmedScope: "同意仅在本次活动收集报名昵称，不公开或转交",
-      expectedConstraint: "真实报名仅收集本次活动报名昵称，不公开或转交，不收集手机号，不用于营销",
-    },
-    {
-      selectedMode: "仅界面演示",
-      confirmedScope: "仅使用虚构数据，不接入真实报名服务，不收集真实信息",
-      expectedConstraint: "仅界面演示，使用虚构数据，不接入真实报名服务，不收集或提交真实个人信息",
-    },
-  ])(
-    "follows the explicitly submitted $selectedMode branch with a synthetic model",
-    async ({ selectedMode, confirmedScope, expectedConstraint }) => {
-      let draft = createIntake("alice", {
-        goal: "【演示数据】我想制作活动报名页面，请逐步确认具体功能和使用范围",
-        modelMode: "gpt-6.1-terra",
-      });
-      const modeQuestion: IntakeQuestion = {
-        ...question("registration_mode"),
-        title: "报名页面需要承担什么用途？",
-        type: "single",
-        options: ["真实报名", "仅界面演示"],
-        affects: ["constraints", "options"],
-      };
-      fixture.generate.mockResolvedValueOnce(
-        result(analysis({ ready: false, questions: [modeQuestion] })),
-      );
-      draft = await analyzeIntake(draft.id, "alice", operation(draft));
-      expect(draft.answers).toEqual([]);
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        answerMode: "complete",
-        answers: [{ questionId: modeQuestion.id, state: "answered", value: selectedMode }],
-      });
-      expect(draft.answers[0]).toMatchObject({ confirmation: "confirmed", value: selectedMode });
-      // This explicit model substitute chooses its next question from the submitted answer.
-      fixture.generate.mockImplementationOnce((request) => {
-        const mode = request.input.answers.find(
-          (answer: { questionId: string }) => answer.questionId === modeQuestion.id,
-        ).value;
-        const isReal = mode === "真实报名";
-        const scope: IntakeQuestion = {
-          ...question("registration_scope"),
-          title: isReal ? "是否同意以下单项报名信息范围？" : "请确认演示数据的使用边界",
-          type: "single",
-          dependsOn: [modeQuestion.id],
-          affects: ["constraints"],
-          options: isReal
-            ? ["同意仅在本次活动收集报名昵称，不公开或转交", "拒绝收集真实信息"]
-            : ["仅使用虚构数据，不接入真实报名服务，不收集真实信息", "暂不确定"],
-          ...(isReal ? { authorization: "仅在本次活动收集报名昵称，不公开或转交" } : {}),
-        };
-        return result(analysis({ ready: false, questions: [scope] }));
-      });
-      draft = await analyzeIntake(draft.id, "alice", operation(draft));
-      const scopeQuestion = draft.questions[0];
-      expect(scopeQuestion.dependsOn).toEqual([modeQuestion.id]);
-      expect(scopeQuestion.options).toContain(confirmedScope);
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        answerMode: "complete",
-        answers: [{ questionId: scopeQuestion.id, state: "answered", value: confirmedScope }],
-      });
-      fixture.generate.mockImplementationOnce((request) => {
-        const answers = request.input.answers as Array<{
-          questionId: string;
-          value: string;
-          confirmation?: string;
-        }>;
-        expect(answers.every((answer) => answer.confirmation === "confirmed")).toBe(true);
-        const mode = answers.find((answer) => answer.questionId === modeQuestion.id)!.value;
-        const scope = answers.find((answer) => answer.questionId === scopeQuestion.id)!.value;
-        expect(scope).toBe(confirmedScope);
-        return result(
-          analysis({
-            constraints:
-              mode === "真实报名"
-                ? "真实报名仅收集本次活动报名昵称，不公开或转交，不收集手机号，不用于营销"
-                : "仅界面演示，使用虚构数据，不接入真实报名服务，不收集或提交真实个人信息",
-            options: [mode],
-            assumptions: ["AI建议增加手机号与营销通知，尚未授权"],
-          }),
-        );
-      });
-      draft = await analyzeIntake(draft.id, "alice", operation(draft));
-      expect(draft.challenge?.constraints).toBe(expectedConstraint);
-      expect(draft.challenge?.options).toEqual([selectedMode]);
-      const arena = submitIntake(draft.id, "alice", {
-        revision: draft.revision,
-        challenge: draft.challenge!,
-        assumptions: draft.assumptions,
-      });
-      const version = arena.versions[0];
-      expect(version.challenge.constraints).toBe(expectedConstraint);
-      expect(version.requirements?.executionPrompt).toContain(expectedConstraint);
-      expect(version.requirements?.executionPrompt).toContain(confirmedScope);
-      expect(version.requirements?.executionPrompt).not.toContain("AI建议增加手机号与营销通知");
-      expect(version.requirements?.suggestions.join(" ")).toContain(
-        "AI建议增加手机号与营销通知，尚未授权",
-      );
-      const scopeAnswer = version.intake?.answers.find(
-        (answer) => answer.questionId === scopeQuestion.id,
-      );
-      expect(scopeAnswer).toMatchObject({ value: confirmedScope, confirmation: "confirmed" });
-      if (selectedMode === "真实报名") {
-        expect(scopeAnswer?.question.authorization).toBe("仅在本次活动收集报名昵称，不公开或转交");
-        expect(version.requirements?.executionPrompt).toContain(
-          "授权仅在用户明确同意的单项范围内生效",
-        );
-      } else {
-        expect(scopeAnswer?.question.authorization).toBeUndefined();
-        expect(version.requirements?.executionPrompt).not.toContain("同意仅在本次活动收集报名昵称");
-        expect(version.challenge.constraints).toContain("不接入真实报名服务");
-        expect(version.challenge.constraints).toContain("不收集或提交真实个人信息");
-      }
-    },
-  );
-
-  it("keeps automatic draft saves pending and only confirms explicitly submitted answers", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    const questions = [question("budget"), question("unknown"), question("skipped")];
-    fixture.generate.mockResolvedValueOnce(result(analysis({ ready: false, questions })));
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    const answers = [
-      { questionId: "budget", state: "answered" as const, value: "100元" },
-      { questionId: "unknown", state: "unknown" as const, value: "" },
-      { questionId: "skipped", state: "skipped" as const, value: "" },
-    ];
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answers,
-      answerMode: "draft",
-    });
-    expect(draft.answers.every((answer) => answer.confirmation === "pending")).toBe(true);
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answers,
-      answerMode: "complete",
-    });
-    expect(draft.answers[0]).toMatchObject({
-      confirmation: "confirmed",
-      confirmedRevision: draft.revision,
-    });
-    expect(draft.answers.slice(1).every((answer) => answer.confirmation === "pending")).toBe(true);
-  });
-
-  it("preserves an untouched question as unanswered after confirming only the supplied answer", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    fixture.generate.mockResolvedValueOnce(
-      result(analysis({ ready: false, questions: [question("style"), question("authorization")] })),
-    );
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "complete",
-      answers: [{ questionId: "style", state: "answered", value: "简洁" }],
-    });
-    expect(draft.answers.find((answer) => answer.questionId === "authorization")).toMatchObject({
-      state: "answered",
-      value: "",
-      confirmation: "pending",
-    });
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    expect(draft.answers.find((answer) => answer.questionId === "authorization")).toMatchObject({
-      state: "answered",
-      value: "",
-      confirmation: "pending",
-    });
-    expect(fixture.generate.mock.calls.at(-1)?.[0].input.materials).toContain("用户未作答，待确认");
-  });
-
-  it("invalidates only the changed answer and dependent answers while retaining prior confirmations", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    const questions = [
-      { ...question("budget"), affects: ["budget"] as const },
-      { ...question("flow"), dependsOn: ["budget"], affects: ["constraints"] as const },
-      { ...question("style"), affects: ["preferences"] as const },
-    ].map((entry) => ({ ...entry, affects: [...entry.affects] }));
-    fixture.generate.mockResolvedValueOnce(result(analysis({ ready: false, questions })));
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "complete",
-      answers: questions.map((entry) => ({
-        questionId: entry.id,
-        state: "answered",
-        value: entry.id === "style" ? "简洁" : "原始答案",
-      })),
-    });
-    const originalStyle = structuredClone(
-      draft.answers.find((answer) => answer.questionId === "style"),
-    );
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "draft",
-      answers: [{ questionId: "budget", state: "answered", value: "修改后的答案" }],
-    });
-    expect(draft.answers.find((answer) => answer.questionId === "budget")).toMatchObject({
-      confirmation: "pending",
-      value: "修改后的答案",
-    });
-    expect(draft.answers.find((answer) => answer.questionId === "budget")).not.toHaveProperty(
-      "confirmedAt",
-    );
-    expect(draft.answers.find((answer) => answer.questionId === "flow")).toMatchObject({
-      confirmation: "pending",
-    });
-    expect(draft.answers.find((answer) => answer.questionId === "style")).toEqual(originalStyle);
-    expect(draft.confirmation?.pendingSummaryFields).toEqual(
-      expect.arrayContaining(["budget", "constraints"]),
-    );
-    expect(draft.confirmation?.pendingSummaryFields).not.toContain("preferences");
-    expect(
-      draft.confirmation?.history[0].answers.find((answer) => answer.questionId === "budget"),
-    ).toMatchObject({ confirmation: "confirmed", value: "原始答案" });
-  });
-
-  it("reopens a dependent question only after its upstream answer changes", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    const questions = [
-      question("budget"),
-      { ...question("flow"), dependsOn: ["budget"] },
-      question("style"),
-    ];
-    fixture.generate.mockResolvedValueOnce(result(analysis({ ready: false, questions })));
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "complete",
-      answers: questions.map((entry) => ({
-        questionId: entry.id,
-        state: "answered",
-        value: "原答案",
-      })),
-    });
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "draft",
-      answers: [{ questionId: "budget", state: "answered", value: "新答案" }],
-    });
-    fixture.generate.mockResolvedValueOnce(result(analysis({ ready: false, questions })));
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    expect(draft.questions.map((entry) => entry.id)).toEqual(["budget", "flow"]);
-    expect(fixture.generate.mock.calls.at(-1)?.[0].input.pendingConfirmationIds).toEqual(
-      expect.arrayContaining(["budget", "flow"]),
-    );
-    expect(draft.answers.find((answer) => answer.questionId === "style")?.confirmation).toBe(
-      "confirmed",
-    );
-  });
-
-  it("deduplicates punctuation variants and keeps unknown answers unresolved", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    fixture.generate.mockResolvedValueOnce(
-      result(analysis({ ready: false, questions: [question("style")] })),
-    );
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "complete",
-      answers: [{ questionId: "style", state: "unknown", value: "" }],
-    });
-    fixture.generate.mockResolvedValueOnce(
-      result(
-        analysis({
-          ready: false,
-          questions: [
-            { ...question("renamed_style"), title: "请确认style的限制？" },
-            question("content"),
-          ],
-        }),
-      ),
-    );
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    expect(draft.questions.map((entry) => entry.id)).toEqual(["content"]);
-    expect(draft.answers[0]).toMatchObject({ state: "unknown", confirmation: "pending" });
-  });
-
-  it("records authorization scope through the original choice control without selecting a default", async () => {
-    let draft = createIntake("alice", {
-      goal: "制作活动报名页面，并核对可使用的个人信息范围",
-      modelMode: "gpt-6.1-terra",
-    });
-    const permission = {
-      ...question("permission"),
-      type: "single" as const,
-      options: ["同意", "拒绝", "待定"],
-      authorization: "仅在本次活动收集报名昵称，不公开或转交",
-    };
-    fixture.generate.mockResolvedValueOnce(
-      result(analysis({ ready: false, questions: [permission] })),
-    );
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    expect(draft.answers).toEqual([]);
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "complete",
-      answers: [{ questionId: "permission", state: "answered", value: "拒绝" }],
-    });
-    expect(draft.answers[0]).toMatchObject({
-      confirmation: "confirmed",
-      value: "拒绝",
-      question: { authorization: permission.authorization },
-    });
-  });
-
-  it("keeps summary autosaves unconfirmed and confirms the summary only on explicit submission", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      summary: {
-        challenge: { ...draft.challenge!, preferences: "简洁风格" },
-        assumptions: ["尚未确定真实报名或界面演示"],
-      },
-    });
-    expect(draft.confirmation?.summary).toBeUndefined();
-    const stored = JSON.parse(
-      (db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id) as { body: string })
-        .body,
-    );
-    expect(stored.summaryEdits.provenance).toBe("user-edited-draft");
-    const arena = submitIntake(draft.id, "alice", {
-      revision: draft.revision,
-      challenge: draft.challenge!,
-      assumptions: draft.assumptions,
-    });
-    expect(arena.versions[0].intake?.confirmation?.summary?.challenge.preferences).toBe("简洁风格");
-    expect(arena.versions[0].requirements?.confirmed.join(" ")).not.toContain("尚未确定真实报名");
-    expect(arena.versions[0].requirements?.suggestions.join(" ")).toContain("尚未确定真实报名");
-  });
-
-  it("inherits the source version's pending fields and allows a confirmed style answer to update its summary", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    fixture.generate.mockResolvedValueOnce(
-      result(analysis({ preferences: "原有风格", constraints: "原有功能限制" })),
-    );
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    const arena = submitIntake(draft.id, "alice", {
-      revision: draft.revision,
-      challenge: draft.challenge!,
-      assumptions: [],
-    });
-    const version = arena.versions[0];
-    version.intake!.confirmation!.pendingSummaryFields = ["constraints"];
-    let linked = atomic(() =>
-      createFollowUpIntake(arena.id, version, "alice", ["请选择页面风格？"]),
-    )!;
-    expect(linked.confirmation?.pendingSummaryFields).toEqual(["constraints"]);
-    linked = updateIntake(linked.id, "alice", {
-      revision: linked.revision,
-      answerMode: "complete",
-      answers: [
-        { questionId: linked.questions[0].id, state: "answered", value: "使用简洁纸面风格" },
-      ],
-    });
-    fixture.generate.mockResolvedValueOnce(
-      result(
-        analysis({ preferences: "使用简洁纸面风格", constraints: "模型试图覆盖原有功能限制" }),
-      ),
-    );
-    linked = await analyzeIntake(linked.id, "alice", operation(linked));
-    expect(linked.challenge?.preferences).toBe("使用简洁纸面风格");
-    expect(linked.challenge?.constraints).toBe("原有功能限制");
-    expect(linked.confirmation?.pendingSummaryFields).toEqual(
-      expect.arrayContaining(["constraints", "preferences"]),
-    );
-  });
-
-  it("rejects writes to a supplement after its linked task version changes", async () => {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    const arena = submitIntake(draft.id, "alice", {
-      revision: draft.revision,
-      challenge: draft.challenge!,
-      assumptions: [],
-    });
-    const linked = atomic(() =>
-      createFollowUpIntake(arena.id, arena.versions[0], "alice", ["请选择风格？"]),
-    )!;
-    db()
-      .prepare("UPDATE arenas SET active_version_id=? WHERE id=?")
-      .run("synthetic-newer-version", arena.id);
-    expect(() =>
-      updateIntake(linked.id, "alice", {
-        revision: linked.revision,
-        answers: [{ questionId: linked.questions[0].id, state: "answered", value: "旧版回答" }],
-        answerMode: "complete",
-      }),
-    ).toThrow("任务版本已变化");
-    expect(getIntake(linked.id, "alice").answers).toEqual(linked.answers);
-    await expect(analyzeIntake(linked.id, "alice", operation(linked))).rejects.toThrow(
-      "任务版本已变化",
-    );
-  });
-
-  it("links supplementary drafts to a version, copies readable source files and retains paused progress", async () => {
-    let draft = createIntake("alice", {
-      goal: "制作一份介绍活动流程的PPT并核对需要的材料",
-      modelMode: "gpt-6.1-terra",
-    });
-    const bytes = Buffer.from("活动流程：开场、分组讨论、总结。示例材料。");
-    draft = await addIntakeAttachment(draft.id, "alice", bytes, "活动流程.txt");
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    const arena = submitIntake(draft.id, "alice", {
-      revision: draft.revision,
-      challenge: draft.challenge!,
-      assumptions: [],
-    });
-    const linked = atomic(() =>
-      createFollowUpIntake(arena.id, arena.versions[0], "alice", [
-        "请选择PPT的风格？",
-        "请选择PPT的风格!",
-        "需要几页内容？",
-        "需要哪种流程？",
-        "还有哪些补充？",
-      ]),
-    )!;
-    expect(linked.link).toEqual({ arenaId: arena.id, versionId: arena.activeVersionId });
-    expect(linked.questions).toHaveLength(3);
-    expect(linked.queuedQuestions).toHaveLength(1);
-    expect(linked.attachments[0].sourceAttachmentId).toBe(draft.attachments[0].id);
-    expect(
-      getIntakeAttachment(linked.id, "alice", linked.attachments[0].id).bytes.equals(bytes),
-    ).toBe(true);
-    expect(linked.sources[0].filename).toBe("活动流程.txt");
-    expect(linked.sources[0].id).toBe(draft.sources[0].id);
-    expect(linked.sources[0].attachmentId).toBe(linked.attachments[0].id);
-    expect(() => getIntake(linked.id, "bob")).toThrow("无权访问");
-    expect(
-      atomic(() => createFollowUpIntake(arena.id, arena.versions[0], "alice", ["其他问题"]))!.id,
-    ).toBe(linked.id);
-    db()
-      .prepare("UPDATE intake_drafts SET updated_at=? WHERE id=?")
-      .run(Date.now() - 25 * 60 * 60 * 1000, linked.id);
-    createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    expect(getIntake(linked.id, "alice").link?.versionId).toBe(arena.activeVersionId);
-    const answerSaved = updateIntake(linked.id, "alice", {
-      revision: linked.revision,
-      answerMode: "complete",
-      answers: linked.questions.map((entry) => ({
-        questionId: entry.id,
-        state: "unknown",
-        value: "",
-      })),
-    });
-    const next = await analyzeIntake(linked.id, "alice", operation(answerSaved));
-    expect(next.questions.map((entry) => entry.title)).toEqual(["还有哪些补充？"]);
-    expect(next.round).toBe(2);
-  });
-});
-
 describe("lazy retention at every existing-draft read entry", () => {
   const expiredAt = () => Date.now() - 24 * 60 * 60 * 1000 - 1000;
-  it.each(["draft GET", "attachment GET", "new clarification cleanup"] as const)(
-    "retains an expired legacy draft and its attachment with expiry disabled through %s",
-    async (entry) => {
-      vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", "false");
-      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-      const bytes = Buffer.from("synthetic retained legacy material");
-      draft = await addIntakeAttachment(draft.id, "alice", bytes, "retained-legacy.txt");
-      db().prepare("UPDATE intake_drafts SET updated_at=? WHERE id=?").run(expiredAt(), draft.id);
-      const stored = db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id);
-      expect(() => getIntake(draft.id, "bob")).toThrow("无权访问");
-      expect(() => getIntakeAttachment(draft.id, "bob", draft.attachments[0].id)).toThrow(
-        "无权访问",
-      );
-      if (entry === "draft GET") expect(getIntake(draft.id, "alice").id).toBe(draft.id);
-      else if (entry === "attachment GET")
-        expect(
-          getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
-        ).toBe(true);
-      else
-        expect(
-          createIntake("bob", { goal, modelMode: "gpt-6.1-terra", workflow: "clarification" })
-            .workflow,
-        ).toBe("clarification");
-      expect(getIntake(draft.id, "alice")).toEqual(draft);
-      expect(db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draft.id)).toEqual(
-        stored,
-      );
-      expect(
-        getIntakeAttachment(draft.id, "alice", draft.attachments[0].id).bytes.equals(bytes),
-      ).toBe(true);
-      expect(() => getIntake(draft.id, "bob")).toThrow("无权访问");
-      expect(fixture.generate).not.toHaveBeenCalled();
-      expect(fixture.hold).not.toHaveBeenCalled();
-    },
-  );
   it("rejects and deletes an expired unsubmitted draft and its attachments on GET", async () => {
     let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
     draft = await addIntakeAttachment(
@@ -1307,15 +790,9 @@ describe("lazy retention at every existing-draft read entry", () => {
     ).toBeUndefined();
     expect(fixture.hold).not.toHaveBeenCalled();
   });
-  it.each(
-    (["draft GET", "attachment GET", "new draft cleanup"] as const).flatMap((entry) => [
-      { entry, expiry: "default", setting: undefined },
-      { entry, expiry: "disabled", setting: "false" },
-    ]),
-  )(
-    "recovers a dispatched call after a 25h restart through $entry with expiry $expiry",
-    async ({ entry, setting }) => {
-      vi.stubEnv("ARENA_INTAKE_EXPIRY_ENABLED", setting);
+  it.each(["draft GET", "attachment GET", "new draft cleanup"] as const)(
+    "recovers a dispatched call after a 25h restart before %s can expire its audit",
+    async (entry) => {
       const directory = mkdtempSync(join(tmpdir(), "arena-intake-restart-"));
       closeDb();
       vi.stubEnv("ARENA_DATABASE_PATH", join(directory, "intakes.sqlite"));
@@ -1475,242 +952,4 @@ describe("lazy retention at every existing-draft read entry", () => {
       .run(Date.now() - 241000, operationId);
     expect(() => getIntakeAttachment(draft.id, "alice", draft.attachments[0].id)).toThrow("未找到");
   });
-});
-
-describe("choice persistence and rejected suggestions with SQLite test doubles", () => {
-  async function choiceDraft(type: "single" | "multiple", label = "其他（请补充）") {
-    let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-    fixture.generate.mockResolvedValueOnce(
-      result(
-        analysis({
-          ready: false,
-          questions: [{ ...question("choice"), type, options: ["方案 A", "方案 B", label] }],
-        }),
-      ),
-    );
-    draft = await analyzeIntake(draft.id, "alice", operation(draft));
-    return draft;
-  }
-  function privateBody(draftId: string) {
-    return JSON.parse(
-      (db().prepare("SELECT body FROM intake_drafts WHERE id=?").get(draftId) as { body: string })
-        .body,
-    ) as IntakeDraft & {
-      summaryEdits?: { assumptions: string[]; rejectedAssumptions?: string[] };
-    };
-  }
-
-  it.each(["其他（请补充）", "其他，下一步由我描述", "Other (please describe)"])(
-    "persists an incomplete multiple-choice draft and requires details on completion for %s",
-    async (label) => {
-      let draft = await choiceDraft("multiple", label);
-      const initial = ["方案 A", "方案 B", label];
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        answerMode: "draft",
-        answers: [{ questionId: "choice", state: "answered", value: initial }],
-      });
-      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
-        value: initial,
-        confirmation: "pending",
-      });
-      for (const answerMode of [undefined, "complete"] as const) {
-        for (const detail of [label, `${label}：   `]) {
-          expect(() =>
-            updateIntake(draft.id, "alice", {
-              revision: draft.revision,
-              answerMode,
-              answers: [
-                { questionId: "choice", state: "answered", value: ["方案 A", "方案 B", detail] },
-              ],
-            }),
-          ).toThrow("填写完整");
-          expect(getIntake(draft.id, "alice").revision).toBe(draft.revision);
-          expect(getIntake(draft.id, "alice").answers[0].value).toEqual(initial);
-        }
-      }
-      const complete = ["方案 A", "方案 B", `${label}：${"局域网同步".repeat(40)}`];
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        answerMode: "complete",
-        answers: [{ questionId: "choice", state: "answered", value: complete }],
-      });
-      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
-        value: complete,
-        confirmation: "confirmed",
-      });
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        answerMode: "draft",
-        answers: [
-          { questionId: "choice", state: "answered", value: ["方案 A", "方案 B", `${label}：`] },
-        ],
-      });
-      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
-        value: ["方案 A", "方案 B", `${label}：`],
-        confirmation: "pending",
-        needsReconfirmation: true,
-      });
-    },
-  );
-
-  it.each(["其他（请补充）", "其他，下一步由我描述"])(
-    "rejects bare single Other on complete or default updates for %s",
-    async (label) => {
-      let draft = await choiceDraft("single", label);
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        answerMode: "draft",
-        answers: [{ questionId: "choice", state: "answered", value: label }],
-      });
-      for (const answerMode of [undefined, "complete"] as const) {
-        expect(() =>
-          updateIntake(draft.id, "alice", {
-            revision: draft.revision,
-            answerMode,
-            answers: [{ questionId: "choice", state: "answered", value: label }],
-          }),
-        ).toThrow("填写完整");
-        expect(getIntake(draft.id, "alice").revision).toBe(draft.revision);
-      }
-      const value = `${label}:兼容历史ASCII冒号的局域网同步`;
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        answerMode: "complete",
-        answers: [{ questionId: "choice", state: "answered", value }],
-      });
-      expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
-        value,
-        confirmation: "confirmed",
-      });
-    },
-  );
-
-  it("demotes a legacy confirmed bare Other when the same value is saved as a draft", async () => {
-    let draft = await choiceDraft("single");
-    const body = privateBody(draft.id);
-    body.answers = [
-      {
-        questionId: "choice",
-        question: body.questions[0],
-        state: "answered",
-        value: "其他（请补充）",
-        confirmation: "confirmed",
-        confirmedAt: "2026-11-01T00:00:00.000Z",
-        confirmedRevision: 0,
-      },
-    ];
-    db().prepare("UPDATE intake_drafts SET body=? WHERE id=?").run(JSON.stringify(body), draft.id);
-    draft = updateIntake(draft.id, "alice", {
-      revision: draft.revision,
-      answerMode: "draft",
-      answers: [{ questionId: "choice", state: "answered", value: "其他（请补充）" }],
-    });
-    expect(getIntake(draft.id, "alice").answers[0]).toMatchObject({
-      value: "其他（请补充）",
-      confirmation: "pending",
-      needsReconfirmation: true,
-    });
-    expect(draft.answers[0].confirmedAt).toBeUndefined();
-    expect(draft.confirmation?.history.at(-1)?.answers[0].confirmation).toBe("confirmed");
-  });
-
-  it("rejects forged normal-option prefixes and duplicate decoded Other selections atomically", async () => {
-    const draft = await choiceDraft("multiple");
-    for (const value of [["方案 A：伪造补充"], ["其他（请补充）：甲", "其他（请补充）:乙"]]) {
-      expect(() =>
-        updateIntake(draft.id, "alice", {
-          revision: draft.revision,
-          answerMode: "draft",
-          answers: [{ questionId: "choice", state: "answered", value }],
-        }),
-      ).toThrow("请选择当前问题");
-      expect(getIntake(draft.id, "alice")).toMatchObject({ revision: draft.revision, answers: [] });
-    }
-  });
-
-  it.each(["goal", "model", "attachment"] as const)(
-    "retains rejection metadata through %s edits",
-    async (change) => {
-      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-      fixture.generate.mockResolvedValueOnce(
-        result(analysis({ assumptions: ["建议 X", "建议 Y"] })),
-      );
-      draft = await analyzeIntake(draft.id, "alice", operation(draft));
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        summary: { challenge: draft.challenge!, assumptions: ["建议 Y"] },
-      });
-      if (change === "goal")
-        draft = updateIntake(draft.id, "alice", {
-          revision: draft.revision,
-          goal: "改为组织一场线下课程分享活动",
-        });
-      if (change === "model")
-        draft = updateIntake(draft.id, "alice", {
-          revision: draft.revision,
-          modelMode: "gpt-6.1-sol",
-        });
-      if (change === "attachment")
-        draft = await addIntakeAttachment(
-          draft.id,
-          "alice",
-          Buffer.from("实际材料内容"),
-          "范围.txt",
-        );
-      expect(privateBody(draft.id).summaryEdits?.rejectedAssumptions).toEqual(["建议 X"]);
-      expect(privateBody(draft.id).summaryEdits?.assumptions).toEqual(
-        change === "goal" ? [] : ["建议 Y"],
-      );
-    },
-  );
-
-  it.each([false, true])(
-    "inherits formal-version rejection metadata with unavailable source draft, legacy=%s",
-    async (legacy) => {
-      let draft = createIntake("alice", { goal, modelMode: "gpt-6.1-terra" });
-      fixture.generate.mockResolvedValueOnce(
-        result(analysis({ assumptions: ["建议 X", "建议 Y"] })),
-      );
-      draft = await analyzeIntake(draft.id, "alice", operation(draft));
-      draft = updateIntake(draft.id, "alice", {
-        revision: draft.revision,
-        summary: { challenge: draft.challenge!, assumptions: ["建议 Y"] },
-      });
-      const arena = submitIntake(draft.id, "alice", {
-        revision: draft.revision,
-        challenge: draft.challenge!,
-        assumptions: draft.assumptions,
-      });
-      const original = structuredClone(arena.versions[0]);
-      expect(original.intake?.rejectedAssumptions).toEqual(["建议 X"]);
-      db().prepare("DELETE FROM intake_drafts WHERE id=?").run(draft.id);
-      const source = structuredClone(original);
-      if (legacy) delete source.intake!.rejectedAssumptions;
-      let linked = atomic(() =>
-        createFollowUpIntake(arena.id, source, "alice", ["还需要哪些验收细节？"]),
-      )!;
-      expect(privateBody(linked.id).summaryEdits?.rejectedAssumptions).toEqual(
-        legacy ? [] : ["建议 X"],
-      );
-      expect(linked.assumptions).toEqual(["建议 Y"]);
-      linked = updateIntake(linked.id, "alice", {
-        revision: linked.revision,
-        answerMode: "complete",
-        answers: linked.questions.map((entry) => ({
-          questionId: entry.id,
-          state: "answered",
-          value: "保留人工验收记录",
-        })),
-      });
-      linked = await analyzeIntake(linked.id, "alice", operation(linked));
-      linked = updateIntake(linked.id, "alice", {
-        revision: linked.revision,
-        summary: { challenge: linked.challenge!, assumptions: ["建议 Y", "建议 X"] },
-      });
-      expect(privateBody(linked.id).summaryEdits?.rejectedAssumptions).toEqual([]);
-      expect(original.intake?.rejectedAssumptions).toEqual(["建议 X"]);
-      expect(arena.versions[0]).toEqual(original);
-    },
-  );
 });

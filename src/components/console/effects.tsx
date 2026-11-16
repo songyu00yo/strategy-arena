@@ -261,38 +261,29 @@ export function Chars({
   text,
   active,
   delay = 0,
-  speed = 1,
 }: {
   text: string;
   active: boolean;
   delay?: number;
-  speed?: number;
 }) {
   if (!active) return <>{text}</>;
   const glyphs = Array.from(text);
   const step = Math.min(34, 900 / Math.max(glyphs.length, 1));
   return (
-    <span className="c-text-with-motion">
-      <span className="c-readable-text">{text}</span>
-      <span className="c-text-ornament" aria-hidden="true">
+    <>
+      <span className="sr-only">{text}</span>
+      <span aria-hidden="true">
         {glyphs.map((glyph, i) =>
           glyph === " " ? (
             " "
           ) : (
-            <span
-              key={i}
-              className="c-char"
-              style={{
-                animationDelay: `${(delay + i * step) / speed}ms`,
-                animationDuration: `${800 / speed}ms`,
-              }}
-            >
+            <span key={i} className="c-char" style={{ animationDelay: `${delay + i * step}ms` }}>
               {glyph}
             </span>
           ),
         )}
       </span>
-    </span>
+    </>
   );
 }
 
@@ -302,52 +293,28 @@ export function Decode({
   active,
   delay = 0,
   origin = "story",
-  speed = 1,
 }: {
   text: string;
   active: boolean;
   delay?: number;
   origin?: MotionOrigin;
-  speed?: number;
 }) {
   const reducePreference = useReducedMotion();
   const ref = useRef<HTMLSpanElement>(null);
-  const inkAnimation = useRef<Animation | null>(null);
-  const playbackRate = useRef(speed);
-  useLayoutEffect(() => {
-    playbackRate.current = speed;
-    inkAnimation.current?.updatePlaybackRate(speed);
-  }, [speed]);
   useEffect(() => {
     const el = ref.current;
     if (!el || !active || reducedMotion() || !text) return;
     // Ink settles into the paper: out of focus, then sharp. The text itself never changes.
     const scope = createMotionScope(origin);
-    const animation = scope.animate(
-      el,
-      [{ opacity: 0 }, { opacity: 0.16, offset: 0.5 }, { opacity: 0 }],
-      {
-        duration: 760,
-        delay,
-        easing: "cubic-bezier(.19,1,.22,1)",
-        fill: "backwards",
-      },
-    );
-    animation.playbackRate = playbackRate.current;
-    inkAnimation.current = animation;
-    return () => {
-      scope.dispose();
-      if (inkAnimation.current === animation) inkAnimation.current = null;
-    };
+    scope.animate(el, [{ opacity: 0 }, { opacity: 1 }], {
+      duration: 760,
+      delay,
+      easing: "cubic-bezier(.19,1,.22,1)",
+      fill: "backwards",
+    });
+    return () => scope.dispose();
   }, [text, active, delay, origin, reducePreference]);
-  return (
-    <span className="c-readable-decode">
-      <span>{text}</span>
-      <span ref={ref} className="c-decode-ornament" aria-hidden="true">
-        {text}
-      </span>
-    </span>
-  );
+  return <span ref={ref}>{text}</span>;
 }
 
 /** A number that rolls to its new value and jumps as it lands. */
@@ -529,76 +496,45 @@ export function ClickFx() {
   useEffect(() => {
     const presses = new Map<HTMLElement, Animation>();
     const decorations = new Set<HTMLElement>();
-    const interactive = `${CLICKABLE}, input:not([type="hidden"]), textarea, [role="option"], [role="tab"], [role="checkbox"], [role="radio"]`;
-    const controlFor = (element: EventTarget | null) => {
-      if (!(element instanceof Element)) return null;
-      let target = element.closest<HTMLElement>(interactive);
-      if (target instanceof HTMLInputElement && ["radio", "checkbox"].includes(target.type))
-        target = target.closest<HTMLElement>("label") ?? target;
-      if (
-        !target ||
-        target.matches(":disabled") ||
-        target.closest('[inert], [aria-disabled="true"], fieldset:disabled')
-      )
-        return null;
-      return target;
-    };
     const add = (node: HTMLElement, frames: Keyframe[], duration: number) => {
       decorations.add(node);
-      node.setAttribute("aria-hidden", "true");
       document.body.appendChild(node);
-      const animation = node.animate(frames, { duration, easing: "cubic-bezier(.2,.8,.2,1)" });
-      const release = () => {
+      const animation = node.animate(frames, { duration, easing: "cubic-bezier(.16,1,.3,1)" });
+      animation.onfinish = () => {
         decorations.delete(node);
         node.remove();
       };
-      animation.onfinish = release;
-      animation.oncancel = release;
     };
     const answer = (target: HTMLElement, x: number, y: number) => {
+      // Read before adding nodes or starting any animation.
       const style = getComputedStyle(target);
       const route = style.getPropertyValue("--route").trim();
       const color = route ? route.replaceAll(" ", ",") : "21,19,15";
       const box = target.getBoundingClientRect();
       recordMotionOrigin(target, x, y, box);
-      target.style.setProperty("--cx", `${x - box.left}px`);
-      target.style.setProperty("--cy", `${y - box.top}px`);
-      document.documentElement.style.setProperty("--press-dx", `${x - innerWidth / 2}px`);
-      document.documentElement.style.setProperty("--press-dy", `${y - innerHeight / 2}px`);
       if (reducedMotion()) return;
-      // An inset impression leaves pointer geometry and the browser's focus target intact.
-      const emptyImpression = `inset 0 0 0 1.5px rgba(${color}, 0)`;
-      const impression = `inset 0 0 0 1.5px rgba(${color}, .42)`;
+      const scale = style.scale === "none" ? "1" : style.scale;
       presses.get(target)?.cancel();
-      const press = target.animate(
-        [
-          { boxShadow: emptyImpression },
-          { boxShadow: impression, offset: 0.35 },
-          { boxShadow: emptyImpression },
-        ],
-        { duration: 120, easing: "cubic-bezier(.2,.8,.2,1)", composite: "add" },
-      );
+      // Pressed into the paper and released: no spring past rest.
+      const press = target.animate([{ scale }, { scale: "0.962", offset: 0.22 }, { scale }], {
+        duration: 560,
+        easing: "cubic-bezier(.19,1,.22,1)",
+      });
       presses.set(target, press);
-      target.dataset.motionPressed = "true";
-      const release = () => {
-        if (presses.get(target) !== press) return;
-        presses.delete(target);
-        delete target.dataset.motionPressed;
+      press.onfinish = () => {
+        if (presses.get(target) === press) presses.delete(target);
       };
-      press.onfinish = release;
-      press.oncancel = release;
-      // Native dialogs own a separate top layer. Their inset impression stays on that layer.
-      if (target.closest("dialog[open]")) return;
+      // Ink touched to the page: a dab where the finger was and one fine ring that opens and dries.
       const dab = document.createElement("div");
       dab.className = "c-press-dab";
       dab.style.cssText = `left:${x}px;top:${y}px;background:rgb(${color})`;
       add(
         dab,
         [
-          { transform: "translate(-50%,-50%) scale(.8)", opacity: 0.4 },
+          { transform: "translate(-50%,-50%) scale(1)", opacity: 0.55 },
           { transform: "translate(-50%,-50%) scale(.2)", opacity: 0 },
         ],
-        140,
+        520,
       );
       const ring = document.createElement("div");
       ring.className = "c-press-ring";
@@ -606,21 +542,24 @@ export function ClickFx() {
       add(
         ring,
         [
-          { transform: "translate(-50%,-50%) scale(.12)", opacity: 0.5 },
-          { transform: "translate(-50%,-50%) scale(.72)", opacity: 0 },
+          { transform: "translate(-50%,-50%) scale(.15)", opacity: 0.7 },
+          { transform: "translate(-50%,-50%) scale(1)", opacity: 0 },
         ],
-        220,
+        760,
       );
+      target.style.setProperty("--cx", `${x - box.left}px`);
+      target.style.setProperty("--cy", `${y - box.top}px`);
+      document.documentElement.style.setProperty("--press-dx", `${x - innerWidth / 2}px`);
+      document.documentElement.style.setProperty("--press-dy", `${y - innerHeight / 2}px`);
     };
     const onPointer = (event: PointerEvent) => {
-      if (!event.isPrimary || event.button !== 0) return;
-      const target = controlFor(event.target);
-      if (target) answer(target, event.clientX, event.clientY);
+      const target = (event.target as Element | null)?.closest<HTMLElement>(CLICKABLE);
+      if (target && !target.matches(":disabled")) answer(target, event.clientX, event.clientY);
     };
     const onClick = (event: MouseEvent) => {
       if (event.detail !== 0) return;
-      const target = controlFor(event.target);
-      if (!target) return;
+      const target = (event.target as Element | null)?.closest<HTMLElement>(CLICKABLE);
+      if (!target || target.matches(":disabled")) return;
       const box = target.getBoundingClientRect();
       answer(target, box.left + box.width / 2, box.top + box.height / 2);
     };
@@ -628,10 +567,7 @@ export function ClickFx() {
     addEventListener("click", onClick, true);
     const preference = matchMedia("(prefers-reduced-motion: reduce)");
     const clearDecorations = () => {
-      presses.forEach((animation, target) => {
-        animation.cancel();
-        delete target.dataset.motionPressed;
-      });
+      presses.forEach((animation) => animation.cancel());
       presses.clear();
       decorations.forEach((node) => {
         node.getAnimations().forEach((animation) => animation.cancel());

@@ -86,7 +86,7 @@ for (const viewport of [
         requestAnimationFrame(seek);
       });
       await page.goto("/");
-      const input = page.getByLabel("你想做什么", { exact: true });
+      const input = page.getByLabel("你想解决什么问题？", { exact: true });
       await expect(input).toBeEditable();
       await expect
         .poll(() =>
@@ -125,8 +125,8 @@ for (const viewport of [
         expect(sample.width).toBeLessThanOrEqual(viewport.width);
       }
       await input.fill("比较两门课程并决定先学哪门");
-      await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeEnabled();
-      await page.getByRole("button", { name: "开始梳理", exact: true }).click({ trial: true });
+      await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeEnabled();
+      await page.getByRole("button", { name: "开始分析", exact: true }).click({ trial: true });
       await expect(input).toHaveValue("比较两门课程并决定先学哪门");
     });
     test("slow-health UI fixture displays the disabled core form at DOMContentLoaded, 500ms and 2000ms", async ({
@@ -233,10 +233,10 @@ for (const viewport of [
         expect(sample.buttonBottom).toBeLessThanOrEqual(viewport.height);
         expect(sample.scrollY).toBe(0);
       }
-      const input = page.getByLabel("你想做什么", { exact: true });
+      const input = page.getByLabel("你想解决什么问题？", { exact: true });
       await expect(input).toBeEditable();
       await input.fill("服务连接恢复后选择一门入门课程");
-      const button = page.getByRole("button", { name: "开始梳理", exact: true });
+      const button = page.getByRole("button", { name: "开始分析", exact: true });
       await expect(button).toBeEnabled();
       await button.click({ trial: true });
       await expect(input).toHaveValue("服务连接恢复后选择一门入门课程");
@@ -246,7 +246,7 @@ for (const viewport of [
     }) => {
       await installHealthFixture(page);
       await page.goto("/");
-      const input = page.getByLabel("你想做什么", { exact: true });
+      const input = page.getByLabel("你想解决什么问题？", { exact: true });
       await expect(input).toBeEditable();
       await page.evaluate(() => {
         window.dispatchEvent(new Event("blur"));

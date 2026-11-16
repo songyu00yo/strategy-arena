@@ -707,7 +707,7 @@ describe("quote attribution and comparison assumptions", () => {
     },
   );
   it("scopes time accounting to the user's activities and preserves explicitly known case expenses", () => {
-    expect(PROMPT_VERSION).toBe("1.4.4");
+    expect(PROMPT_VERSION).toBe("1.4.3");
     expect(SYSTEM).toContain("用户只限定工作与求职工时，就不能擅自把生活或搬迁工时加入该上限");
     expect(SYSTEM).toContain("试跑、准备与后续执行只有属于该用户范围时才计入同一额度");
     expect(SYSTEM).toContain("总小时数必须与周数乘以每周小时数一致");

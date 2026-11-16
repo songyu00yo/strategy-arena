@@ -76,7 +76,7 @@ test("explicit UI fixture: opening the free example picker preserves old pointer
   });
   await page.goto("/examples");
   await expect(page).toHaveURL(/\/\?examples=open$/);
-  await expect(page.getByRole("dialog", { name: "先看需求梳理示例", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "先看一场真实推演", exact: true })).toBeVisible();
   await page.waitForLoadState("networkidle");
   expect(calls.length).toBeGreaterThan(0);
   expect(calls.every((call) => call === "GET /api/health")).toBe(true);

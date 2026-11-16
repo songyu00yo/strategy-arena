@@ -3,8 +3,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRight, LoaderCircle } from "lucide-react";
-import { createMotionScope, acquireMotionHold } from "./console/motion-runtime";
-import { acquireOverlayScrollLock } from "./overlay-handoff";
 import "./access-gate.css";
 
 const EASE = "cubic-bezier(.19,1,.22,1)";
@@ -30,126 +28,93 @@ export function AccessGate({
   const layer = useRef<HTMLDivElement>(null);
   const card = useRef<HTMLFormElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const first = useRef(true);
+  const leaving = useRef(false);
   const stamp = useRef<HTMLSpanElement>(null);
 
   if (open && !shown) setShown(true);
 
+  // Arrive: the veil fades in, the card rises out of a soft blur.
   useLayoutEffect(() => {
-    if (!shown) {
-      first.current = true;
-      return;
-    }
+    if (!shown || !open) return;
+    leaving.current = false;
     const veil = layer.current;
     const panel = card.current;
     if (!veil || !panel) return;
-    const scope = createMotionScope("interaction");
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const panelStyle = getComputedStyle(panel);
-    const veilOpacity = first.current ? "0" : getComputedStyle(veil).opacity;
-    const from = first.current
-      ? { opacity: "0", transform: "translateY(16px) rotate(.6deg)" }
-      : { opacity: panelStyle.opacity, transform: panelStyle.transform };
-    first.current = false;
-    if (reduced) {
-      veil.style.opacity = open ? "1" : "0";
-      panel.style.opacity = open ? "1" : "0";
-      panel.style.transform = "none";
-      if (!open) scope.later(0, () => setShown(false));
-    } else {
-      if (!open && stamp.current)
-        scope.animate(
-          stamp.current,
-          [
-            { opacity: 0, transform: "rotate(-14deg) scale(1.3)" },
-            { opacity: 1, transform: "rotate(-10deg) scale(1)" },
-          ],
-          { duration: 140, easing: EASE, fill: "forwards" },
-        );
-      scope.animate(
-        panel,
-        [
-          from,
-          { opacity: open ? 1 : 0, transform: open ? "none" : "translateY(-12px) scale(.985)" },
-        ],
-        {
-          duration: open ? 360 : 240,
-          easing: EASE,
-          fill: "both",
-        },
-      );
-      const clear = scope.animate(veil, [{ opacity: veilOpacity }, { opacity: open ? 1 : 0 }], {
-        duration: open ? 260 : 240,
-        easing: EASE,
-        fill: "both",
-      });
-      if (!open) clear.onfinish = () => setShown(false);
-    }
-    if (open) scope.later(80, () => input.current?.focus({ preventScroll: true }));
+    const animations = reduced
+      ? []
+      : [
+          veil.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 700, easing: "ease" }),
+          panel.animate(
+            [
+              { opacity: 0, transform: "translateY(48px) rotate(2deg)" },
+              { opacity: 1, transform: "none" },
+            ],
+            { duration: 1000, delay: 120, easing: EASE, fill: "backwards" },
+          ),
+        ];
+    const focus = setTimeout(() => input.current?.focus({ preventScroll: true }), 260);
     return () => {
-      const visiblePanel = getComputedStyle(panel);
-      const visibleVeil = getComputedStyle(veil);
-      const pose = { transform: visiblePanel.transform, opacity: visiblePanel.opacity };
-      const opacity = visibleVeil.opacity;
-      scope.dispose();
-      Object.assign(panel.style, pose);
-      veil.style.opacity = opacity;
+      clearTimeout(focus);
+      animations.forEach((animation) => animation.cancel());
     };
   }, [shown, open]);
 
-  useLayoutEffect(() => {
-    if (!shown) return;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const releaseMotion = acquireMotionHold();
-    const releaseScroll = acquireOverlayScrollLock();
-    const trap = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      const fields = [
-        ...(card.current?.querySelectorAll<HTMLElement>(
-          "input:not(:disabled),button:not(:disabled)",
-        ) ?? []),
-      ];
-      if (!fields.length) return;
-      const first = fields[0];
-      const last = fields[fields.length - 1];
-      if (
-        !card.current?.contains(document.activeElement) ||
-        (event.shiftKey && document.activeElement === first) ||
-        (!event.shiftKey && document.activeElement === last)
-      ) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus({ preventScroll: true });
-      }
-    };
-    addEventListener("keydown", trap);
-    return () => {
-      removeEventListener("keydown", trap);
-      releaseScroll();
-      releaseMotion();
-      if (
-        previousFocus?.isConnected &&
-        !document.querySelector('dialog[open], [aria-modal="true"]')
-      )
-        previousFocus.focus({ preventScroll: true });
-    };
-  }, [shown]);
+  // Leave: the card lifts and dissolves, then the veil and its blur clear.
+  useEffect(() => {
+    if (open || !shown || leaving.current) return;
+    leaving.current = true;
+    const veil = layer.current;
+    const panel = card.current;
+    if (!veil || !panel || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setShown(false);
+      return;
+    }
+    const seal = stamp.current;
+    seal?.animate(
+      [
+        { opacity: 0, transform: "rotate(-14deg) scale(2.3)" },
+        { opacity: 1, transform: "rotate(-10deg) scale(0.94)", offset: 0.62 },
+        { opacity: 1, transform: "rotate(-10deg) scale(1)" },
+      ],
+      { duration: 460, easing: "cubic-bezier(.5,0,.75,0)", fill: "forwards" },
+    );
+    // The press of the stamp nudges the ticket, then the ticket is taken away.
+    panel.animate(
+      [
+        { transform: "none", offset: 0 },
+        { transform: "translateY(2px) scale(.995)", offset: 0.28 },
+        { transform: "none", offset: 0.4 },
+        { transform: "none", opacity: 1, offset: 0.55 },
+        { transform: "translateY(-46px) rotate(-1.5deg)", opacity: 0 },
+      ],
+      { duration: 1500, easing: "cubic-bezier(.6,0,.2,1)", fill: "forwards" },
+    );
+    const clear = veil.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: 700,
+      delay: 1000,
+      easing: "cubic-bezier(.4,0,.2,1)",
+      fill: "forwards",
+    });
+    clear.onfinish = () => setShown(false);
+  }, [open, shown]);
 
+  // A refused code: one damped shake, the input stays selected for retyping.
   useEffect(() => {
     if (!error || !open || !card.current) return;
-    input.current?.select();
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const scope = createMotionScope("interaction");
-    scope.animate(
-      card.current,
+    card.current.animate(
       [
         { transform: "translateX(0)" },
-        { transform: "translateX(-4px)" },
-        { transform: "translateX(3px)" },
+        { transform: "translateX(-10px)" },
+        { transform: "translateX(8px)" },
+        { transform: "translateX(-5px)" },
+        { transform: "translateX(2px)" },
         { transform: "translateX(0)" },
       ],
-      { duration: 180, easing: EASE, composite: "add" },
+      { duration: 520, easing: "cubic-bezier(.36,.07,.19,.97)" },
     );
-    return () => scope.dispose();
+    input.current?.select();
   }, [error, open]);
 
   if (!shown || typeof document === "undefined") return null;
@@ -159,7 +124,6 @@ export function AccessGate({
         ref={card}
         className="access-gate-card"
         role="dialog"
-        aria-modal="true"
         aria-labelledby="access-gate-title"
         onSubmit={async (event) => {
           event.preventDefault();

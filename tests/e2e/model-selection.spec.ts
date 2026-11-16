@@ -87,7 +87,7 @@ test("explicit UI fixture: choose a concrete model, inspect its reason and prese
   );
   await page.goto("/");
   // Tools appear once there is text; one character does not start a draft.
-  await page.getByLabel("你想做什么", { exact: true }).fill("测");
+  await page.getByLabel("你想解决什么问题？", { exact: true }).fill("测");
   await page.getByRole("button", { name: /^选择模型，当前/ }).click();
   await expect(page.getByRole("option", { name: "GPT 6.1 Terra", exact: true })).toHaveAttribute(
     "aria-selected",
@@ -185,7 +185,7 @@ test("explicit UI fixture: all five model choices remain selectable and unavaila
   });
   await page.goto("/");
   await page
-    .getByLabel("你想做什么", { exact: true })
+    .getByLabel("你想解决什么问题？", { exact: true })
     .fill("测试：需要选择一个适合学习任务的具体模型");
   await page.getByRole("button", { name: /^选择模型，当前/ }).click();
   await expect(page.getByRole("option")).toHaveCount(5);
@@ -197,9 +197,9 @@ test("explicit UI fixture: all five model choices remain selectable and unavaila
     await expect(trigger).toHaveAccessibleName(`选择模型，当前${model.label}`);
     await expect(trigger).toBeEnabled();
     if (model.id === "deepseek-flash" || model.id === "gpt-6.1-terra")
-      await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeEnabled();
     else {
-      await expect(page.getByRole("button", { name: "开始梳理", exact: true })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "开始分析", exact: true })).toBeDisabled();
       await expect(page.getByText(/所选模型尚未配置/).first()).toBeVisible();
     }
   }

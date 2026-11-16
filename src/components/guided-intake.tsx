@@ -30,19 +30,8 @@ import { clearExamplePickerRequest, examplePickerRequested } from "@/lib/example
 import { routeModel } from "@/lib/model-routing";
 import { DisclosureMotion } from "./disclosure-motion";
 import { ModelSelector } from "./model-selector";
-import { Modal } from "./modal";
-import type { OverlayMotionHandle } from "./overlay-motion";
-import { QuestionInput } from "./question-input";
 import { useIntakeSummary } from "./use-intake-summary";
-import { useListMotion } from "./use-list-motion";
-import {
-  ANSWER_JOURNAL_KEY,
-  answerJournalScope,
-  readAnswerJournal,
-  historyAnswerJournalScope,
-  readHistoricalAnswerJournal,
-  readHistoricalAnswerConflict,
-} from "./intake-answer-journal";
+import { ANSWER_JOURNAL_KEY, answerJournalScope, readAnswerJournal } from "./intake-answer-journal";
 import {
   clearIntakeDraftPointer,
   readIntakeDraftPointer,
@@ -64,16 +53,16 @@ const EMPTY: Challenge = {
 // These inputs describe fictional situations. Selecting one only fills the editable goal.
 const CHOICE_SCENARIOS = [
   {
-    label: "个人网站",
-    goal: "【模拟输入，可修改】我想做一个个人网站，但内容、用途和风格还没想清楚。",
+    label: "考研还是就业",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我是一名大三学生，在全力考研、直接就业和先工作再读研之间犹豫。家里能支持一年生活费，九月前要定方向。我更看重长期发展，希望比较每条路线的代价、仍需核实的信息和第一步。",
   },
   {
-    label: "PPT",
-    goal: "【模拟输入，可修改】我想做一份PPT，但主题、受众、内容和风格还没想清楚。",
+    label: "选 offer",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我即将大学毕业，有两份 offer：本地岗位月薪八千元，外地岗位月薪一万二千元。我更看重成长机会，也在意生活成本和离家距离。两周内要答复，房租、试用期条款和岗位培养安排还没有核实。请帮我比较并列出决定前要确认的事。",
   },
   {
-    label: "说明文档",
-    goal: "【模拟输入，可修改】我想写一份说明文档，给谁看、写哪些内容还没想清楚。",
+    label: "买二手车",
+    goal: "【合成场景 · 虚构情境，请按自己的情况修改】我刚毕业，需要通勤，正在比较买二手车、继续公共交通和暂时租车。购车总预算五万元，希望每月养车支出可控。候选车辆的事故记录、车况、保险和维修费用都还没核实。请比较各路线的成本、风险和决定前的第一步。",
   },
 ];
 
@@ -126,6 +115,102 @@ function answerOf(question: IntakeQuestion): IntakeAnswer {
   };
 }
 
+function QuestionInput({
+  question,
+  answer,
+  onChange,
+  disabled,
+}: {
+  question: IntakeQuestion;
+  answer: IntakeAnswer;
+  onChange: (answer: IntakeAnswer) => void;
+  disabled: boolean;
+}) {
+  const id = useId();
+  const active = answer.state === "answered";
+  const setValue = (value: IntakeAnswer["value"]) =>
+    onChange({ ...answer, state: "answered", value });
+  return (
+    <fieldset className="gi-question" disabled={disabled}>
+      <legend>{question.title}</legend>
+      <p id={`${id}-reason`}>{question.reason}</p>
+      <div className="gi-answer-states" role="group" aria-label="回答方式">
+        {(
+          [
+            ["answered", "我来补充"],
+            ["unknown", "暂时不知道"],
+            ["skipped", "跳过"],
+          ] as const
+        ).map(([state, label]) => (
+          <button
+            key={state}
+            type="button"
+            aria-pressed={answer.state === state}
+            onClick={() => onChange({ ...answer, state })}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <DisclosureMotion open={active} id={`${id}-answer`}>
+        {question.type === "single" || question.type === "multiple" ? (
+          <div className="gi-answer-options" aria-describedby={`${id}-reason`}>
+            {question.options.map((option) => {
+              const chosen = Array.isArray(answer.value)
+                ? answer.value.includes(option)
+                : answer.value === option;
+              return (
+                <label key={option} className={chosen ? "selected" : ""}>
+                  <input
+                    type={question.type === "single" ? "radio" : "checkbox"}
+                    name={id}
+                    checked={chosen}
+                    onChange={() =>
+                      setValue(
+                        question.type === "single"
+                          ? option
+                          : chosen
+                            ? (Array.isArray(answer.value) ? answer.value : []).filter(
+                                (v) => v !== option,
+                              )
+                            : [...(Array.isArray(answer.value) ? answer.value : []), option],
+                      )
+                    }
+                  />
+                  <span>{option}</span>
+                </label>
+              );
+            })}
+          </div>
+        ) : (
+          <label className="gi-answer-field">
+            <span className="sr-only">{question.title}</span>
+            {question.type === "number" ? (
+              <input
+                type="number"
+                value={String(answer.value)}
+                placeholder={question.placeholder}
+                aria-describedby={`${id}-reason`}
+                onChange={(e) => setValue(e.target.value)}
+              />
+            ) : (
+              <textarea
+                rows={2}
+                maxLength={3000}
+                value={String(answer.value)}
+                placeholder={question.placeholder}
+                aria-describedby={`${id}-reason`}
+                onChange={(e) => setValue(e.target.value)}
+              />
+            )}
+            {question.unit && <small>{question.unit}</small>}
+          </label>
+        )}
+      </DisclosureMotion>
+    </fieldset>
+  );
+}
+
 export function GuidedIntake({
   modelProviders,
   pending,
@@ -143,23 +228,6 @@ export function GuidedIntake({
   const [goal, setGoal] = useState("");
   const [modelMode, setModelMode] = useState<ModelMode>(DEFAULT_MODEL_ID);
   const [draft, setDraft] = useState<IntakeDraft | null>(null);
-  const { ref: attachmentRoot, capture: captureAttachments } = useListMotion<HTMLUListElement>(
-    JSON.stringify(draft?.attachments.map((file) => file.id) ?? []),
-  );
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const dialogMotion = useRef<OverlayMotionHandle>(null);
-  const [dialogTrigger, setDialogTrigger] = useState<HTMLButtonElement | null>(null);
-  const [historyAnswerEdit, setHistoryAnswerEdit] = useState<IntakeAnswer | null>(null);
-  const [historyConflict, setHistoryConflict] =
-    useState<ReturnType<typeof readHistoricalAnswerConflict>>(null);
-  const [historyJournalWarning, setHistoryJournalWarning] = useState("");
-  const historyAnswerMemory = useRef<{
-    draftId: string;
-    answer: IntakeAnswer;
-    revision: number;
-    scope: string;
-  } | null>(null);
   const [answers, setAnswers] = useState<IntakeAnswer[]>([]);
   const [answerSaveState, setAnswerSaveState] = useState<"server" | "local" | "memory" | "syncing">(
     "server",
@@ -172,7 +240,6 @@ export function GuidedIntake({
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [materialsOpen, setMaterialsOpen] = useState(false);
   const [recoveryDetailsOpen, setRecoveryDetailsOpen] = useState(false);
-  const [reportPreviewOpen, setReportPreviewOpen] = useState(false);
   const [source, setSource] = useState<MaterialSource | null>(null);
   const [pageInputs, setPageInputs] = useState<Record<string, string>>({});
   const fileInput = useRef<HTMLInputElement>(null);
@@ -190,8 +257,6 @@ export function GuidedIntake({
   const modeRef = useRef(modelMode);
   const answerValues = useRef<IntakeAnswer[]>([]);
   const answerScope = useRef("");
-  const questionPane = useRef<HTMLDivElement>(null);
-  const historyHeading = useRef<HTMLHeadingElement>(null);
   const answerUnsaved = useRef<"local" | "memory" | null>(null);
 
   const request = useCallback(
@@ -252,54 +317,12 @@ export function GuidedIntake({
       )
         return;
       let recovered: IntakeAnswer[] | null = null;
-      let historyRecovered: IntakeAnswer | null = null;
-      let historicalEntry: ReturnType<typeof readHistoricalAnswerConflict> = null;
       try {
-        const raw = sessionStorage.getItem(ANSWER_JOURNAL_KEY);
-        recovered = readAnswerJournal(raw, next);
-        historyRecovered = readHistoricalAnswerJournal(raw, next);
-        historicalEntry = readHistoricalAnswerConflict(raw, next);
+        recovered = readAnswerJournal(sessionStorage.getItem(ANSWER_JOURNAL_KEY), next);
       } catch {
         /* Keep in-memory answers when this tab cannot write a recovery journal. */
       }
-      const memory = historyAnswerMemory.current;
-      const sameMemoryDraft = memory?.draftId === next.id && next.workflow === "clarification";
-      if (
-        sameMemoryDraft &&
-        memory.revision === next.revision &&
-        memory.scope === historyAnswerJournalScope(next, memory.answer.questionId) &&
-        !["submitted", "analyzing", "uncertain"].includes(next.status)
-      )
-        historyRecovered = memory.answer;
-      if (!historyRecovered && sameMemoryDraft)
-        historicalEntry = {
-          scope: memory.scope,
-          historicalRevision: memory.revision,
-          historicalAnswer: memory.answer,
-        };
-      // This component is remounted on identity changes. Keep a same-draft conflict in memory
-      // even when both storage operations fail, without rebasing its original revision.
-      historyAnswerMemory.current = historyRecovered
-        ? {
-            draftId: next.id,
-            answer: historyRecovered,
-            revision: next.revision,
-            scope: historyAnswerJournalScope(next, historyRecovered.questionId),
-          }
-        : sameMemoryDraft
-          ? memory
-          : null;
-      setHistoryAnswerEdit(historyRecovered);
-      setHistoryConflict(historyRecovered ? null : historicalEntry);
-      if (historyRecovered || historicalEntry) setDialogOpen(true);
       const scope = answerJournalScope(next);
-      if (
-        (next.status === "questions" || next.status === "summary") &&
-        (current.current?.status !== next.status || scope !== answerScope.current)
-      ) {
-        setQuestionIndex(0);
-        setDialogOpen(true);
-      }
       const memoryState = scope === answerScope.current ? answerUnsaved.current : null;
       const preferred = memoryState ? answerValues.current : (recovered ?? next.answers);
       const values = next.questions.map(
@@ -449,7 +472,6 @@ export function GuidedIntake({
       saved = await request<IntakeDraft>("/api/intakes", "POST", {
         goal: goalRef.current,
         modelMode: modeRef.current,
-        workflow: "clarification",
       });
       if (!alive.current) throw new DOMException("Aborted", "AbortError");
       saveIntakeDraftPointer(saved.id, true);
@@ -512,41 +534,6 @@ export function GuidedIntake({
     disabled || pending || restoring || busy || analyzing || reading || !!summary.conflict;
   const questionsVisible = draft?.status === "questions";
   const summaryVisible = draft?.status === "summary" && !!draft.challenge;
-  const summaryDirty =
-    summaryVisible &&
-    JSON.stringify([challenge, assumptions]) !==
-      JSON.stringify([draft.challenge, draft.assumptions]);
-  const reportAvailable =
-    summaryVisible &&
-    !!draft.clarification?.specification.trim() &&
-    !!draft.clarification.executionPrompt.trim() &&
-    !summaryDirty &&
-    !historyAnswerEdit &&
-    !historyConflict &&
-    !blocked &&
-    !uncertain &&
-    goal === draft.goal;
-  const historicalQuestion = draft?.answers.find(
-    (answer) => answer.questionId === historyAnswerEdit?.questionId,
-  )?.question;
-  const historyVisible =
-    draft?.workflow === "clarification" &&
-    !questionsVisible &&
-    !analyzing &&
-    !uncertain &&
-    draft.status !== "submitted";
-
-  const historicalQuestionId = historyAnswerEdit?.questionId;
-  useLayoutEffect(() => {
-    if (!dialogOpen) return;
-    if (historicalQuestionId) {
-      historyHeading.current?.focus({ preventScroll: true });
-      return;
-    }
-    if (!questionsVisible) return;
-    questionPane.current?.querySelector<HTMLElement>("legend")?.setAttribute("tabindex", "-1");
-    questionPane.current?.querySelector<HTMLElement>("legend")?.focus({ preventScroll: true });
-  }, [dialogOpen, questionsVisible, questionIndex, draft?.round, historicalQuestionId]);
   const usage = draft?.usage ?? [];
   const usd = usage.reduce((sum, use) => sum + (use.estimatedUsd ?? 0), 0);
   const cny = usage.reduce((sum, use) => sum + use.estimatedCny, 0);
@@ -610,18 +597,6 @@ export function GuidedIntake({
     : [];
   const tokens = usage.reduce((sum, use) => sum + use.inputTokens + use.outputTokens, 0);
 
-  const downloadClarificationPreview = () => {
-    const state = draft?.clarification;
-    if (!state || !reportAvailable) return;
-    const content = `${state.specification}\n\n---\n\n# 执行提示词（预览）\n\n${state.executionPrompt}`;
-    const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `方案擂台-需求规划-预览-${draft?.revision ?? 0}.md`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
-
   const saveQuestionAnswers = async (
     saved: IntakeDraft,
     finish: boolean,
@@ -636,7 +611,12 @@ export function GuidedIntake({
     );
     // Changing models does not submit this round or declare an untouched answer unknown.
     if (preserveUnanswered && (!answerUnsaved.current || !provided.length)) return saved;
-    const outgoing = provided;
+    const outgoing = (preserveUnanswered ? provided : answerValues.current).map((answer) =>
+      answer.state === "answered" &&
+      (Array.isArray(answer.value) ? !answer.value.length : !answer.value.trim())
+        ? { ...answer, state: finish ? ("skipped" as const) : ("unknown" as const) }
+        : answer,
+    );
     setAnswerSaveState("syncing");
     let next: IntakeDraft;
     try {
@@ -644,7 +624,7 @@ export function GuidedIntake({
       next = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
         revision: saved.revision,
         answers: outgoing,
-        answerMode: preserveUnanswered || finish ? "draft" : "complete",
+        ...(preserveUnanswered ? { answerMode: "draft" } : {}),
       });
     } catch (failure) {
       setAnswerSaveState(answerUnsaved.current ?? "memory");
@@ -659,9 +639,8 @@ export function GuidedIntake({
     return next;
   };
 
-  const analyze = (finish = false) => {
+  const analyze = (finish = false) =>
     void operate(async (epoch) => {
-      setDialogOpen(true);
       if (unavailable) throw new Error("所选模型尚未配置，请先选择可用模型。");
       if (goalRef.current.trim().length < 2) throw new Error("请用至少 2 个字描述你的目标。");
       clearExamplePickerRequest();
@@ -674,105 +653,6 @@ export function GuidedIntake({
           finish,
         });
         if (epoch === generation.current) apply(next);
-      } finally {
-        if (alive.current && epoch === generation.current) setAnalysisPending(false);
-      }
-    });
-  };
-
-  const clearHistoryEdit = () => {
-    const memory = historyAnswerMemory.current;
-    historyAnswerMemory.current = null;
-    setHistoryAnswerEdit(null);
-    setHistoryConflict(null);
-    setHistoryJournalWarning("");
-    let ownsJournal = !!memory && current.current?.id === memory.draftId;
-    try {
-      ownsJournal =
-        !!current.current &&
-        !!readHistoricalAnswerConflict(sessionStorage.getItem(ANSWER_JOURNAL_KEY), current.current);
-    } catch {
-      // When reads are blocked, this tab's in-memory edit still identifies its own journal.
-    }
-    if (ownsJournal) {
-      try {
-        sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
-      } catch {}
-    }
-  };
-  const editHistoricalAnswer = (answer: IntakeAnswer) => {
-    const saved = current.current;
-    if (!saved || saved.status === "uncertain") return;
-    const scope = historyAnswerJournalScope(saved, answer.questionId);
-    historyAnswerMemory.current = { draftId: saved.id, answer, revision: saved.revision, scope };
-    setHistoryAnswerEdit(answer);
-    setHistoryConflict(null);
-    setReportPreviewOpen(false);
-    try {
-      sessionStorage.setItem(
-        ANSWER_JOURNAL_KEY,
-        JSON.stringify({
-          scope,
-          answers: [],
-          historicalDraftId: saved.id,
-          historicalRevision: saved.revision,
-          historicalAnswer: answer,
-        }),
-      );
-      setHistoryJournalWarning("");
-    } catch {
-      setHistoryJournalWarning("历史回答修改暂存在内存，请保持此页打开，保存后再离开。");
-    }
-  };
-  const openHistoricalAnswer = (questionId: string) =>
-    void operate(async () => {
-      const recorded = current.current?.answers.find((answer) => answer.questionId === questionId);
-      if (!recorded) return;
-      editHistoricalAnswer({ questionId, state: recorded.state, value: recorded.value });
-      setDialogOpen(true);
-    });
-  const saveHistoricalAnswer = () =>
-    void operate(async (epoch) => {
-      const saved = current.current;
-      const edit = historyAnswerMemory.current;
-      if (!saved || !edit) return;
-      if (
-        edit.revision !== saved.revision ||
-        edit.scope !== historyAnswerJournalScope(saved, edit.answer.questionId)
-      )
-        throw new Error("草稿已有更新，请重新核对本机历史回答修改。");
-      if (
-        edit.answer.state === "answered" &&
-        (Array.isArray(edit.answer.value) ? !edit.answer.value.length : !edit.answer.value.trim())
-      )
-        throw new Error("请填写修改后的答案，或选择暂时不知道、跳过。");
-      let updated: IntakeDraft;
-      try {
-        updated = await request<IntakeDraft>(`/api/intakes/${saved.id}`, "PATCH", {
-          revision: saved.revision,
-          answers: [edit.answer],
-          answerMode: "draft",
-        });
-      } catch (failure) {
-        try {
-          const latest = await request<IntakeDraft>(`/api/intakes/${saved.id}`);
-          if (epoch === generation.current) apply(latest);
-        } catch {}
-        throw failure;
-      }
-      if (epoch !== generation.current) return;
-      clearHistoryEdit();
-      apply(updated);
-      setDialogOpen(true);
-      setReportPreviewOpen(false);
-      setAnalysisPending(true);
-      try {
-        const analyzed = await request<IntakeDraft>(`/api/intakes/${updated.id}/analyze`, "POST", {
-          revision: updated.revision,
-          operationId: crypto.randomUUID(),
-          finish: false,
-        });
-        if (epoch === generation.current) apply(analyzed);
       } finally {
         if (alive.current && epoch === generation.current) setAnalysisPending(false);
       }
@@ -810,12 +690,6 @@ export function GuidedIntake({
     saving.current = null;
     resetSummary();
     setDraft(null);
-    setDialogOpen(false);
-    setQuestionIndex(0);
-    setHistoryAnswerEdit(null);
-    setHistoryConflict(null);
-    setHistoryJournalWarning("");
-    historyAnswerMemory.current = null;
     setGoal("");
     goalRef.current = "";
     setAnswers([]);
@@ -831,119 +705,11 @@ export function GuidedIntake({
     setSource(null);
     setMaterialsOpen(false);
     setRecoveryDetailsOpen(false);
-    setReportPreviewOpen(false);
     if (previousId) clearIntakeDraftPointer(previousId);
     try {
       sessionStorage.removeItem(ANSWER_JOURNAL_KEY);
     } catch {}
   };
-
-  const recoveryFeedback = (
-    <>
-      {uncertain ? (
-        <section className="gi-recovery" aria-label="分析暂停">
-          <div className="gi-recovery-message" role="alert">
-            <strong>暂时没有收到完整结果</strong>
-            <p>本次分析是否完成还待确认。目标和材料已保留，不会自动重试。</p>
-          </div>
-          <p className="gi-recovery-next">
-            可以保留目标另开草稿，材料需重新添加。新草稿会等待你点击“开始梳理”。
-          </p>
-          <div className="gi-recovery-actions">
-            <button
-              type="button"
-              className="primary-button"
-              disabled={busy || analyzing || reading || pending || disabled}
-              onClick={() => {
-                const previousGoal = goalRef.current;
-                reset();
-                setGoal(previousGoal);
-                goalRef.current = previousGoal;
-                requestAnimationFrame(() => goalInput.current?.focus());
-              }}
-            >
-              准备新问题 <ArrowRight size={15} />
-            </button>
-            <button
-              type="button"
-              className="text-button gi-recovery-toggle"
-              aria-expanded={recoveryDetailsOpen}
-              aria-controls={`${id}-recovery-details`}
-              onClick={() => setRecoveryDetailsOpen(!recoveryDetailsOpen)}
-            >
-              {recoveryDetailsOpen ? "收起调用与费用说明" : "查看调用与费用说明"}
-              <ChevronDown size={14} />
-            </button>
-          </div>
-          <DisclosureMotion open={recoveryDetailsOpen} id={`${id}-recovery-details`}>
-            <div className="gi-recovery-details">
-              <p>
-                <strong>此草稿已暂停模型请求，等待核账。</strong>
-                请等待管理员核对调用状态和费用，不要重试本次请求。
-              </p>
-              <p>
-                你仍可查看目标和材料。切换模型不能解除暂停。准备新问题会另建草稿，原来的调用记录和预留额度仍会保留，新请求的状态和费用会单独记录。
-              </p>
-              {(error || draft?.error) && <p>原始提示：{error || draft?.error}</p>}
-            </div>
-          </DisclosureMotion>
-        </section>
-      ) : error || draft?.error ? (
-        <div className="gi-error" role="alert">
-          {error || draft?.error}
-        </div>
-      ) : null}
-      {summary.conflict && (
-        <div className="gi-error gi-summary-conflict" role="alert">
-          <strong>本机还有尚未保存的摘要修改。</strong>
-          <p>服务器版本已变化。本机记录会保留，选择恢复后才会保存到当前草稿。</p>
-          <DisclosureMotion open>
-            <div className="gi-conflict-differences" aria-label="摘要修改差异">
-              {conflictDetails.length ? (
-                conflictDetails.map((row) => (
-                  <section key={row.label}>
-                    <h4>{row.label}</h4>
-                    <dl>
-                      <div>
-                        <dt>服务器当前版本</dt>
-                        <dd>{row.server}</dd>
-                      </div>
-                      <div>
-                        <dt>本机尚未保存</dt>
-                        <dd>{row.local}</dd>
-                      </div>
-                    </dl>
-                  </section>
-                ))
-              ) : (
-                <p>
-                  可编辑的内容没有变化，但草稿状态或参考材料已有更新。参考材料以服务器保存的内容为准。
-                </p>
-              )}
-            </div>
-          </DisclosureMotion>
-          <div className="gi-step-actions">
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={busy || pending || disabled || draft?.status !== "summary"}
-              onClick={() => summary.resolveConflict(true)}
-            >
-              恢复本机未保存的修改
-            </button>
-            <button
-              type="button"
-              className="text-button"
-              disabled={busy || pending || disabled}
-              onClick={() => summary.resolveConflict(false)}
-            >
-              保留服务器版本
-            </button>
-          </div>
-        </div>
-      )}
-    </>
-  );
 
   return (
     <section
@@ -972,7 +738,7 @@ export function GuidedIntake({
         !!error ||
         !!draft?.error
       }
-      aria-label="开始一次需求梳理"
+      aria-label="准备一场推演"
       aria-busy={busy || analyzing || restoring}
     >
       <form
@@ -1011,7 +777,7 @@ export function GuidedIntake({
           <Paperclip size={22} />
           <span>松开即可添加材料</span>
         </div>
-        <label htmlFor={`${id}-goal`}>你想做什么</label>
+        <label htmlFor={`${id}-goal`}>你想解决什么问题？</label>
         <textarea
           ref={goalInput}
           id={`${id}-goal`}
@@ -1021,7 +787,7 @@ export function GuidedIntake({
           value={goal}
           readOnly={uncertain}
           disabled={blocked}
-          placeholder="先说说你想做的东西，没想清楚也没关系。可以添加文件或直接粘贴材料。"
+          placeholder="说说你的选择和顾虑，也可以把文件拖进来或直接粘贴。"
           onPaste={(event) => {
             const files = [...event.clipboardData.files];
             if (!files.length) return;
@@ -1152,14 +918,14 @@ export function GuidedIntake({
               {restoring
                 ? "恢复草稿…"
                 : analyzing
-                  ? "正在梳理…"
+                  ? "正在分析…"
                   : busy
                     ? "正在保存…"
                     : summaryVisible
                       ? "重新梳理"
                       : questionsVisible
-                        ? "重新梳理目标"
-                        : "开始梳理"}
+                        ? "重新分析目标"
+                        : "开始分析"}
             </span>
           </button>
         </div>
@@ -1228,9 +994,9 @@ export function GuidedIntake({
         </div>
       </DisclosureMotion>
       <DisclosureMotion open={!!draft?.attachments.length} className="gi-attachments">
-        <ul ref={attachmentRoot}>
+        <ul>
           {draft?.attachments.map((file) => (
-            <li key={file.id} data-motion-key={file.id}>
+            <li key={file.id}>
               <div className="gi-file-heading">
                 <FileText size={17} />
                 <strong>{file.name}</strong>
@@ -1247,7 +1013,6 @@ export function GuidedIntake({
                         "DELETE",
                       );
                       if (epoch === generation.current) {
-                        captureAttachments();
                         apply(next);
                         if (source?.attachmentId === file.id) setSource(null);
                       }
@@ -1312,7 +1077,108 @@ export function GuidedIntake({
           ))}
         </ul>
       </DisclosureMotion>
-      {!dialogOpen && recoveryFeedback}
+      {uncertain ? (
+        <section className="gi-recovery" aria-label="分析暂停">
+          <div className="gi-recovery-message" role="alert">
+            <strong>暂时没有收到完整结果</strong>
+            <p>本次分析是否完成还待确认。目标和材料已保留，不会自动重试。</p>
+          </div>
+          <p className="gi-recovery-next">
+            可以保留目标另开草稿，材料需重新添加。新草稿不会自动开始分析。
+          </p>
+          <div className="gi-recovery-actions">
+            <button
+              type="button"
+              className="primary-button"
+              disabled={busy || analyzing || reading || pending || disabled}
+              onClick={() => {
+                const previousGoal = goalRef.current;
+                reset();
+                setGoal(previousGoal);
+                goalRef.current = previousGoal;
+                goalInput.current?.focus();
+              }}
+            >
+              准备新问题 <ArrowRight size={15} />
+            </button>
+            <button
+              type="button"
+              className="text-button gi-recovery-toggle"
+              aria-expanded={recoveryDetailsOpen}
+              aria-controls={`${id}-recovery-details`}
+              onClick={() => setRecoveryDetailsOpen(!recoveryDetailsOpen)}
+            >
+              {recoveryDetailsOpen ? "收起调用与费用说明" : "查看调用与费用说明"}
+              <ChevronDown size={14} />
+            </button>
+          </div>
+          <DisclosureMotion open={recoveryDetailsOpen} id={`${id}-recovery-details`}>
+            <div className="gi-recovery-details">
+              <p>
+                <strong>此草稿已暂停模型请求，等待核账。</strong>
+                请等待管理员核对调用状态和费用，不要重试本次请求。
+              </p>
+              <p>
+                你仍可查看目标和材料。切换模型不能解除暂停。准备新问题会另建草稿，原来的调用记录和预留额度仍会保留，新请求的状态和费用会单独记录。
+              </p>
+              {(error || draft?.error) && <p>原始提示：{error || draft?.error}</p>}
+            </div>
+          </DisclosureMotion>
+        </section>
+      ) : error || draft?.error ? (
+        <div className="gi-error" role="alert">
+          {error || draft?.error}
+        </div>
+      ) : null}
+      {summary.conflict && (
+        <div className="gi-error gi-summary-conflict" role="alert">
+          <strong>本机还有尚未保存的摘要修改。</strong>
+          <p>服务器版本已变化。本机记录会保留，选择恢复后才会保存到当前草稿。</p>
+          <DisclosureMotion open>
+            <div className="gi-conflict-differences" aria-label="摘要修改差异">
+              {conflictDetails.length ? (
+                conflictDetails.map((row) => (
+                  <section key={row.label}>
+                    <h4>{row.label}</h4>
+                    <dl>
+                      <div>
+                        <dt>服务器当前版本</dt>
+                        <dd>{row.server}</dd>
+                      </div>
+                      <div>
+                        <dt>本机尚未保存</dt>
+                        <dd>{row.local}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                ))
+              ) : (
+                <p>
+                  可编辑的内容没有变化，但草稿状态或参考材料已有更新。参考材料以服务器保存的内容为准。
+                </p>
+              )}
+            </div>
+          </DisclosureMotion>
+          <div className="gi-step-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || pending || disabled || draft?.status !== "summary"}
+              onClick={() => summary.resolveConflict(true)}
+            >
+              恢复本机未保存的修改
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              disabled={busy || pending || disabled}
+              onClick={() => summary.resolveConflict(false)}
+            >
+              保留服务器版本
+            </button>
+          </div>
+        </div>
+      )}
       <DisclosureMotion open={analyzing || reading} className="gi-progress">
         <div>
           <LoaderCircle className="gi-spin" size={20} />
@@ -1323,580 +1189,278 @@ export function GuidedIntake({
           </span>
         </div>
       </DisclosureMotion>
-      {(questionsVisible ||
-        summaryVisible ||
-        analyzing ||
-        uncertain ||
-        draft?.status === "input" ||
-        draft?.status === "failed" ||
-        !!historyAnswerEdit ||
-        !!historyConflict) && (
-        <div className="gi-resume">
-          <p>
-            {questionsVisible
-              ? `第${draft?.round ?? 1}轮 · ${draft?.questions.length ?? 0} 个待补充问题`
-              : summaryVisible
-                ? "摘要已整理，等待你确认。"
-                : uncertain
-                  ? "调用已暂停，等待核对。"
-                  : "正在梳理你的目标。"}
+      <DisclosureMotion
+        open={questionsVisible || summaryVisible}
+        contentKey={summaryVisible ? "summary" : `questions:${draft?.round ?? 0}`}
+        className="gi-phase"
+      >
+        <DisclosureMotion open={questionsVisible} className="gi-questions">
+          <div className="gi-section-title">
+            <div>
+              <span>补齐关键条件</span>
+              <h3 tabIndex={-1} data-disclosure-autofocus>
+                再了解你一点。
+              </h3>
+            </div>
+            <small>第 {draft?.round ?? 1} / 2 轮 · 可以说不知道</small>
+          </div>
+          {draft?.questions.slice(0, 3).map((question) => (
+            <QuestionInput
+              key={question.id}
+              question={question}
+              answer={
+                answers.find((answer) => answer.questionId === question.id) ?? answerOf(question)
+              }
+              disabled={blocked}
+              onChange={(answer) => {
+                const next = [
+                  ...answerValues.current.filter((item) => item.questionId !== answer.questionId),
+                  answer,
+                ];
+                answerValues.current = next;
+                answerUnsaved.current = "memory";
+                setAnswers(next);
+                try {
+                  sessionStorage.setItem(
+                    ANSWER_JOURNAL_KEY,
+                    JSON.stringify({
+                      scope: answerScope.current,
+                      answers: next,
+                    }),
+                  );
+                  answerUnsaved.current = "local";
+                  setAnswerSaveState("local");
+                } catch {
+                  setAnswerSaveState("memory");
+                }
+              }}
+            />
+          ))}
+          <p className="gi-save-state" role="status" aria-live="polite">
+            {answerSaveState === "syncing"
+              ? "正在将本轮回答同步到服务器…"
+              : answerSaveState === "local"
+                ? "回答已保存在当前标签页，刷新可恢复；继续时同步到服务器。"
+                : answerSaveState === "memory"
+                  ? "回答暂未保存，请保持此页打开，点击继续后同步到服务器。"
+                  : "已同步的回答保存在服务器；新回答会先保存在当前标签页。"}
           </p>
-          <button
-            ref={setDialogTrigger}
-            type="button"
-            className="secondary-button"
-            aria-haspopup="dialog"
-            onClick={() => setDialogOpen(true)}
-          >
-            {questionsVisible ? "继续回答" : summaryVisible ? "查看并确认摘要" : "查看梳理进度"}
-          </button>
-        </div>
-      )}
-      {dialogOpen && (
-        <Modal
-          title="需求梳理"
-          trigger={dialogTrigger}
-          motionRef={dialogMotion}
-          onClose={() => {
-            setDialogOpen(false);
-            requestAnimationFrame(() => dialogTrigger?.focus({ preventScroll: true }));
-          }}
-        >
-          <div className="gi-paper" aria-busy={busy || analyzing || reading}>
-            <p tabIndex={-1} data-overlay-autofocus className="gi-paper-stage">
-              {questionsVisible
-                ? `第 ${draft?.round ?? 1} 轮 · 第 ${questionIndex + 1} / ${draft?.questions.length ?? 0} 题`
-                : summaryVisible
-                  ? "核对任务摘要"
-                  : "梳理进度"}
-            </p>
-            {recoveryFeedback}
-            {(busy || analyzing || reading) && (
-              <p className="gi-paper-progress" role="status" aria-live="polite">
-                <LoaderCircle className="gi-spin" size={18} />
-                {answerSaveState === "syncing"
-                  ? "正在保存本轮回答…"
-                  : analyzing
-                    ? "正在梳理下一步需要确认的内容…"
-                    : "正在保存并核对你的要求…"}
-              </p>
-            )}
-            <DisclosureMotion
-              open={questionsVisible && !historyAnswerEdit}
-              className="gi-questions"
-            >
-              <div ref={questionPane} className="gi-question-page">
-                <div className="gi-section-title">
-                  <div>
-                    <span>补齐关键条件</span>
-                    <h3 tabIndex={-1} data-disclosure-autofocus>
-                      再了解你一点。
-                    </h3>
-                  </div>
-                  <small>可以说不知道，也可以跳过</small>
-                </div>
-                {draft?.questions.slice(questionIndex, questionIndex + 1).map((question) => (
-                  <QuestionInput
-                    key={question.id}
-                    question={question}
-                    answer={
-                      answers.find((answer) => answer.questionId === question.id) ??
-                      answerOf(question)
-                    }
-                    disabled={blocked}
-                    onChange={(answer) => {
-                      const next = [
-                        ...answerValues.current.filter(
-                          (item) => item.questionId !== answer.questionId,
-                        ),
-                        answer,
-                      ];
-                      answerValues.current = next;
-                      answerUnsaved.current = "memory";
-                      setAnswers(next);
-                      try {
-                        sessionStorage.setItem(
-                          ANSWER_JOURNAL_KEY,
-                          JSON.stringify({
-                            scope: answerScope.current,
-                            answers: next,
-                          }),
-                        );
-                        answerUnsaved.current = "local";
-                        setAnswerSaveState("local");
-                      } catch {
-                        setAnswerSaveState("memory");
-                      }
-                    }}
-                  />
-                ))}
-              </div>
-              <p className="gi-save-state" role="status" aria-live="polite">
-                {answerSaveState === "syncing"
-                  ? "正在将本轮回答同步到服务器…"
-                  : answerSaveState === "local"
-                    ? "回答已保存在当前标签页，刷新可恢复；继续时同步到服务器。"
-                    : answerSaveState === "memory"
-                      ? "回答暂未保存，请保持此页打开，点击继续后同步到服务器。"
-                      : "已同步的回答保存在服务器；新回答会先保存在当前标签页。"}
-              </p>
-              <div className="gi-step-actions gi-question-navigation">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={blocked || questionIndex === 0}
-                  onClick={() => setQuestionIndex((index) => index - 1)}
-                >
-                  上一题
-                </button>
-                {questionIndex < (draft?.questions.length ?? 0) - 1 && (
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={blocked}
-                    onClick={() => setQuestionIndex((index) => index + 1)}
-                  >
-                    下一题
-                    <ArrowRight size={16} />
-                  </button>
-                )}
-              </div>
-              <div className="gi-step-actions">
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={blocked || uncertain || unavailable}
-                  onClick={() => analyze(true)}
-                >
-                  跳过本轮，整理摘要
-                </button>
-                {questionIndex >= (draft?.questions.length ?? 0) - 1 && (
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={blocked || uncertain || unavailable}
-                    onClick={() => analyze(false)}
-                  >
-                    确认本轮回答并继续
-                    <ArrowRight size={16} />
-                  </button>
-                )}
-              </div>
-            </DisclosureMotion>
-            <DisclosureMotion open={summaryVisible && !historyAnswerEdit} className="gi-summary">
-              <div className="gi-section-title">
-                <div>
-                  <span>开始前，确认一下</span>
-                  <h3 tabIndex={-1} data-disclosure-autofocus>
-                    这是我们理解的任务。
-                  </h3>
-                </div>
-                <Check size={23} />
-              </div>
-              <p className="gi-save-state" role="status" aria-live="polite">
-                {summary.status}
-              </p>
-              {summary.journalWarning && (
-                <p className="gi-error" role="alert">
-                  {summary.journalWarning}
-                </p>
-              )}
-              {summary.status.startsWith("摘要尚未保存") && !summary.conflict && (
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={blocked}
-                  onClick={() => void operate(async () => {})}
-                >
-                  重试保存摘要
-                </button>
-              )}
-              <div className="gi-summary-fields">
-                <label>
-                  要达到的目标
-                  <textarea
-                    rows={2}
-                    maxLength={3000}
-                    value={challenge.goal}
-                    disabled={blocked}
-                    onChange={(event) => updateChallenge("goal", event.target.value)}
-                  />
-                </label>
-                <label>
-                  必须满足的限制
-                  <textarea
-                    rows={2}
-                    maxLength={3000}
-                    value={challenge.constraints}
-                    disabled={blocked}
-                    placeholder="尚未说明硬性限制，可在这里补充。"
-                    onChange={(event) => updateChallenge("constraints", event.target.value)}
-                  />
-                </label>
-                <label>
-                  你更在意的事
-                  <textarea
-                    rows={2}
-                    maxLength={1500}
-                    value={challenge.preferences}
-                    disabled={blocked}
-                    placeholder="尚未说明偏好，可在这里补充。"
-                    onChange={(event) => updateChallenge("preferences", event.target.value)}
-                  />
-                </label>
-              </div>
-              <div className="gi-assumptions">
-                <h4>暂定假设 · 请逐条核对</h4>
-                {assumptions.length ? (
-                  assumptions.map((assumption, i) => (
-                    <label key={i}>
-                      <span>{i + 1}</span>
-                      <textarea
-                        rows={2}
-                        maxLength={500}
-                        disabled={blocked}
-                        value={assumption}
-                        onChange={(event) => {
-                          updateAssumptions((old) =>
-                            old.map((value, index) => (index === i ? event.target.value : value)),
-                          );
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="icon-button"
-                        disabled={blocked}
-                        aria-label={`移除第 ${i + 1} 条假设`}
-                        onClick={() => {
-                          updateAssumptions((old) => old.filter((_, index) => index !== i));
-                        }}
-                      >
-                        <X size={14} />
-                      </button>
-                    </label>
-                  ))
-                ) : (
-                  <p>没有额外的暂定假设。</p>
-                )}
-              </div>
-              {draft?.workflow === "clarification" && draft.clarification && (
-                <section className="gi-report-preview" aria-label="规划报告预览">
-                  <div className="gi-report-preview-heading">
-                    <div>
-                      <strong>详细规划报告 · 预览版</strong>
-                      <small>
-                        当前内容基于已记录回答和材料；未确认信息、AI 推论与工程验证缺口会单独标注。
-                      </small>
-                    </div>
-                    <button
-                      type="button"
-                      className="text-button"
-                      disabled={!reportAvailable}
-                      onClick={() => setReportPreviewOpen(!reportPreviewOpen)}
-                      aria-expanded={reportPreviewOpen && reportAvailable}
-                    >
-                      {reportPreviewOpen && reportAvailable ? "收起预览" : "查看完整预览"}
-                    </button>
-                  </div>
-                  {!reportAvailable && (
-                    <p className="gi-hint" role="status">
-                      要求已有修改或报告已失效，请先保存并重新分析，再查看预览或导出。
-                    </p>
-                  )}
-                  {reportPreviewOpen && reportAvailable && (
-                    <>
-                      <pre className="gi-report-preview-content">
-                        {draft.clarification.specification}
-                      </pre>
-                      <h4>执行提示词</h4>
-                      <pre className="gi-report-preview-content">
-                        {draft.clarification.executionPrompt}
-                      </pre>
-                      <div className="gi-report-preview-actions">
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={downloadClarificationPreview}
-                        >
-                          导出 Markdown 预览
-                        </button>
-                      </div>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={blocked || uncertain || unavailable || !!historyConflict}
-                    onClick={() => analyze(false)}
-                  >
-                    根据当前摘要刷新分析
-                  </button>
-                </section>
-              )}
-              <button
-                type="button"
-                className="gi-disclosure-trigger"
-                aria-controls={`${id}-advanced`}
-                aria-expanded={advanced}
-                onClick={() => setAdvanced(!advanced)}
-              >
-                {draft?.workflow === "clarification"
-                  ? "预算、时间与已有想法"
-                  : "预算、时间与备选方案"}
-                <ChevronDown size={15} />
-              </button>
-              <DisclosureMotion open={advanced} id={`${id}-advanced`}>
-                <div className="gi-advanced">
-                  <label>
-                    可投入金额（人民币）
-                    <input
-                      type="number"
-                      min={0}
-                      max={100000000}
-                      value={challenge.budget ?? ""}
-                      placeholder="未说明"
-                      disabled={blocked}
-                      onChange={(event) =>
-                        updateChallenge(
-                          "budget",
-                          event.target.value === "" ? null : Number(event.target.value),
-                        )
-                      }
-                    />
-                  </label>
-                  <label>
-                    可投入时间（小时）
-                    <input
-                      type="number"
-                      min={0.01}
-                      max={100000}
-                      step="any"
-                      value={challenge.timeHours ?? ""}
-                      placeholder="未说明"
-                      disabled={blocked}
-                      onChange={(event) =>
-                        updateChallenge(
-                          "timeHours",
-                          event.target.value === "" ? null : Number(event.target.value),
-                        )
-                      }
-                    />
-                  </label>
-                  <label className="gi-wide">
-                    {draft?.workflow === "clarification"
-                      ? "已有想法（每行一项，最多三项）"
-                      : "已有备选方案（每行一个，最多三个）"}
-                    <textarea
-                      rows={3}
-                      maxLength={902}
-                      value={challenge.options.join("\n")}
-                      disabled={blocked}
-                      onChange={(event) =>
-                        updateChallenge("options", event.target.value.split("\n").slice(0, 3))
-                      }
-                    />
-                  </label>
-                </div>
-                <p className="gi-hint">
-                  {draft?.workflow === "clarification"
-                    ? "这里填写成果可用的预算和时间，模型调用费用另行记录。"
-                    : "这里填写执行方案可用的金额和时间，模型调用费用另行记录。"}
-                </p>
-              </DisclosureMotion>
-              <button
-                type="button"
-                className="primary-button gi-start"
-                disabled={
-                  blocked ||
-                  uncertain ||
-                  unavailable ||
-                  goal !== draft?.goal ||
-                  (draft?.workflow === "clarification" && !reportAvailable)
-                }
-                onClick={() =>
-                  void operate(async (epoch) => {
-                    await ensureDraft();
-                    const parsed = ChallengeSchema.safeParse({
-                      ...challenge,
-                      options: challenge.options.map((option) => option.trim()).filter(Boolean),
-                    });
-                    if (!parsed.success)
-                      throw new Error(
-                        parsed.error.issues[0]?.message ?? "请检查摘要中的目标和资源限制。",
-                      );
-                    if (!current.current) return;
-                    const submittedDraftId = current.current.id;
-                    const result = await request<ArenaSnapshot | IntakeDraft>(
-                      `/api/intakes/${submittedDraftId}/submit`,
-                      "POST",
-                      {
-                        revision: current.current.revision,
-                        challenge: parsed.data,
-                        assumptions: assumptions.map((value) => value.trim()).filter(Boolean),
-                      },
-                    );
-                    if (!alive.current || epoch !== generation.current) return;
-                    if (!("versions" in result)) {
-                      apply(result);
-                      return;
-                    }
-                    onCreated(result);
-                    resetSummary();
-                    clearIntakeDraftPointer(submittedDraftId);
-                  })
-                }
-              >
-                {busy ? <LoaderCircle size={17} className="gi-spin" /> : <ArrowRight size={17} />}
-                {draft?.workflow === "clarification" ? "确认要求并查漏交接" : "确认摘要并开始推演"}
-              </button>
-            </DisclosureMotion>
-
-            {historyConflict && (
-              <section className="gi-history-conflict" role="alert">
-                <strong>草稿已在其他操作中更新，之前的修改没有自动覆盖。</strong>
-                <p>请核对服务器当前回答与本机修改，选择后再保存。</p>
-                <dl>
-                  <dt>服务器当前回答</dt>
-                  <dd>
-                    {String(
-                      draft?.answers.find(
-                        (answer) =>
-                          answer.questionId === historyConflict.historicalAnswer.questionId,
-                      )?.value ?? "此问题已不在当前草稿中",
-                    )}
-                  </dd>
-                  <dt>本机未保存的修改</dt>
-                  <dd>
-                    {Array.isArray(historyConflict.historicalAnswer.value)
-                      ? historyConflict.historicalAnswer.value.join("、")
-                      : historyConflict.historicalAnswer.value || "暂时不知道或跳过"}
-                  </dd>
-                </dl>
-                <div className="gi-step-actions">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={
-                      blocked ||
-                      uncertain ||
-                      !draft?.answers.some(
-                        (answer) =>
-                          answer.questionId === historyConflict.historicalAnswer.questionId,
-                      )
-                    }
-                    onClick={() => editHistoricalAnswer(historyConflict.historicalAnswer)}
-                  >
-                    恢复本机修改并重新核对
-                  </button>
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={blocked || uncertain}
-                    onClick={clearHistoryEdit}
-                  >
-                    保留服务器回答
-                  </button>
-                </div>
-              </section>
-            )}
-            {historyAnswerEdit && historicalQuestion && (
-              <section className="gi-history-edit" aria-label="修改历史回答">
-                <h3 ref={historyHeading} tabIndex={-1}>
-                  修改已记录的回答
-                </h3>
-                <QuestionInput
-                  question={historicalQuestion}
-                  answer={historyAnswerEdit}
-                  disabled={blocked || uncertain}
-                  onChange={editHistoricalAnswer}
-                />
-                <p role="status" className="gi-hint">
-                  {historyJournalWarning ||
-                    "修改已保存在当前标签页，刷新可恢复。保存后会重新核对修改项及其依赖。"}
-                </p>
-                <div className="gi-step-actions">
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={blocked}
-                    onClick={clearHistoryEdit}
-                  >
-                    取消修改
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={blocked || uncertain || unavailable}
-                    onClick={saveHistoricalAnswer}
-                  >
-                    保存修改并重新梳理
-                  </button>
-                </div>
-              </section>
-            )}
-            {historyVisible && !historyAnswerEdit && !!draft?.answers.length && (
-              <section className="gi-history-answers" aria-label="已记录的回答">
-                <h4>已记录的回答</h4>
-                <ul>
-                  {draft.answers.map((answer) => (
-                    <li key={answer.questionId}>
-                      <strong>{answer.question.title}</strong>
-                      <p>
-                        {answer.state === "answered"
-                          ? Array.isArray(answer.value)
-                            ? answer.value.join("、")
-                            : answer.value
-                          : answer.state === "unknown"
-                            ? "暂时不知道"
-                            : "跳过"}
-                      </p>
-                      <small>
-                        {answer.confirmation === "confirmed" && !answer.needsReconfirmation
-                          ? "已确认"
-                          : "待重新确认"}
-                      </small>
-                      <button
-                        type="button"
-                        className="text-button"
-                        disabled={blocked || !!historyConflict}
-                        aria-label={`修改回答：${answer.question.title}`}
-                        onClick={() => openHistoricalAnswer(answer.questionId)}
-                      >
-                        修改回答
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            {!historyAnswerEdit &&
-              !questionsVisible &&
-              !analyzing &&
-              !uncertain &&
-              !summaryVisible &&
-              draft && (
-                <div className="gi-step-actions">
-                  <p className="gi-hint">已保存的要求等待重新分析，旧报告暂不可用。</p>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={blocked || unavailable || !!historyConflict}
-                    onClick={() => analyze(false)}
-                  >
-                    重新分析
-                  </button>
-                </div>
-              )}
+          <div className="gi-step-actions">
             <button
               type="button"
-              className="text-button gi-paper-exit"
-              onClick={() => dialogMotion.current?.close()}
+              className="text-button"
+              disabled={blocked || uncertain || unavailable}
+              onClick={() => analyze(true)}
             >
-              暂存并退出
+              跳过本轮，整理摘要
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={blocked || uncertain || unavailable}
+              onClick={() => analyze(false)}
+            >
+              继续梳理
+              <ArrowRight size={16} />
             </button>
           </div>
-        </Modal>
-      )}
+        </DisclosureMotion>
+        <DisclosureMotion open={summaryVisible} className="gi-summary">
+          <div className="gi-section-title">
+            <div>
+              <span>开始前，确认一下</span>
+              <h3 tabIndex={-1} data-disclosure-autofocus>
+                这是我们理解的任务。
+              </h3>
+            </div>
+            <Check size={23} />
+          </div>
+          <p className="gi-save-state" role="status" aria-live="polite">
+            {summary.status}
+          </p>
+          {summary.journalWarning && (
+            <p className="gi-error" role="alert">
+              {summary.journalWarning}
+            </p>
+          )}
+          {summary.status.startsWith("摘要尚未保存") && !summary.conflict && (
+            <button
+              type="button"
+              className="text-button"
+              disabled={blocked}
+              onClick={() => void operate(async () => {})}
+            >
+              重试保存摘要
+            </button>
+          )}
+          <div className="gi-summary-fields">
+            <label>
+              要达到的目标
+              <textarea
+                rows={2}
+                maxLength={3000}
+                value={challenge.goal}
+                disabled={blocked}
+                onChange={(event) => updateChallenge("goal", event.target.value)}
+              />
+            </label>
+            <label>
+              必须满足的限制
+              <textarea
+                rows={2}
+                maxLength={3000}
+                value={challenge.constraints}
+                disabled={blocked}
+                placeholder="尚未说明硬性限制，可在这里补充。"
+                onChange={(event) => updateChallenge("constraints", event.target.value)}
+              />
+            </label>
+            <label>
+              你更在意的事
+              <textarea
+                rows={2}
+                maxLength={1500}
+                value={challenge.preferences}
+                disabled={blocked}
+                placeholder="尚未说明偏好，可在这里补充。"
+                onChange={(event) => updateChallenge("preferences", event.target.value)}
+              />
+            </label>
+          </div>
+          <div className="gi-assumptions">
+            <h4>暂定假设 · 请逐条核对</h4>
+            {assumptions.length ? (
+              assumptions.map((assumption, i) => (
+                <label key={i}>
+                  <span>{i + 1}</span>
+                  <textarea
+                    rows={2}
+                    maxLength={500}
+                    disabled={blocked}
+                    value={assumption}
+                    onChange={(event) => {
+                      updateAssumptions((old) =>
+                        old.map((value, index) => (index === i ? event.target.value : value)),
+                      );
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    disabled={blocked}
+                    aria-label={`移除第 ${i + 1} 条假设`}
+                    onClick={() => {
+                      updateAssumptions((old) => old.filter((_, index) => index !== i));
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </label>
+              ))
+            ) : (
+              <p>没有额外的暂定假设。</p>
+            )}
+          </div>
+          <button
+            type="button"
+            className="gi-disclosure-trigger"
+            aria-controls={`${id}-advanced`}
+            aria-expanded={advanced}
+            onClick={() => setAdvanced(!advanced)}
+          >
+            预算、时间与备选方案
+            <ChevronDown size={15} />
+          </button>
+          <DisclosureMotion open={advanced} id={`${id}-advanced`}>
+            <div className="gi-advanced">
+              <label>
+                可投入金额（人民币）
+                <input
+                  type="number"
+                  min={0}
+                  max={100000000}
+                  value={challenge.budget ?? ""}
+                  placeholder="未说明"
+                  disabled={blocked}
+                  onChange={(event) =>
+                    updateChallenge(
+                      "budget",
+                      event.target.value === "" ? null : Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+              <label>
+                可投入时间（小时）
+                <input
+                  type="number"
+                  min={0.01}
+                  max={100000}
+                  step="any"
+                  value={challenge.timeHours ?? ""}
+                  placeholder="未说明"
+                  disabled={blocked}
+                  onChange={(event) =>
+                    updateChallenge(
+                      "timeHours",
+                      event.target.value === "" ? null : Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+              <label className="gi-wide">
+                已有备选方案（每行一个，最多三个）
+                <textarea
+                  rows={3}
+                  maxLength={902}
+                  value={challenge.options.join("\n")}
+                  disabled={blocked}
+                  onChange={(event) =>
+                    updateChallenge("options", event.target.value.split("\n").slice(0, 3))
+                  }
+                />
+              </label>
+            </div>
+            <p className="gi-hint">这里填写执行方案可用的金额和时间，模型调用费用另行记录。</p>
+          </DisclosureMotion>
+          <button
+            type="button"
+            className="primary-button gi-start"
+            disabled={blocked || uncertain || unavailable || goal !== draft?.goal}
+            onClick={() =>
+              void operate(async (epoch) => {
+                await ensureDraft();
+                const parsed = ChallengeSchema.safeParse({
+                  ...challenge,
+                  options: challenge.options.map((option) => option.trim()).filter(Boolean),
+                });
+                if (!parsed.success)
+                  throw new Error(
+                    parsed.error.issues[0]?.message ?? "请检查摘要中的目标和资源限制。",
+                  );
+                if (!current.current) return;
+                const submittedDraftId = current.current.id;
+                const snapshot = await request<ArenaSnapshot>(
+                  `/api/intakes/${submittedDraftId}/submit`,
+                  "POST",
+                  {
+                    revision: current.current.revision,
+                    challenge: parsed.data,
+                    assumptions: assumptions.map((value) => value.trim()).filter(Boolean),
+                  },
+                );
+                if (!alive.current || epoch !== generation.current) return;
+                onCreated(snapshot);
+                resetSummary();
+                clearIntakeDraftPointer(submittedDraftId);
+              })
+            }
+          >
+            {busy ? <LoaderCircle size={17} className="gi-spin" /> : <ArrowRight size={17} />}
+            开始推演
+          </button>
+        </DisclosureMotion>
+      </DisclosureMotion>
       <DisclosureMotion open={!!draft?.sources.length} className="gi-sources">
         <button
           type="button"
@@ -1930,12 +1494,8 @@ export function GuidedIntake({
               </button>
             ))}
           </div>
-          <DisclosureMotion
-            open={!!source}
-            className="gi-source-preview"
-            contentKey={source?.id ?? ""}
-          >
-            <div data-source-preview-content>
+          <DisclosureMotion open={!!source} className="gi-source-preview">
+            <div>
               <div className="gi-file-heading">
                 <strong>
                   {source?.filename} · {source?.location}

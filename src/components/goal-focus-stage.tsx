@@ -47,7 +47,6 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     // The entrance never freezes half-faded: a paused story clock must not hide the input.
     const introScope = createMotionScope("interaction");
     let field: Field | null = null;
-    let drawable = false;
     let visible = true;
     let windowActive = document.hasFocus();
     let expanded = false;
@@ -91,7 +90,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
     };
     const draw = (still = false) => {
       const f = field;
-      if (!f || !drawable) return;
+      if (!f) return;
       const { width, height, panel: p } = f;
       ctx.clearRect(0, 0, width, height);
       ctx.save();
@@ -223,7 +222,7 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       };
     };
     const loop = createMotionLoop((_, dt) => {
-      if (!field || !drawable || !visible || !windowActive || preference.matches) return false;
+      if (!field || !visible || !windowActive || preference.matches) return false;
       age += dt;
       focused += ((input.current.focused ? 1 : 0) - focused) * Math.min(1, dt * 6);
       input.current.energy = Math.max(0, input.current.energy - dt * 0.65);
@@ -245,7 +244,6 @@ export function GoalFocusStage({ children }: { children: ReactNode }) {
       // Canvas coordinates use the untransformed layout box, not the entering form's visual pose.
       const width = host.clientWidth;
       const height = host.clientHeight;
-      drawable = surface.clientWidth > 0 && surface.clientHeight > 0;
       field = {
         width,
         height,

@@ -4,8 +4,6 @@ import { notFound } from "next/navigation";
 import { RecordedExampleViewer } from "@/components/recorded-example-viewer";
 import { RECORDED_EXAMPLES, type RecordedExamplePayload } from "@/lib/recorded-examples";
 
-export const dynamicParams = false;
-
 export function generateStaticParams() {
   return RECORDED_EXAMPLES.map((example) => ({ slug: example.slug }));
 }
@@ -14,9 +12,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   const example = RECORDED_EXAMPLES.find((item) => item.slug === slug);
   return {
-    title: example ? `${example.title} · 需求梳理示例 · 方案擂台` : "未找到示例 · 方案擂台",
-    description:
-      "真实模型运行的模拟案例，回看需求、问题、选项、模拟回答和确认后的交付。回放新增模型用量为 0。",
+    title: example ? `${example.title} · 真实推演回看 · 方案擂台` : "未找到示例 · 方案擂台",
+    description: "真实生成记录，回看不调用模型。示例问题为预设，方案来自真实模型。",
   };
 }
 

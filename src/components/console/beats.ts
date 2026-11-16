@@ -1,5 +1,4 @@
 import { claimLabel, readableClaimText } from "@/components/claim-label";
-import { STAGE_LABELS } from "@/lib/contracts";
 import type {
   ArenaEvent,
   ArenaVersion,
@@ -12,81 +11,6 @@ import type {
 } from "@/lib/contracts";
 import { attackMeta } from "@/components/status";
 import { strategyChanges } from "@/components/text-diff";
-import type { ClarificationRun } from "@/lib/clarification-contracts";
-import type { RecordedAnswer } from "@/lib/intake-contracts";
-import { clarificationQuestionText } from "@/lib/step-context";
-import type { ReplayAction } from "@/lib/replay-contracts";
-import { buildClarificationReplay, REPLAY_ACTION_TITLES } from "@/lib/replay";
-
-export const CLARIFICATION_ROLES = {
-  A: "需求拆解",
-  B: "选项与执行审查",
-  C: "验收与遗漏审查",
-} as const;
-export const CLARIFICATION_STAGES: Record<Stage, string> = {
-  propose: "需求拆解",
-  attack: "选项与执行审查",
-  verify: "验收与遗漏审查",
-  revise: "确认与复核",
-  judge: "需求交接",
-};
-const TOPIC_LABELS = {
-  scope: "范围",
-  function: "功能",
-  content: "内容",
-  flow: "流程",
-  style: "风格",
-  acceptance: "验收",
-  materials: "材料",
-  authorization: "授权",
-} as const;
-
-export function clarificationLines(
-  run: ClarificationRun,
-  answers: readonly RecordedAnswer[] = [],
-): string[] {
-  const output = run.output;
-  if ("error" in output) return [output.error];
-  if ("items" in output)
-    return [
-      ...output.items.map(
-        (item) =>
-          `${item.title} — ${item.description}${item.acceptance.length ? `（验收待确认 ${item.acceptance.join("、")}）` : ""}`,
-      ),
-      ...output.retired.map((item) => `已排除 ${item.id} — ${item.reason}`),
-      ...output.suggestions.map((text) => `AI 建议（待确认） ${text}`),
-    ];
-  if ("questions" in output)
-    return [
-      ...output.questions.map((question) =>
-        clarificationQuestionText(
-          question,
-          answers.find((answer) => answer.questionId === question.id),
-        ),
-      ),
-      ...output.conflicts.map((conflict) => `需核对 ${conflict.description}`),
-    ];
-  return [
-    `C 审查意见 — ${output.ready ? "模型认为可以交接" : "仍需补齐"}`,
-    ...output.coverage.map(
-      (entry) =>
-        `${TOPIC_LABELS[entry.topic]} — ${entry.applicable ? "适用" : "本场景不适用"}，${entry.reason}`,
-    ),
-    ...output.gaps.map((item) => `遗漏待补 ${item.title} — ${item.description}`),
-    ...output.conflicts.map((text) => `需核对 ${text}`),
-  ];
-}
-
-export const stageName = (version: ArenaVersion, stage: Stage) =>
-  version.workflow === "clarification" ? CLARIFICATION_STAGES[stage] : STAGE_LABELS[stage];
-export const beatName = (beat: Beat) =>
-  beat.replayAction
-    ? beat.replayAction.kind === "questions"
-      ? "本轮补问"
-      : "保存的操作记录"
-    : beat.clarificationRun
-      ? CLARIFICATION_ROLES[beat.clarificationRun.role]
-      : nameOf(beat.agent);
 
 export const AGENTS = [
   { id: "A", name: "方案 A" },
@@ -114,9 +38,6 @@ export type Beat = {
   revision?: Revision;
   changes?: string[];
   verdict?: Verdict;
-  clarificationRun?: ClarificationRun;
-  clarificationAnswers?: RecordedAnswer[];
-  replayAction?: ReplayAction;
 };
 
 /** Read only the playback section already revealed to the user. */
@@ -124,35 +45,7 @@ export function latestShownRevision(shown: readonly Beat[], strategyId: string) 
   return shown.findLast((beat) => beat.revision?.strategyId === strategyId);
 }
 
-export function beatsOf(version: ArenaVersion, replayActions?: readonly ReplayAction[]): Beat[] {
-  if (version.workflow === "clarification" && version.clarification) {
-    const stages = { A: "propose", B: "attack", C: "verify" } as const;
-    return buildClarificationReplay(version, replayActions).map((step): Beat => {
-      const run = step.clarificationRun;
-      if (run)
-        return {
-          id: step.id,
-          stage: stages[run.role],
-          agent: run.role,
-          title: `${CLARIFICATION_ROLES[run.role]} · 第 ${run.round} 轮`,
-          plain: run.summary,
-          clarificationRun: run,
-        };
-      const action = step.replayAction!;
-      return {
-        id: step.id,
-        stage:
-          action.kind === "handoff" ? "judge" : action.kind === "questions" ? "attack" : "revise",
-        agent: action.kind === "handoff" ? "judge" : "B",
-        title: `${REPLAY_ACTION_TITLES[action.kind]} · 第 ${action.round} 轮`,
-        plain:
-          action.source?.kind === "snapshot"
-            ? "按保存记录重建。本次展示不代表原始点击顺序或输入速度。"
-            : "依据保存的请求与回答展示本次操作。",
-        replayAction: action,
-      };
-    });
-  }
+export function beatsOf(version: ArenaVersion): Beat[] {
   const beats: Beat[] = [];
   for (const s of version.strategies)
     beats.push({

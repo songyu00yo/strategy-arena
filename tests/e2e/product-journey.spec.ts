@@ -96,9 +96,8 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
         });
       if (path === "/api/intakes" && method === "POST") {
         const body = request.postDataJSON();
-        expect(body).toEqual({ goal, modelMode: "gpt-6.1-terra", workflow: "clarification" });
-        // Keep this existing five-stage fixture on the legacy record contract.
-        draft = fixtureIntake({ goal: body.goal, modelMode: body.modelMode, id: draft.id });
+        expect(body).toEqual({ goal, modelMode: "gpt-6.1-terra" });
+        draft = fixtureIntake({ ...body, id: draft.id });
         return route.fulfill({ status: 201, json: draft });
       }
       if (path === `/api/intakes/${draft.id}/attachments` && method === "POST") {
@@ -219,7 +218,7 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
   });
 
   await page.goto("/");
-  await page.getByRole("textbox", { name: "你想做什么", exact: true }).fill(goal);
+  await page.getByRole("textbox", { name: "你想解决什么问题？", exact: true }).fill(goal);
   await page.getByLabel("选择参考材料", { exact: true }).setInputFiles({
     name: source.filename,
     mimeType: "text/plain",
@@ -228,12 +227,12 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
   await expect(page.getByText("文字已提取", { exact: true })).toBeVisible();
   expect(analyses).toEqual([]);
   expect(submitted).toEqual([]);
-  await page.getByRole("button", { name: "开始梳理", exact: true }).click();
+  await page.getByRole("button", { name: "开始分析", exact: true }).click();
   await page
     .getByRole("group", { name: question.title, exact: true })
     .getByRole("radio", { name: "独立完成，不买设备", exact: true })
     .check();
-  await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
+  await page.getByRole("button", { name: "继续梳理", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "这是我们理解的任务。", exact: true }),
   ).toBeVisible();
@@ -241,7 +240,7 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
   expect(submitted).toEqual([]);
   expect(versions).toEqual([]);
   expect(advances).toEqual([]);
-  await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
+  await page.getByRole("button", { name: "开始推演", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "测试裁决：先做最小样片", exact: true }),
   ).toBeVisible();

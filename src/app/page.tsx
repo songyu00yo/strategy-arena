@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, startTransition } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -36,7 +36,6 @@ import type { StepContext } from "@/lib/step-context";
 import { GuidedIntake } from "@/components/guided-intake";
 import { RecordedExamples } from "@/components/recorded-examples";
 import { GoalFocusStage } from "@/components/goal-focus-stage";
-import { moveScroll, revealInWindow } from "@/components/motion-scroll";
 import { AccessGate } from "@/components/access-gate";
 import { IntakeContext } from "@/components/intake-context";
 import { DecisionReviewPanel } from "@/components/decision-review-panel";
@@ -96,18 +95,10 @@ function RunNotice({
       next: "这笔预留暂不释放，也不会自动重试。请让运行服务的人核对调用结果和费用。下方保留了已有结果。",
     },
     paused: {
-      title: version.waitingForIntake
-        ? "等待你回答，进度已保存"
-        : version.workflow === "clarification"
-          ? "需求草稿包含待确认事项"
-          : "本轮已停止",
-      next: version.waitingForIntake
-        ? "打开“我的历史”中的对应补问草稿，确认回答后回到当前任务继续。"
-        : version.workflow === "clarification"
-          ? "原补充与调整入口可继续修订，已确认记录与旧版本保留。"
-          : demo
-            ? "演示已停止，已展示的预设内容会保留。未调用模型，不产生费用。"
-            : "不再发起新步骤。已发出的请求仍可能返回并计费，迟到的结果归入这一版本。",
+      title: "本轮已停止",
+      next: demo
+        ? "演示已停止，已展示的预设内容会保留。未调用模型，不产生费用。"
+        : "不再发起新步骤。已发出的请求仍可能返回并计费，迟到的结果归入这一版本。",
     },
   }[version.status as "failed" | "uncertain" | "paused"];
   if (!copy && !version.error) return null;
@@ -129,7 +120,7 @@ function RunNotice({
     </div>
   );
 }
-function Page() {
+export default function Page() {
   const arena = useArena();
   const [identityEpoch, setIdentityEpoch] = useState(0);
   const [versionId, setVersionId] = useState<string | null>(null);
@@ -182,7 +173,7 @@ function Page() {
   const chooseVersion = (id: string | null) => {
     navigationEpoch.current += 1;
     versionPin.current = null;
-    startTransition(() => setVersionId(id));
+    setVersionId(id);
   };
   const releaseVersionPin = (pin = versionPin.current) => {
     if (!pin || versionPin.current !== pin) return;
@@ -237,7 +228,7 @@ function Page() {
     cancelAnimationFrame(locateFrame.current);
     locateFrame.current = requestAnimationFrame(() => {
       const target = document.getElementById(`dispute-${a.id}`);
-      if (target) revealInWindow(target, { block: "center" });
+      target?.scrollIntoView({ block: "center" });
       target?.focus({ preventScroll: true });
     });
   };
@@ -294,7 +285,7 @@ function Page() {
       // Restoring data must not override a user's current control. Explicit local navigation
       // defaults to the new heading, unless focus moved to another control before this frame.
       if (interactive && (!localNavigation || focused !== focusAtSchedule)) return;
-      moveScroll(window, { top: 0 }, { duration: 320 });
+      window.scrollTo({ top: 0, behavior: "instant" });
       headingRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
@@ -311,7 +302,7 @@ function Page() {
     parentVersion && selected ? challengeChanges(parentVersion.challenge, selected.challenge) : [];
   return (
     <div className={`site-shell console-shell ${arena.snapshot ? "" : "home focus-home"}`}>
-      <ClickFx />
+      {arena.snapshot && <ClickFx />}
       <a href="#main" className="skip-link">
         跳转到主要内容
       </a>
@@ -348,11 +339,9 @@ function Page() {
                 chooseVersion(null);
               }}
               onOpenIntake={(id) => {
-                startTransition(() => {
-                  arena.openIntake(id);
-                  chooseVersion(null);
-                  setIdentityEpoch((epoch) => epoch + 1);
-                });
+                arena.openIntake(id);
+                chooseVersion(null);
+                setIdentityEpoch((epoch) => epoch + 1);
               }}
             />
           )}
@@ -367,9 +356,7 @@ function Page() {
               : configured === false
                 ? "模型待配置"
                 : arena.health
-                  ? !arena.snapshot || selected?.workflow === "clarification"
-                    ? "真实模型梳理"
-                    : "真实模型推演"
+                  ? "真实模型推演"
                   : "连接服务中"}
             <Settings2 size={13} />
           </button>
@@ -409,9 +396,9 @@ function Page() {
         {!arena.snapshot ? (
           <>
             <div className="goal-landing">
-              <section className="goal-landing-center" aria-label="开始一次需求梳理">
+              <section className="goal-landing-center" aria-label="开始一次方案推演">
                 <div className="home-intro">
-                  <h1>你想做什么</h1>
+                  <h1>你想解决什么问题？</h1>
                 </div>
                 <GoalFocusStage>
                   <div className="h-form">
@@ -441,10 +428,8 @@ function Page() {
                         pending={arena.busy}
                         disabled={arena.restoring || !arena.health || accessRequired}
                         onCreated={(snapshot) => {
-                          startTransition(() => {
-                            arena.adopt(snapshot);
-                            chooseVersion(null);
-                          });
+                          arena.adopt(snapshot);
+                          chooseVersion(null);
                         }}
                       />
                     )}
@@ -456,7 +441,7 @@ function Page() {
                           <p>
                             {arena.healthError
                               ? "连接恢复后刷新页面即可继续。"
-                              : "你可以先看需求梳理示例。模型配置完成后才能开始新的梳理。"}
+                              : "你可以先看已有示例。配置完成前，新的推演不会发起收费调用。"}
                           </p>
                           <button
                             type="button"
@@ -690,11 +675,7 @@ function Page() {
                       </label>
                       <span className={`run-status ${selected.status}`} role="status">
                         {selected.status === "running" && <span className="working-dot" />}
-                        {selected.waitingForIntake
-                          ? "等待回答"
-                          : selected.workflow === "clarification" && selected.status === "completed"
-                            ? "需求记录已生成"
-                            : statusLabels[selected.status]}
+                        {statusLabels[selected.status]}
                       </span>
                       {historical && <span className="historical-tag">只读</span>}
                     </div>
@@ -915,17 +896,13 @@ function Page() {
               <p>
                 {demo
                   ? "演示中的路线、证据、裁决、Token 数和费用都是预设的，实际费用为 0。"
-                  : !selected || selected.workflow === "clarification"
-                    ? "梳理需求时，A、B、C分别调用所选模型。需要模型解读材料时，也会计入用量。费用按保存的调用记录估算，按原始币种显示。等待你回答和回看已有记录不会新增模型调用。"
-                    : "AI 分析问题、读图和推演方案时，都会调用所选模型。费用取决于问题长度、材料和推演步骤。运行时会根据已记录的用量估算费用，按所选模型的原始币种显示。"}
+                  : "AI 分析问题、读图和推演方案时，都会调用所选模型。费用取决于问题长度、材料和推演步骤。运行时会根据已记录的用量估算费用，按所选模型的原始币种显示。"}
               </p>
             </div>
             <p className="muted">
               {demo
                 ? "演示内容用于体验界面和流程，不能证明模型效果。"
-                : !selected || selected.workflow === "clarification"
-                  ? "A负责拆解需求，B给出选项并核对依赖，C检查遗漏。你的确认与模型建议分别保存。"
-                  : "同一版本的不同思路由同一个选定模型分角色生成，不代表不同模型的独立意见。"}
+                : "同一版本的不同思路由同一个选定模型分角色生成，不代表不同模型的独立意见。"}
             </p>
           </div>
         </Modal>
@@ -1183,9 +1160,6 @@ function Page() {
     </div>
   );
 }
-
-export default Page;
-
 function CornerIcon() {
   return <span aria-hidden="true">↳</span>;
 }

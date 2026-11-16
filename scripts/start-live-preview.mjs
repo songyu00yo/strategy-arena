@@ -160,18 +160,23 @@ export async function prepareLivePreview(options, dependencies = {}) {
     throw new Error(
       "Release must have a clean full SHA and complete build identity for this platform and Node version.",
     );
-  if (
-    ![
-      "server.js",
-      ".next/BUILD_ID",
-      ".next/static",
-      "migrations/001_initial.sql",
-      "migrations/002_intakes.sql",
-      "migrations/003_decision_reviews.sql",
-      "migrations/billing/002_limit_audit.sql",
-    ].every((path) => existsSync(join(release, path)))
-  )
-    throw new Error("Standalone release is incomplete.");
+  const missingFiles = [
+    "server.js",
+    ".next/BUILD_ID",
+    ".next/static",
+    "migrations/001_initial.sql",
+    "migrations/002_intakes.sql",
+    "migrations/003_decision_reviews.sql",
+    "migrations/004_identity.sql",
+    "migrations/005_agent.sql",
+    "migrations/006_planning.sql",
+    "migrations/billing/001_initial.sql",
+    "migrations/billing/002_limit_audit.sql",
+    "migrations/billing/003_settlement_metadata.sql",
+    "migrations/billing/004_usage_policy.sql",
+  ].filter((path) => !existsSync(join(release, path)));
+  if (missingFiles.length)
+    throw new Error(`Standalone release is incomplete; missing ${missingFiles.join(", ")}.`);
   const billing = (dependencies.readBillingStatus ?? billingStatus)(billingDatabase);
   const stage = billing.activeStage;
   if (

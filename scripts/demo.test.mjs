@@ -71,6 +71,31 @@ after(() => {
   upstream.closeAllConnections();
 });
 
+test("the demo root redirects to the legacy page without reaching the planning entry", async () => {
+  forwarded = [];
+  for (const method of ["GET", "HEAD"]) {
+    const response = await fetch(`${base()}/`, { method, redirect: "manual" });
+    assert.equal(response.status, 307);
+    assert.equal(response.headers.get("location"), "/?legacy=1");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  const response = await fetch(`${base()}/?preview=1`, { redirect: "manual" });
+  assert.equal(response.status, 307);
+  assert.equal(response.headers.get("location"), "/?preview=1&legacy=1");
+  assert.deepEqual(forwarded, []);
+});
+
+test("explicit legacy links and page assets keep their original routes", async () => {
+  forwarded = [];
+  const paths = ["/?legacy=1", "/?arena=demo-existing", "/?examples=1", "/_next/static/app.js"];
+  for (const path of paths) {
+    const response = await fetch(`${base()}${path}`, { redirect: "manual" });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("location"), null);
+  }
+  assert.deepEqual(forwarded, paths);
+});
+
 test("no /api request ever leaves the demo server", async () => {
   forwarded = [];
   const health = await (await fetch(`${base()}/api/health`)).json();
@@ -78,6 +103,11 @@ test("no /api request ever leaves the demo server", async () => {
   assert.equal(health.model.id, DEMO_MODEL.id);
   for (const path of ["/api", "/api/anything/else", "/api/access", "/api/health?model=gpt"])
     await fetch(`${base()}${path}`, { method: "POST", body: "{}" });
+  for (const path of ["/api/planning", "/api/planning/unsupported/advance"]) {
+    const response = await fetch(`${base()}${path}`, { method: "POST", body: "{}" });
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).code, "NOT_FOUND");
+  }
   await fetch(`${base()}/api/arenas/none/advance`, { method: "POST", body: "{}" });
   assert.deepEqual(forwarded, []);
 });
@@ -309,7 +339,11 @@ test("invalid create/rematch requests return contract errors without creating a 
 });
 
 test("pages come through with the demo notice", async () => {
-  const html = await (await fetch(`${base()}/`)).text();
-  assert.match(html, /演示模式/);
+  forwarded = [];
+  const response = await fetch(`${base()}/`);
+  assert.equal(new URL(response.url).searchParams.get("legacy"), "1");
+  const html = await response.text();
+  assert.match(html, /旧版演示模式/);
   assert.match(html, /page/);
+  assert.deepEqual(forwarded, ["/?legacy=1"]);
 });

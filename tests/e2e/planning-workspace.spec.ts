@@ -1310,9 +1310,16 @@ test("synthetic API: finishing questions early reveals expert work before the mo
   const initial = questioned(analyzed(initialSnapshot(), "early-A"), "early-B");
   const api = await installSyntheticApi(page, initial);
   await page.goto(`/?planning=${sessionId}`);
+  // A transparent backwards-fill delay still has a measurable button box.
+  // Begin the ordinary user click after this card's actual entrance completes.
+  await page.locator(".p-slot-B").evaluate(async (slot) => {
+    await Promise.all(
+      slot.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+    );
+  });
   await page
-    .getByRole("button", { name: new RegExp(question.title) })
-    .first()
+    .locator('[data-planning-agent="B"]')
+    .getByRole("button", { name: question.title, exact: true })
     .click();
   const paper = page.getByRole("dialog", { name: question.title, exact: true });
   await paper.getByRole("button", { name: "先看分析", exact: true }).click();

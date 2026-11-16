@@ -273,9 +273,12 @@ export function QuestionPaper({
               )}
               {question.type === "number" && (
                 <label className="p-own-answer">
-                  <span>你的数值{question.unit ? `（${question.unit}）` : ""}</span>
+                  <span id={`${id}-number-label`}>
+                    你的数值{question.unit ? `（${question.unit}）` : ""}
+                  </span>
                   <input
                     type="number"
+                    aria-labelledby={`${id}-number-label`}
                     step="any"
                     placeholder={question.placeholder}
                     value={answer.number ?? ""}
@@ -290,10 +293,11 @@ export function QuestionPaper({
                 </label>
               )}
               <label className="p-own-answer">
-                <span>
+                <span id={`${id}-text-label`}>
                   {question.type === "text" ? "写下你的想法" : "也可以补充，或提出自己的方向"}
                 </span>
                 <textarea
+                  aria-labelledby={`${id}-text-label`}
                   rows={question.type === "text" ? 4 : 2}
                   maxLength={6000}
                   value={answer.text}

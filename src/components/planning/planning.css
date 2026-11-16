@@ -341,13 +341,15 @@
 }
 .p-under-sheet {
   position: absolute;
+  z-index: 0;
   pointer-events: none;
   inset: 17px -4px -5px 5px;
   background: #f4eee2;
   border: 1px solid #bfb6a5;
   border-radius: 3px;
   box-shadow: 1px 1px 0 rgb(21 19 15 / 0.15);
-  transform: rotate(2deg);
+  /* Keep both backing sheets behind the most distant edge of a tilted board. */
+  transform: translateZ(-18px) rotate(2deg);
 }
 .p-slot-A .p-under-sheet {
   top: 37px;
@@ -356,13 +358,14 @@
   top: 53px;
 }
 .p-under-two {
-  transform: rotate(-2deg);
+  transform: translateZ(-24px) rotate(-2deg);
   inset-inline: 9px -6px;
   bottom: -10px;
   background: #f6f0e4;
 }
 .console-shell .p-workspace .p-board {
   position: relative;
+  z-index: 1;
   overflow: visible;
   align-self: auto;
   max-height: none;
@@ -1856,6 +1859,9 @@
     scroll-behavior: auto;
   }
   .p-under-sheet {
-    transform: none;
+    transform: translateZ(-18px);
+  }
+  .p-under-two {
+    transform: translateZ(-24px);
   }
 }

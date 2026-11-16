@@ -14,6 +14,8 @@ import type {
 } from "../../src/lib/planning-contracts";
 import { DEFAULT_MODEL_ID, MODEL_CATALOG } from "../../src/lib/model-catalog";
 
+test.use({ video: { mode: "on", size: { width: 1440, height: 900 } } });
+
 const date = "2026-11-16T10:00:00.000Z";
 const goal = "测试：保留纸面视觉，先进入三 Agent 工作台，再一起把执行方案想清楚。";
 const sessionId = "synthetic-planning-ui";

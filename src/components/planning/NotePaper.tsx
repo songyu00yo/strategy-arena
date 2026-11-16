@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUpRight, LoaderCircle, X } from "lucide-react";
 import type { PlanningController } from "../use-planning";
 import { acquireMotionHold } from "../console/motion-runtime";
@@ -15,6 +15,7 @@ export function NotePaper({
   itemIds?: string[];
   onClose: () => void;
 }) {
+  const id = useId();
   const [text, setText] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
   const key = `strategy-arena:planning:note:${controller.snapshot!.session.id}`;
@@ -93,8 +94,9 @@ export function NotePaper({
             </p>
           )}
           <label className="p-own-answer">
-            <span>想让大家知道的事</span>
+            <span id={`${id}-text-label`}>想让大家知道的事</span>
             <textarea
+              aria-labelledby={`${id}-text-label`}
               rows={7}
               maxLength={6000}
               value={text}

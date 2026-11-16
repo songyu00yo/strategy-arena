@@ -582,6 +582,7 @@ export function PlanningWorkspace({ controller }: { controller: PlanningControll
               <label>
                 <span className="sr-only">按角色筛选日志</span>
                 <select
+                  aria-label="按角色筛选日志"
                   value={actorFilter}
                   onChange={(event) => {
                     setActorFilter(event.target.value);

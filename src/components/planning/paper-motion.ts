@@ -6,6 +6,7 @@ const flights = new WeakMap<HTMLElement, () => void>();
 
 /** Read projected corners once, including the Agent board's parent perspective. */
 export function paperCorners(element: HTMLElement): Quad {
+  const { scrollLeft, scrollTop } = element;
   const markers = [
     [0, 0],
     [element.offsetWidth, 0],
@@ -13,7 +14,7 @@ export function paperCorners(element: HTMLElement): Quad {
     [0, element.offsetHeight],
   ].map(([x, y]) => {
     const marker = document.createElement("i");
-    marker.style.cssText = `position:absolute;left:${x - element.clientLeft}px;top:${y - element.clientTop}px;width:0;height:0;margin:0;padding:0;border:0;pointer-events:none;visibility:hidden`;
+    marker.style.cssText = `position:absolute;left:${x - element.clientLeft + scrollLeft}px;top:${y - element.clientTop + scrollTop}px;width:0;height:0;margin:0;padding:0;border:0;pointer-events:none;visibility:hidden`;
     element.appendChild(marker);
     return marker;
   });

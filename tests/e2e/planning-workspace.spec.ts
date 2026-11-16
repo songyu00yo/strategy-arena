@@ -14,6 +14,7 @@ import type {
 } from "../../src/lib/planning-contracts";
 import { PLANNING_AGENT_IDS, PLANNING_CONTRACT_VERSION } from "../../src/lib/planning-contracts";
 import { DEFAULT_MODEL_ID, MODEL_CATALOG } from "../../src/lib/model-catalog";
+import { paperCorners } from "../../src/components/planning/paper-motion";
 
 test.use({ video: { mode: "on", size: { width: 1440, height: 900 } } });
 
@@ -429,9 +430,10 @@ function reviewed(previous: PlanningSnapshot, operationId: string, ready: boolea
       "你想通过个人网站展示自己的作品，让有兴趣的人了解你的能力并取得联系。以小范围的静态作品展示起步具有可行性，素材和时间还需要核对。",
     sections: structuredClone(next.session.draft!.sections).map((section, index) => ({
       ...section,
-      content: index === 0
-        ? `${section.content}\n\n给 AI 的执行说明：INTERNAL_BODY_MUST_NOT_RENDER`
-        : section.content,
+      content:
+        index === 0
+          ? `${section.content}\n\n给 AI 的执行说明：INTERNAL_BODY_MUST_NOT_RENDER`
+          : section.content,
     })),
     tasks: [
       {
@@ -763,7 +765,9 @@ test("synthetic API: five-agent workspace, automatic single choice, persisted re
   const report = await openReport(page);
   await expect(report.getByRole("checkbox")).toHaveCount(0);
   await expect(
-    report.getByText(/INTERNAL_(?:PROMPT_MUST_NOT_RENDER|MARKDOWN_MUST_NOT_EXPORT|BODY_MUST_NOT_RENDER)/),
+    report.getByText(
+      /INTERNAL_(?:PROMPT_MUST_NOT_RENDER|MARKDOWN_MUST_NOT_EXPORT|BODY_MUST_NOT_RENDER)/,
+    ),
   ).toHaveCount(0);
   await expect(report.getByRole("button", { name: "执行提示词", exact: true })).toHaveCount(0);
   await expect(report).toContainText("可投入时间尚未核实");
@@ -1147,9 +1151,28 @@ test("synthetic API: dense public workbench exposes live findings and readable h
   await expect(page.locator('[data-planning-agent="C"]')).toContainText("目前适合先做一个");
   await expect(page.getByRole("button", { name: "执行提示词", exact: true })).toHaveCount(0);
   await screenshot(page, testInfo, "desktop-dense-live-analysis");
-  await page.getByRole("region", { name: "项目档案", exact: true }).evaluate((element) =>
-    element.scrollIntoView({ block: "start", behavior: "instant" }),
-  );
+  // The animation anchor is the visible paper frame, even after its prose scrolls.
+  const scrollablePaper = page.locator('[data-planning-agent="D"] .p-agent-paper');
+  const readCorners = paperCorners as (
+    element: HTMLElement | SVGElement,
+  ) => ReturnType<typeof paperCorners>;
+  const beforeScroll = await scrollablePaper.evaluate(readCorners);
+  const scrolled = await scrollablePaper.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    return element.scrollTop;
+  });
+  expect(scrolled).toBeGreaterThan(0);
+  const afterScroll = await scrollablePaper.evaluate(readCorners);
+  for (let index = 0; index < beforeScroll.length; index++) {
+    expect(Math.abs(afterScroll[index].x - beforeScroll[index].x)).toBeLessThan(2);
+    expect(Math.abs(afterScroll[index].y - beforeScroll[index].y)).toBeLessThan(2);
+  }
+  await scrollablePaper.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await page
+    .getByRole("region", { name: "项目档案", exact: true })
+    .evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
   await page.locator(".p-log-entry > summary").first().click();
   await screenshot(page, testInfo, "desktop-project-archive");
   await page.getByLabel("按角色筛选日志", { exact: true }).selectOption("D");
@@ -1175,9 +1198,9 @@ test("synthetic API: dense public workbench exposes live findings and readable h
   await page.getByRole("button", { name: /查看正在分析的/ }).click();
   await expect(page.locator('[data-planning-agent="C"]')).toBeInViewport({ ratio: 0.5 });
   await screenshot(page, testInfo, "mobile-current-analysis");
-  await page.getByRole("region", { name: "项目档案", exact: true }).evaluate((element) =>
-    element.scrollIntoView({ block: "start", behavior: "instant" }),
-  );
+  await page
+    .getByRole("region", { name: "项目档案", exact: true })
+    .evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
   await screenshot(page, testInfo, "mobile-project-archive");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

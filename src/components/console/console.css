@@ -39,15 +39,9 @@
   font-variant-numeric: tabular-nums;
 }
 .console-shell .site-footer,
+.console-shell .skip-link:not(:focus),
 .console-shell .wordmark {
   display: none;
-}
-.console-shell .skip-link {
-  top: 12px;
-  transform: translateY(-72px);
-}
-.console-shell .skip-link:focus {
-  transform: translateY(0);
 }
 .console-shell .site-header {
   position: absolute;
@@ -3193,14 +3187,6 @@
   color: var(--c-t2);
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-.c-result .act > button.c-report-export {
-  position: static;
-  display: block;
-  margin-top: 10px;
-  max-width: 100%;
-  white-space: normal;
-  text-align: left;
 }
 .c-result .act > button:hover {
   color: var(--c-t0);

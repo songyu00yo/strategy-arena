@@ -9,13 +9,13 @@
 }
 .console-shell :is(button, a, select, summary, input, textarea) {
   transition:
-    background-color 0.14s var(--reveal-ease),
-    color 0.14s var(--reveal-ease),
-    border-color 0.14s var(--reveal-ease),
-    box-shadow 0.14s var(--reveal-ease),
-    transform 0.14s var(--reveal-ease),
-    translate 0.14s var(--reveal-ease),
-    outline-offset 0.14s var(--reveal-ease);
+    background-color 0.45s var(--reveal-ease),
+    color 0.45s var(--reveal-ease),
+    border-color 0.45s var(--reveal-ease),
+    box-shadow 0.55s var(--reveal-ease),
+    transform 0.55s var(--reveal-ease),
+    translate 0.55s var(--reveal-ease),
+    outline-offset 0.4s var(--reveal-ease);
 }
 /* Focus is a vermilion rule that settles around the control, as visible as hover. */
 .console-shell
@@ -63,7 +63,7 @@
 }
 .console-shell .secondary-button::before {
   background: var(--ink) !important;
-  transition: transform 0.22s var(--glide-ease) !important;
+  transition: transform 0.6s var(--glide-ease) !important;
 }
 @media (hover: hover) {
   .console-shell .secondary-button:not(:disabled):hover {
@@ -88,7 +88,7 @@
   background: var(--vermilion) !important;
   transform: scaleX(0);
   transform-origin: left center !important;
-  transition: transform 0.22s var(--reveal-ease) !important;
+  transition: transform 0.7s var(--reveal-ease) !important;
 }
 @media (hover: hover) {
   .console-shell .text-button:not(:disabled):hover {
@@ -148,8 +148,8 @@
 }
 .console-shell :is(button, a) svg.lucide-x {
   transition:
-    rotate 0.22s var(--reveal-ease),
-    transform 0.22s var(--reveal-ease);
+    rotate 0.7s var(--reveal-ease),
+    transform 0.7s var(--reveal-ease);
 }
 
 /* ---------- 5. Icon buttons: a small paper square, rotated icon, pressed flat ---------- */
@@ -176,7 +176,7 @@
 /* ---------- 6. Model pill: a ticket stub ---------- */
 .console-shell .model-pill::before {
   background: var(--ink) !important;
-  transition: transform 0.22s var(--glide-ease) !important;
+  transition: transform 0.6s var(--glide-ease) !important;
 }
 @media (hover: hover) {
   .console-shell .model-pill:not(:disabled):hover {
@@ -202,7 +202,7 @@
 /* ---------- 8. Player controls on the ink plate: paper wiped in ---------- */
 .console-shell .c-ctrl button::before {
   background: var(--paper) !important;
-  transition: transform 0.14s var(--glide-ease) !important;
+  transition: transform 0.55s var(--glide-ease) !important;
 }
 @media (hover: hover) {
   .console-shell .c-ctrl button:not(:disabled):hover {
@@ -235,8 +235,8 @@
   background: linear-gradient(rgb(154 106 28 / 0.18), rgb(154 106 28 / 0.18)) left / 0% 100%
     no-repeat;
   transition:
-    background-size 0.22s var(--reveal-ease),
-    box-shadow 0.14s var(--reveal-ease);
+    background-size 0.7s var(--reveal-ease),
+    box-shadow 0.5s var(--reveal-ease);
 }
 
 /* ---------- 10. Ledger rows: highlighter sweep, a vermilion rule when chosen ---------- */
@@ -245,9 +245,9 @@
   background: linear-gradient(rgb(154 106 28 / 0.16), rgb(154 106 28 / 0.16)) left / 0% 100%
     no-repeat;
   transition:
-    background-size 0.22s var(--reveal-ease),
-    padding-left 0.22s var(--reveal-ease),
-    color 0.14s;
+    background-size 0.75s var(--reveal-ease),
+    padding-left 0.6s var(--reveal-ease),
+    color 0.4s;
 }
 @media (hover: hover) {
   .console-shell .c-root .c-row:hover,
@@ -269,13 +269,13 @@
   width: 3px;
   background: var(--vermilion);
   transform: scaleY(0);
-  transition: transform 0.22s var(--reveal-ease);
+  transition: transform 0.6s var(--reveal-ease);
 }
 .console-shell .c-root .c-row:is(.sel, .located)::before {
   transform: scaleY(1);
 }
 .console-shell .c-chart .row {
-  transition: background-size 0.22s var(--reveal-ease);
+  transition: background-size 0.75s var(--reveal-ease);
   background: linear-gradient(rgb(154 106 28 / 0.14), rgb(154 106 28 / 0.14)) left / 0% 100%
     no-repeat;
 }
@@ -301,7 +301,7 @@
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   transform: rotate(-45deg);
-  transition: transform 0.22s var(--reveal-ease);
+  transition: transform 0.6s var(--reveal-ease);
 }
 .console-shell details[open] > summary::before {
   transform: rotate(45deg);
@@ -320,10 +320,10 @@
   background-position: left bottom;
   background-size: 0% 2px;
   transition:
-    border-color 0.14s var(--reveal-ease),
-    box-shadow 0.22s var(--reveal-ease),
-    transform 0.22s var(--reveal-ease),
-    background-size 0.22s var(--reveal-ease);
+    border-color 0.5s var(--reveal-ease),
+    box-shadow 0.6s var(--reveal-ease),
+    transform 0.6s var(--reveal-ease),
+    background-size 0.8s var(--reveal-ease);
 }
 .console-shell
   :is(.field, .modal-body, dialog)
@@ -353,7 +353,7 @@
   inset: auto 6px 0 6px !important;
   height: 1.5px !important;
   background: var(--vermilion) !important;
-  transition: transform 0.22s var(--reveal-ease) !important;
+  transition: transform 0.7s var(--reveal-ease) !important;
 }
 @media (hover: hover) {
   .console-shell .site-header .identity-history-trigger:not(:disabled):hover {
@@ -361,38 +361,4 @@
     transform: none;
     box-shadow: none;
   }
-}
-
-/* Feedback changes the paper's ink and depth while the hit rectangle remains steady. */
-.console-shell :is(button, a) svg {
-  transition-duration: 140ms;
-}
-.console-shell
-  :is(
-    .primary-button,
-    .gi-analyze,
-    .secondary-button,
-    .text-button,
-    .icon-button,
-    .model-pill,
-    .stop-button,
-    .c-ctrl button,
-    .identity-history-trigger
-  ):not(:disabled):is(:hover, :active) {
-  transform: none !important;
-  translate: none;
-}
-.console-shell :is(input, textarea, select):focus {
-  transform: none !important;
-}
-.console-shell .c-time .ticks button:hover:not(.cur) {
-  transform: none !important;
-}
-.console-shell :is(input, textarea, select):focus-visible,
-.console-shell label:has(input:focus-visible) {
-  outline: 2px solid var(--vermilion);
-  outline-offset: 2px;
-}
-.console-shell [aria-disabled="true"] {
-  cursor: not-allowed;
 }

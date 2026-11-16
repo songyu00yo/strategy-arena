@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { MAX_ANSWER_LENGTH } from "./answer-options";
 import {
   ChallengeSchema,
   ExecutionModeSchema,
@@ -17,46 +16,15 @@ export const QuestionSchema = z.object({
   type: z.enum(["text", "single", "multiple", "number"]),
   options: z.array(z.string().min(1).max(100)).max(6),
   unit: z.string().max(30),
-  dependsOn: z.array(z.string().max(40)).max(12).optional(),
-  affects: z
-    .array(
-      z.enum(["goal", "constraints", "preferences", "options", "domain", "budget", "timeHours"]),
-    )
-    .max(7)
-    .optional(),
-  authorization: z.string().max(300).optional(),
-  decisionId: z.string().max(40).optional(),
 });
 export type IntakeQuestion = z.infer<typeof QuestionSchema>;
 export const AnswerSchema = z.object({
   questionId: z.string().min(1).max(40),
   state: z.enum(["answered", "unknown", "skipped"]),
-  value: z
-    .union([z.string().max(MAX_ANSWER_LENGTH), z.array(z.string().max(MAX_ANSWER_LENGTH)).max(6)])
-    .refine(
-      (value) =>
-        (Array.isArray(value) ? value.reduce((sum, item) => sum + item.length, 0) : value.length) <=
-        MAX_ANSWER_LENGTH,
-      "答案总长度不能超过 3000 字符。",
-    ),
+  value: z.union([z.string().max(3000), z.array(z.string().max(100)).max(6)]),
 });
 export type IntakeAnswer = z.infer<typeof AnswerSchema>;
-export type RecordedAnswer = IntakeAnswer & {
-  question: IntakeQuestion;
-  confirmation?: "confirmed" | "pending";
-  confirmedRevision?: number;
-  confirmedAt?: string;
-  needsReconfirmation?: boolean;
-};
-export interface IntakeConfirmation {
-  summary?: { revision: number; confirmedAt: string; challenge: Challenge };
-  pendingSummaryFields?: (keyof Challenge)[];
-  history: Array<{
-    revision: number;
-    answers: RecordedAnswer[];
-    summary?: IntakeConfirmation["summary"];
-  }>;
-}
+export type RecordedAnswer = IntakeAnswer & { question: IntakeQuestion };
 export interface MaterialSource {
   id: string;
   attachmentId: string;
@@ -77,11 +45,8 @@ export interface IntakeAttachment {
   locations: string[];
   warnings: string[];
   error?: string;
-  sourceAttachmentId?: string;
 }
 export interface IntakeDraft {
-  workflow?: "clarification";
-  clarification?: import("./clarification-contracts").ClarificationState;
   id: string;
   revision: number;
   goal: string;
@@ -89,7 +54,6 @@ export interface IntakeDraft {
   status: "input" | "analyzing" | "questions" | "summary" | "failed" | "uncertain" | "submitted";
   round: number;
   questions: IntakeQuestion[];
-  queuedQuestions?: IntakeQuestion[];
   answers: RecordedAnswer[];
   challenge: Challenge | null;
   assumptions: string[];
@@ -103,11 +67,8 @@ export interface IntakeDraft {
   createdAt: string;
   updatedAt: string;
   arenaId: string | null;
-  link?: { arenaId: string; versionId: string };
-  confirmation?: IntakeConfirmation;
 }
 export const CreateIntakeSchema = z.object({
-  workflow: z.literal("clarification").optional(),
   goal: z.string().max(3000).default(""),
   modelMode: ModelModeSchema.default("gpt-6.1-terra"),
 });

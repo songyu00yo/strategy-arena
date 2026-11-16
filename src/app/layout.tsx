@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { PAPER_NAVIGATION_SCRIPT } from "@/lib/paper-navigation";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,13 +7,7 @@ export const metadata: Metadata = {
 };
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" style={{ viewTransitionName: "none" }}>
-      <head>
-        <script
-          id="paper-navigation"
-          dangerouslySetInnerHTML={{ __html: PAPER_NAVIGATION_SCRIPT }}
-        />
-      </head>
+    <html lang="zh-CN">
       <body>{children}</body>
     </html>
   );

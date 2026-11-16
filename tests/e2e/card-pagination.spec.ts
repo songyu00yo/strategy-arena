@@ -10,33 +10,21 @@ type CapturedTransition = {
   running: boolean;
 };
 
-test("historical legacy-task fixture: card pages crossfade without replacing visible text or jumping in height", async ({
+test("real career recording: card pages crossfade without replacing visible text or jumping in height", async ({
   page,
   baseURL,
 }) => {
   const recording = JSON.parse(
-    readFileSync(path.join(process.cwd(), "tests/fixtures/legacy-recordings/career.json"), "utf8"),
+    readFileSync(path.join(process.cwd(), "public/recorded-examples/career.json"), "utf8"),
   ) as RecordedExamplePayload;
   const version = recording.arena.versions.at(-1)!;
-  // The historical regression fixture preserves the original B and C revision steps.
+  // In this real record, steps 11 and 12 are the saved B and C revisions.
   const title11 = version.revisions[1].summary;
   const title12 = version.revisions[2].summary;
   const forbidden: string[] = [];
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    const localRead = url.origin === new URL(baseURL!).origin && request.method() === "GET";
-    if (localRead && url.pathname === "/api/health")
-      return route.fulfill({
-        json: { status: "ok", model: recording.arena.model, accessGranted: true },
-      });
-    if (localRead && url.pathname === `/api/arenas/${recording.arena.id}`)
-      return route.fulfill({ json: recording.arena });
-    if (localRead && url.pathname === `/api/arenas/${recording.arena.id}/events`)
-      return route.fulfill({
-        contentType: "text/event-stream",
-        body: ": explicit historical task fixture\n\n",
-      });
     if (
       url.origin !== new URL(baseURL!).origin ||
       url.pathname.startsWith("/api/") ||
@@ -49,10 +37,11 @@ test("historical legacy-task fixture: card pages crossfade without replacing vis
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto(`/?arena=${recording.arena.id}`);
-  await expect(
-    page.getByRole("heading", { name: version.challenge.goal, exact: true }),
-  ).toBeVisible();
+  await page.goto("/examples/career");
+  const original = page.getByRole("textbox", { name: "你想解决什么问题？", exact: true });
+  await expect(original).toHaveValue(version.challenge.goal);
+  await expect(original).toHaveJSProperty("readOnly", true);
+  await page.getByRole("button", { name: "开始分析", exact: true }).click();
   await expect(page.getByRole("group", { name: "推演步骤", exact: true })).toBeVisible();
   await page.keyboard.press("End");
   await expect(page.getByRole("button", { name: "第 13 步", exact: true })).toHaveAttribute(

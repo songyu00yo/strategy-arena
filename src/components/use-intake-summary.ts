@@ -101,7 +101,7 @@ export function useIntakeSummary({
         same(saved, { challenge: draft.challenge, assumptions: draft.assumptions })
       ) {
         clearJournal();
-        setStatus("摘要草稿已保存，提交后确认");
+        setStatus("摘要已保存");
         return;
       }
       if (draft.status === "summary" && saved.baseRevision === draft.revision) {
@@ -193,7 +193,7 @@ export function useIntakeSummary({
         if (version.current === atVersion) {
           dirty.current = false;
           clearJournal();
-          setStatus("摘要草稿已保存，提交后确认");
+          setStatus("摘要已保存");
         } else {
           writeJournal({
             draftId: next.id,

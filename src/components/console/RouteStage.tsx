@@ -1,22 +1,11 @@
 "use client";
-import { moveScroll } from "@/components/motion-scroll";
-import { capturePaperContents } from "@/components/disclosure-motion";
 import { claimLabel, readableClaimText } from "@/components/claim-label";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { ArenaVersion, Attack, Strategy } from "@/lib/contracts";
-import type { RecordedAnswer } from "@/lib/intake-contracts";
 import { attackMeta } from "@/components/status";
 import { ChainDeck, LiveRecord } from "./fx";
 import { Chars, reducedMotion, ROUTE_COLOR, Sparks, STATE_COLOR } from "./effects";
-import { clarificationLines, CLARIFICATION_ROLES, latestShownRevision, type Beat } from "./beats";
+import { latestShownRevision, type Beat } from "./beats";
 import {
   createMotionLoop,
   createMotionScope,
@@ -25,11 +14,6 @@ import {
   useReducedMotion,
 } from "./motion-runtime";
 import "./stage-motion.css";
-import { ReplayQuestionScene } from "./ReplayQuestionScene";
-import { playbackDuration, type PlaybackTimeline } from "./use-playback-progress";
-import { adjacentPaperTransfer, nextRecordedRole, PAPER_MOTION } from "./paper-stage";
-import { paperTransferPath } from "./paper-stage";
-import "./paper-stage.css";
 
 const CLAIM = { user: "用户给定", estimate: "估算", unknown: "待核", supported: "有据" };
 const WORD: Record<Attack["status"], string> = {
@@ -59,52 +43,6 @@ const spring = (s: Spring, target: number, k: number, c: number, dt: number) => 
 const axis = (): Spring => ({ p: 0, v: 0 });
 const bodyOf = () => ({ x: axis(), y: axis(), z: axis(), r: axis(), rest: true });
 
-export interface StageTextTransition {
-  revision: number;
-  boards: Array<{
-    id: string;
-    height: number;
-    width: number;
-    opacity: string;
-    transform: string;
-    contents: ReturnType<typeof capturePaperContents>;
-  }>;
-}
-
-/** Read the actual composed paper before a replay step can replace its text. */
-export function captureStageText(
-  root: HTMLElement | null,
-  revision: number,
-  boardIds?: ReadonlySet<string>,
-): StageTextTransition | null {
-  if (!root || reducedMotion()) return null;
-  return {
-    revision,
-    boards: [...root.querySelectorAll<HTMLElement>(".c-stage3 [data-board]")]
-      .filter((board) => !boardIds || boardIds.has(board.dataset.board!))
-      .map((board) => {
-        const contents = capturePaperContents(board);
-        const originalText = board.querySelectorAll<HTMLElement>(
-          ":scope > header, :scope > .c-board-body",
-        );
-        const copiedText = contents.copy.querySelectorAll<HTMLElement>(
-          ":scope > header, :scope > .c-board-body",
-        );
-        originalText.forEach((node, index) => {
-          copiedText[index].style.opacity = getComputedStyle(node).opacity;
-        });
-        return {
-          id: board.dataset.board!,
-          height: parseFloat(getComputedStyle(board).height),
-          width: board.offsetWidth,
-          opacity: getComputedStyle(board).opacity,
-          transform: getComputedStyle(board).transform,
-          contents,
-        };
-      }),
-  };
-}
-
 /** Three boards in real 3D space. A sprung camera and sprung boards keep every step flowing into the next. */
 export function RouteStage({
   version,
@@ -123,12 +61,6 @@ export function RouteStage({
   entering,
   readOnly,
   onClaim,
-  replayProgress = 1,
-  replayAnswersBefore = [],
-  replayAnswersVisible,
-  playing = false,
-  timeline,
-  textTransition,
 }: {
   version: ArenaVersion;
   demo: boolean;
@@ -147,35 +79,16 @@ export function RouteStage({
   entering: boolean;
   readOnly: boolean;
   onClaim: (strategy: Strategy, claimId: string) => void;
-  replayProgress?: number;
-  replayAnswersBefore?: RecordedAnswer[];
-  replayAnswersVisible?: RecordedAnswer[];
-  playing?: boolean;
-  timeline?: PlaybackTimeline;
-  textTransition?: StageTextTransition | null;
 }) {
   const reducePreference = useReducedMotion();
   const motionSpeed = seeking ? 1.25 : speed;
-  const clarification = version.workflow === "clarification";
-  const shown = useMemo(() => beats.slice(0, index + 1), [beats, index]);
+  const shown = beats.slice(0, index + 1);
   const current = beats[index] ?? null;
-  const seen = useMemo(() => new Set(shown.map((b) => b.id)), [shown]);
-  const attacks = useMemo(
-    () => shown.filter((b) => b.stage === "attack" && b.attack).map((b) => b.attack!),
-    [shown],
-  );
+  const seen = new Set(shown.map((b) => b.id));
+  const attacks = shown.filter((b) => b.stage === "attack").map((b) => b.attack!);
   const activeAttack = current?.attack;
-  const stateOf = useCallback(
-    (a: Attack) => (seen.has(`v:${a.id}`) ? a.status : "pending"),
-    [seen],
-  );
+  const stateOf = (a: Attack) => (seen.has(`v:${a.id}`) ? a.status : "pending");
   const hot = activeAttack ? `${activeAttack.targetStrategyId}:${activeAttack.targetClaimId}` : "";
-  const foreground =
-    clarification &&
-    !!current?.replayAction &&
-    (current.replayAction.kind !== "handoff" || replayProgress < 1);
-  const backgroundCurrent = foreground ? shown.findLast((beat) => beat.clarificationRun) : current;
-  const nextRole = useMemo(() => nextRecordedRole(beats, index), [beats, index]);
 
   const beatId = current?.id;
   const signature = attacks.map((a) => a.id).join();
@@ -183,7 +96,6 @@ export function RouteStage({
   const rig = useRef<HTMLDivElement>(null);
   const world = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const paperPath = useRef<SVGPathElement>(null);
   const packet = useRef<HTMLDivElement>(null);
   const fx = useRef<Sparks | null>(null);
   const paths = useRef(new Map<string, SVGPathElement>());
@@ -208,7 +120,7 @@ export function RouteStage({
     directedRef.current = directed;
     if (!camera && rig.current) rig.current.style.transform = "none";
     wake.current();
-  }, [attacks, camera, directed]);
+  });
 
   const push = (id: string, x: number, y: number, z: number, r: number) => {
     const body = bodies.current[id];
@@ -303,7 +215,7 @@ export function RouteStage({
   // Energy hands the story on: timeline to board, then each step's own choreography.
   useEffect(() => {
     const host = stage.current;
-    if (!host || !current || !isDirected() || clarification) return;
+    if (!host || !current || !isDirected()) return;
     const scope = stepMotion.current!;
     const later = (ms: number, run: () => void) => scope.later(lead + ms / motionSpeed, run);
     const node = host.querySelector<HTMLElement>(`[data-board="${current.agent}"]`);
@@ -433,13 +345,6 @@ export function RouteStage({
     const surface = canvas.current;
     const el = world.current;
     if (!host || !dot || !surface || !el) return;
-    if (clarification) {
-      flight.current = null;
-      el.style.transform = "none";
-      if (rig.current) rig.current.style.transform = "none";
-      surface.getContext("2d")?.clearRect(0, 0, surface.width, surface.height);
-      return;
-    }
     if (reducePreference) {
       flight.current = null;
       for (const body of Object.values(bodies.current)) {
@@ -728,7 +633,69 @@ export function RouteStage({
     };
     // The loop reads current state through refs and lives as long as the stage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seeking, reducePreference, clarification]);
+  }, [seeking, reducePreference]);
+
+  // The shot for this step. Every board stays in frame: the camera leans and pushes, it never hides.
+  useLayoutEffect(() => {
+    const el = world.current;
+    if (!el || !current) return;
+    const W = el.clientWidth;
+    const H = el.clientHeight;
+    const middle = (id?: string) => {
+      const board = el.querySelector<HTMLElement>(`[data-board="${id}"]`);
+      return board
+        ? {
+            x: board.offsetLeft + board.offsetWidth / 2,
+            y: board.offsetTop + board.offsetHeight / 2,
+          }
+        : { x: W / 2, y: H / 2 };
+    };
+    let scale = 1.03;
+    let at = middle(current.agent);
+    let turn = at.x < W / 2 ? 1.6 : at.x > W / 2 + 20 ? -1.6 : 0;
+    if (current.stage === "attack" && current.to) {
+      const a = middle(current.agent);
+      const b = middle(current.to);
+      at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) };
+      scale = Math.abs(a.x - b.x) > W * 0.5 ? 0.97 : 1.025;
+      turn = a.x < b.x ? -1.8 : 1.8;
+    } else if (current.stage === "verify" && current.to) {
+      at = middle(current.to);
+      scale = 1.04;
+      turn = at.x < W / 2 ? 1.2 : at.x > W / 2 + 20 ? -1.2 : 0;
+    } else if (current.stage === "judge") {
+      at = { x: W / 2, y: H / 2 };
+      scale = 0.985;
+      turn = 0;
+    }
+    // Every board in shot stays fully inside the frame, with room left for drift and tilt.
+    const margin = 48; // Room for the focused board moving forward in depth.
+    const inShot = [current.agent, current.to]
+      .map((id) => el.querySelector<HTMLElement>(`[data-board="${id}"]`))
+      .filter((node): node is HTMLElement => !!node);
+    const left = Math.min(...inShot.map((n) => n.offsetLeft), W);
+    const right = Math.max(...inShot.map((n) => n.offsetLeft + n.offsetWidth), 0);
+    const top = Math.min(...inShot.map((n) => n.offsetTop), H);
+    if (current.stage !== "judge" && right - left > 0)
+      scale = Math.min(scale, Math.max(1, (W - margin * 2) / (right - left)));
+    if (scale <= 1.01 && current.stage !== "judge") turn = Math.sign(turn) * 1.2;
+    const screen = (p: number, size: number) => size / 2 + (p - size / 2) * scale;
+    const wantX = W / 2 - screen(at.x, W);
+    const minX = margin - screen(left, W);
+    const maxX = W - margin - screen(right, W);
+    // The camera leans toward the action but keeps all three routes on screen.
+    const lean = Math.max(0, ((scale - 1) * W) / 2);
+    const leaned = Math.max(-lean, Math.min(lean, wantX));
+    const x =
+      current.stage === "judge"
+        ? 0
+        : minX > maxX
+          ? (minX + maxX) / 2
+          : Math.max(minX, Math.min(maxX, leaned));
+    const wantY = (current.stage === "judge" ? H / 2 : H * 0.26) - screen(at.y, H);
+    const y = current.stage === "judge" ? 0 : Math.max(margin - screen(top, H), wantY);
+    shot.current = { x, y, s: scale, r: turn };
+  }, [current]);
 
   // A new step or thread can shift things, so it asks for a fresh measure. Refreshed data alone does not.
   useEffect(() => {
@@ -757,18 +724,25 @@ export function RouteStage({
     if (!hot) return;
     const claim = stage.current?.querySelector<HTMLElement>(`[data-claim="${hot}"]`);
     const body = claim?.closest<HTMLElement>(".c-board-body");
-    if (claim && body)
-      return moveScroll(body, { top: Math.max(0, claim.offsetTop - 28) }, { duration: 260 });
+    if (claim && body) body.scrollTop = Math.max(0, claim.offsetTop - 28);
   }, [hot]);
 
   // Only an actual opening sequence raises the boards; history and seeks stay readable.
   useEffect(() => {
-    if (clarification || entering || !directed || reducedMotion()) return;
+    if (entering || !directed || reducedMotion()) return;
     const scope = createMotionScope();
     scope.later(80, () => {
       push("A", -50, 44, 900, 18);
       push("B", 0, 50, 1000, 0);
       push("C", 50, 44, 900, -18);
+    });
+    stage.current?.querySelectorAll("[data-board]").forEach((node, i) => {
+      scope.animate(node, [{ opacity: 0 }, { opacity: 1 }], {
+        duration: 620,
+        delay: 80 + i * 90,
+        easing: "ease-out",
+        fill: "backwards",
+      });
     });
     return () => scope.dispose();
     // Start only when the opening shutter changes, not when playback resumes.
@@ -777,7 +751,7 @@ export function RouteStage({
 
   // The room leans toward the pointer during a replay; at rest the boards hold still for clicking.
   useEffect(() => {
-    if (clarification || reducedMotion()) return;
+    if (reducedMotion()) return;
     const onMove = (e: MouseEvent) => {
       if (motionPaused()) return;
       const nx = e.clientX / innerWidth - 0.5;
@@ -791,7 +765,7 @@ export function RouteStage({
     };
     addEventListener("mousemove", onMove);
     return () => removeEventListener("mousemove", onMove);
-  }, [clarification]);
+  }, []);
 
   // Pointing at a claim or a challenge lights the threads tied to it, so the page explains itself.
   useEffect(() => {
@@ -824,677 +798,128 @@ export function RouteStage({
     };
   }, []);
 
-  const involved = useCallback(
-    (id: string) => {
-      if (!camera || !backgroundCurrent || backgroundCurrent.stage === "judge") return true;
-      return backgroundCurrent.agent === id || backgroundCurrent.to === id;
-    },
-    [camera, backgroundCurrent],
-  );
+  const involved = (id: string) => {
+    if (!camera || !current || current.stage === "judge") return true;
+    return current.agent === id || current.to === id;
+  };
 
-  const board = useCallback(
-    (id: "A" | "B" | "C") => {
-      const latest = shown.findLast((beat) => beat.clarificationRun?.role === id);
-      const run = latest?.clarificationRun;
-      const strategy = version.strategies.find((s) => s.id === id);
-      const present = clarification ? !!run : !!strategy && seen.has(`p:${id}`);
-      const revision = latestShownRevision(shown, id)?.revision;
-      const view = revision?.strategy ?? strategy;
-      const taken = attacks.filter((a) => a.targetStrategyId === id);
-      const sent = attacks.filter((a) => a.from === id);
-      const pick = seen.has("judge") && version.verdict?.preferred === id;
-      const speaking = backgroundCurrent?.agent === id;
-      const target = !speaking && backgroundCurrent?.to === id;
-      const enter =
-        directed &&
-        (clarification ? current?.clarificationRun?.role === id : current?.id === `p:${id}`);
-      const rewriting = directed && current?.revision?.strategyId === id;
-      return (
-        <section
-          key={id}
-          data-board={id}
-          aria-label={clarification ? `${id} ${CLARIFICATION_ROLES[id]}` : `路线 ${id}`}
-          className={`c-board c-board-${id} ${speaking ? "speaking" : ""} ${target ? "target" : ""} ${pick ? "pick" : ""} ${involved(id) ? "" : "dim"} ${enter ? "enter" : ""}`}
-          style={{ "--route": spaced(ROUTE_COLOR[id]) } as CSSProperties}
-        >
-          <svg className="c-outline" aria-hidden="true">
-            <rect width="100%" height="100%" pathLength={1} />
-          </svg>
-          <header>
-            <b>{id}</b>
-            <span>
-              {clarification
-                ? run
-                  ? { completed: "调用完成", failed: "调用失败", uncertain: "调用待核对" }[
-                      run.status
-                    ]
-                  : "尚未调用"
-                : pick
-                  ? "当前建议"
-                  : revision
-                    ? "已修订"
-                    : present
-                      ? "已提案"
-                      : "等待提案"}
-            </span>
-            <em>
-              {clarification
-                ? `用量记录 ${run?.usage.length ?? 0} 笔`
-                : `发出 ${sent.length} · 收到 ${taken.length}`}
-            </em>
-          </header>
-          {present && (run || (strategy && view)) ? (
-            <div className="c-board-body">
-              <h3>
-                <Chars
-                  text={run ? CLARIFICATION_ROLES[id] : readableClaimText(version, view!.title)}
-                  active={enter && !clarification}
-                  delay={lead * speed + 700}
-                  speed={speed}
-                />
-              </h3>
-              <p>{run ? run.summary : readableClaimText(version, view!.thesis)}</p>
-              <div className="est">
-                {run
-                  ? `第 ${run.round} 轮 · 依据修订 ${run.basedOnRevision}`
-                  : strategy!.estimatedHours === view!.estimatedHours
-                    ? `${view!.estimatedHours ?? "待核实"} 小时`
-                    : `${strategy!.estimatedHours ?? "待核实"} → ${view!.estimatedHours ?? "待核实"} 小时`}
-                {run ? "" : ` · ¥${view!.estimatedCost ?? "?"}`}
-              </div>
-              {[
-                ...new Set([...(strategy?.claims ?? []), ...(view?.claims ?? [])].map((c) => c.id)),
-              ].map((claimId) => {
-                const before = strategy!.claims.find((c) => c.id === claimId);
-                const after = view!.claims.find((c) => c.id === claimId);
-                const claim = after ?? before!;
-                const hits = taken.filter((a) => a.targetClaimId === claimId);
-                const lost = hits.some((a) => stateOf(a) === "supported");
-                return (
-                  <button
-                    key={claimId}
-                    type="button"
-                    data-claim={`${id}:${claimId}`}
-                    className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
-                    disabled={readOnly || !after}
-                    title={after ? "质疑这条判断" : "这条主张已撤回"}
-                    onClick={() => onClaim(view!, claimId)}
-                  >
-                    <em>
-                      {claimLabel(version, id, claimId)} · {CLAIM[claim.status]}
-                      {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
-                      {!after && " · 已撤回"}
-                      {!before && " · 新增"}
-                      {hits.map((a) => (
-                        <i key={a.id} className={`is-${stateOf(a)}`}>
-                          {a.from} {WORD[stateOf(a)]}
-                        </i>
-                      ))}
-                    </em>
-                    <span>
-                      <span className={lost || !after ? "struck" : ""}>
-                        {readableClaimText(version, before?.text ?? claim.text)}
-                      </span>
+  const board = (id: "A" | "B" | "C") => {
+    const strategy = version.strategies.find((s) => s.id === id);
+    const present = !!strategy && seen.has(`p:${id}`);
+    const revision = latestShownRevision(shown, id)?.revision;
+    const view = revision?.strategy ?? strategy;
+    const taken = attacks.filter((a) => a.targetStrategyId === id);
+    const sent = attacks.filter((a) => a.from === id);
+    const pick = seen.has("judge") && version.verdict?.preferred === id;
+    const speaking = current?.agent === id;
+    const target = !speaking && current?.to === id;
+    const enter = directed && current?.id === `p:${id}`;
+    const rewriting = directed && current?.revision?.strategyId === id;
+    return (
+      <section
+        key={id}
+        data-board={id}
+        aria-label={`路线 ${id}`}
+        className={`c-board c-board-${id} ${speaking ? "speaking" : ""} ${target ? "target" : ""} ${pick ? "pick" : ""} ${involved(id) ? "" : "dim"} ${enter ? "enter" : ""}`}
+        style={{ "--route": spaced(ROUTE_COLOR[id]) } as CSSProperties}
+      >
+        <svg className="c-outline" aria-hidden="true">
+          <rect width="100%" height="100%" pathLength={1} />
+        </svg>
+        <header>
+          <b>{id}</b>
+          <span>{pick ? "当前建议" : revision ? "已修订" : present ? "已提案" : "等待提案"}</span>
+          <em>
+            发出 {sent.length} · 收到 {taken.length}
+          </em>
+        </header>
+        {present && strategy && view ? (
+          <div className="c-board-body">
+            <h3>
+              <Chars
+                text={readableClaimText(version, view.title)}
+                active={enter}
+                delay={lead + 700}
+              />
+            </h3>
+            <p>{readableClaimText(version, view.thesis)}</p>
+            <div className="est">
+              {strategy.estimatedHours === view.estimatedHours
+                ? `${view.estimatedHours ?? "待核实"} 小时`
+                : `${strategy.estimatedHours ?? "待核实"} → ${view.estimatedHours ?? "待核实"} 小时`}
+              {" · "}¥{view.estimatedCost ?? "?"}
+            </div>
+            {[...new Set([...strategy.claims, ...view.claims].map((c) => c.id))].map((claimId) => {
+              const before = strategy.claims.find((c) => c.id === claimId);
+              const after = view.claims.find((c) => c.id === claimId);
+              const claim = after ?? before!;
+              const hits = taken.filter((a) => a.targetClaimId === claimId);
+              const lost = hits.some((a) => stateOf(a) === "supported");
+              return (
+                <button
+                  key={claimId}
+                  type="button"
+                  data-claim={`${id}:${claimId}`}
+                  className={`c-claim ${hot === `${id}:${claimId}` ? "hot" : ""} ${hits.some((a) => a.id === located) ? "located" : ""}`}
+                  disabled={readOnly || !after}
+                  title={after ? "质疑这条判断" : "这条主张已撤回"}
+                  onClick={() => onClaim(view, claimId)}
+                >
+                  <em>
+                    {claimLabel(version, id, claimId)} · {CLAIM[claim.status]}
+                    {!readOnly && after && <small className="c-claim-challenge">挑战 ↗</small>}
+                    {!after && " · 已撤回"}
+                    {!before && " · 新增"}
+                    {hits.map((a) => (
+                      <i key={a.id} className={`is-${stateOf(a)}`}>
+                        {a.from} {WORD[stateOf(a)]}
+                      </i>
+                    ))}
+                  </em>
+                  <span>
+                    <span className={lost || !after ? "struck" : ""}>
+                      {readableClaimText(version, before?.text ?? claim.text)}
                     </span>
-                    {before && after && before.text !== after.text && (
-                      <span className={`changed ${rewriting ? "fresh" : ""}`}>
-                        <Chars
-                          text={readableClaimText(version, after.text)}
-                          active={rewriting}
-                          delay={lead * speed + 800}
-                          speed={speed}
-                        />
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-              <ol className="steps">
-                {(run ? clarificationLines(run, latest?.clarificationAnswers) : view!.steps).map(
-                  (step) => (
-                    <li key={step}>{step}</li>
-                  ),
-                )}
-              </ol>
-              <div className="first">
-                <b>{run ? "记录" : "第一步"}</b>{" "}
-                {run ? "在原步骤卡片中查看本次调用的完整输出。" : view!.firstAction}
-              </div>
+                  </span>
+                  {before && after && before.text !== after.text && (
+                    <span className={`changed ${rewriting ? "fresh" : ""}`}>
+                      <Chars
+                        text={readableClaimText(version, after.text)}
+                        active={rewriting}
+                        delay={lead + 800}
+                      />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <ol className="steps">
+              {view.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <div className="first">
+              <b>第一步</b> {view.firstAction}
             </div>
-          ) : (
-            <div className="c-board-body quiet">
-              {clarification
-                ? `${CLARIFICATION_ROLES[id]}尚无已完成的调用记录。`
-                : demo
-                  ? "等待演示步骤，内容为预设。"
-                  : "只显示真实生成的结果。"}
-            </div>
-          )}
-        </section>
-      );
-    },
-    [
-      version,
-      demo,
-      speed,
-      clarification,
-      shown,
-      seen,
-      attacks,
-      backgroundCurrent,
-      current,
-      directed,
-      lead,
-      hot,
-      located,
-      readOnly,
-      onClaim,
-      involved,
-      stateOf,
-    ],
-  );
-  const boardElements = useMemo(() => [board("A"), board("B"), board("C")], [board]);
-
-  // Only displayed card data changes the paper. Answer-progress projections and
-  // callback identities still bind immediately without restarting its body.
-  const boardContentKeys = useMemo(
-    () =>
-      (["A", "B", "C"] as const).map((id) => {
-        const latest = shown.findLast((beat) => beat.clarificationRun?.role === id);
-        const run = latest?.clarificationRun;
-        if (clarification)
-          return JSON.stringify(
-            run
-              ? [
-                  run.status,
-                  run.summary,
-                  run.round,
-                  run.basedOnRevision,
-                  run.usage.length,
-                  clarificationLines(run, latest?.clarificationAnswers),
-                ]
-              : null,
-          );
-        return JSON.stringify([
-          seen.has(`p:${id}`) ? version.strategies.find((strategy) => strategy.id === id) : null,
-          latestShownRevision(shown, id)?.revision,
-          attacks
-            .filter((attack) => attack.from === id || attack.targetStrategyId === id)
-            .map((attack) => [attack.id, stateOf(attack)]),
-        ]);
-      }),
-    [clarification, shown, seen, version.strategies, attacks, stateOf],
-  );
-  const boardAppearanceKeys = useMemo(
-    () =>
-      boardElements.map((element) => {
-        const classes = element.props.className.split(/\s+/) as string[];
-        return ["speaking", "target", "dim", "pick"]
-          .filter((state) => classes.includes(state))
-          .join(" ");
-      }),
-    [boardElements],
-  );
-  const [displayedBoards, setDisplayedBoards] = useState(() => ({
-    keys: boardContentKeys,
-    appearanceKeys: boardAppearanceKeys,
-    elements: boardElements,
-    transition: null as StageTextTransition | null,
-    origin: "story" as "story" | "interaction",
-  }));
-  const sameBoardPresentation = boardContentKeys.every(
-    (key, index) =>
-      key === displayedBoards.keys[index] &&
-      boardAppearanceKeys[index] === displayedBoards.appearanceKeys[index],
-  );
-  if (
-    (sameBoardPresentation && displayedBoards.elements !== boardElements) ||
-    (reducePreference && displayedBoards.transition)
-  )
-    setDisplayedBoards({
-      ...displayedBoards,
-      elements: sameBoardPresentation ? boardElements : displayedBoards.elements,
-      transition: reducePreference ? null : displayedBoards.transition,
-    });
-  const capturedRevision = useRef(0);
-  const bodyAnimations = useRef<Animation[]>([]);
-  const bodySpeed = useRef(speed);
-  const naturalStageGeometry = useRef<{
-    stepId: string;
-    width: number;
-    height: number;
-    boards: Map<string, { left: number; top: number; width: number; height: number }>;
-  } | null>(null);
-  const cameraStep = useRef<string | undefined>(undefined);
-  const consumedManualTransition = useRef(textTransition);
-  useLayoutEffect(() => {
-    const manual =
-      textTransition && textTransition !== consumedManualTransition.current ? textTransition : null;
-    consumedManualTransition.current = textTransition;
-    if (sameBoardPresentation && !manual) return;
-    // Keep the old React paper for this commit so its currently composed text,
-    // scroll and animated height can be captured before replacement. The next
-    // layout commit mounts the new body and starts its native effects pre-paint.
-    const changedBoardIds = new Set(
-      ["A", "B", "C"].filter(
-        (_, index) =>
-          boardContentKeys[index] !== displayedBoards.keys[index] ||
-          boardAppearanceKeys[index] !== displayedBoards.appearanceKeys[index],
-      ),
+          </div>
+        ) : (
+          <div className="c-board-body quiet">
+            {demo ? "等待演示步骤，内容为预设。" : "只显示真实生成的结果。"}
+          </div>
+        )}
+      </section>
     );
-    // Replacing the shared scope also replaces its still-visible papers. Include
-    // each active owner even when only another card received new data.
-    bodyAnimations.current.forEach((animation) => {
-      if (animation.playState === "finished" || animation.playState === "idle") return;
-      const target = (animation.effect as KeyframeEffect | null)?.target;
-      const owner = target instanceof Element ? target.closest<HTMLElement>("[data-board]") : null;
-      if (owner?.dataset.board) changedBoardIds.add(owner.dataset.board);
-    });
-    const transition =
-      manual ?? captureStageText(stage.current, ++capturedRevision.current, changedBoardIds);
-    setDisplayedBoards({
-      keys: boardContentKeys,
-      appearanceKeys: boardAppearanceKeys,
-      elements: boardElements,
-      transition,
-      origin: manual || seeking ? "interaction" : "story",
-    });
-  }, [
-    sameBoardPresentation,
-    boardContentKeys,
-    boardAppearanceKeys,
-    boardElements,
-    textTransition,
-    seeking,
-    displayedBoards.keys,
-    displayedBoards.appearanceKeys,
-  ]);
-  useLayoutEffect(() => {
-    if (foreground || !sameBoardPresentation) return;
-    const body = stage.current?.querySelector<HTMLElement>(
-      `[data-board="${current?.agent}"] .c-board-body`,
-    );
-    if (body) return moveScroll(body, { top: 0 }, { duration: 220 });
-  }, [beatId, current?.agent, foreground, sameBoardPresentation, displayedBoards.keys]);
-  useLayoutEffect(() => {
-    bodySpeed.current = speed;
-  }, [speed]);
-  useLayoutEffect(() => {
-    const el = world.current;
-    if (clarification || !sameBoardPresentation || !el || !current) return;
-    // This runs after the new DOM and old-effect cleanup, before its native
-    // height is restored to the outgoing pose. The legacy camera needs this
-    // natural destination, not the quiet card or an in-flight height.
-    naturalStageGeometry.current = {
-      stepId: current.id,
-      width: el.clientWidth,
-      height: el.clientHeight,
-      boards: new Map(
-        [...el.querySelectorAll<HTMLElement>("[data-board]")].map((board) => [
-          board.dataset.board!,
-          {
-            left: board.offsetLeft,
-            top: board.offsetTop,
-            width: board.offsetWidth,
-            height: board.offsetHeight,
-          },
-        ]),
-      ),
-    };
-  }, [
-    clarification,
-    current,
-    sameBoardPresentation,
-    displayedBoards.keys,
-    displayedBoards.appearanceKeys,
-  ]);
-  useLayoutEffect(() => {
-    const host = stage.current;
-    const transition = displayedBoards.transition;
-    if (!host || !transition || reducePreference) return;
-    const scope = createMotionScope(displayedBoards.origin);
-    const originals: Array<{ node: HTMLElement; height: string }> = [];
-    const animations: Animation[] = [];
-    const heightMotions: Array<{
-      board: HTMLElement;
-      animation: Animation;
-      transformAnimation: Animation;
-      width: number;
-    }> = [];
-    let disposed = false;
-    const finish = () => {
-      if (disposed) return;
-      disposed = true;
-      window.removeEventListener("resize", resize);
-      scope.dispose();
-      if (bodyAnimations.current === animations) bodyAnimations.current = [];
-      originals.forEach(({ node, height }) => {
-        node.style.height = height;
-      });
-    };
-    const resize = () => {
-      if (disposed) return;
-      const resized = heightMotions.flatMap((item) => {
-        const width = item.board.offsetWidth;
-        if (Math.abs(width - item.width) < 0.5) return [];
-        return [
-          {
-            item,
-            width,
-            // Layout height stays independent of the stage's 3D scale and rotation.
-            height: parseFloat(getComputedStyle(item.board).height),
-            effect: item.animation.effect as KeyframeEffect,
-            transformEffect: item.transformAnimation.effect as KeyframeEffect,
-            transform: getComputedStyle(item.board).transform,
-          },
-        ];
-      });
-      // Measure all natural heights together, without alternating a layout write
-      // and a forced read for each paper in the same frame.
-      resized.forEach(({ effect, transformEffect }) => {
-        effect.target = null;
-        transformEffect.target = null;
-      });
-      const targets = resized.map(({ item }) => {
-        const style = getComputedStyle(item.board);
-        return { height: parseFloat(style.height), transform: style.transform };
-      });
-      resized.forEach(({ item, width, height, effect, transformEffect, transform }, index) => {
-        item.width = width;
-        const target = targets[index];
-        effect.setKeyframes([{ height: `${height}px` }, { height: `${target.height}px` }]);
-        transformEffect.setKeyframes([{ transform }, { transform: target.transform }]);
-        [effect, transformEffect].forEach((nativeEffect) => {
-          nativeEffect.updateTiming({ duration: 160 });
-          nativeEffect.target = item.board;
-        });
-        [item.animation, item.transformAnimation].forEach((animation) => {
-          animation.currentTime = 0;
-          if (displayedBoards.origin === "story" && motionPaused()) animation.pause();
-          else animation.play();
-        });
-      });
-    };
-    const papers = transition.boards.flatMap((captured) => {
-      const board = host.querySelector<HTMLElement>(`[data-board="${captured.id}"]`);
-      if (!board) return [];
-      const text = [
-        ...board.querySelectorAll<HTMLElement>(":scope > header, :scope > .c-board-body"),
-      ];
-      return [
-        {
-          captured,
-          board,
-          text,
-          opacityTransitions: [board, ...text].flatMap((node) =>
-            node
-              .getAnimations()
-              .filter(
-                (animation) =>
-                  animation instanceof CSSTransition && animation.transitionProperty === "opacity",
-              ),
-          ),
-        },
-      ];
-    });
-    papers.forEach(({ opacityTransitions }) => {
-      opacityTransitions.forEach((animation) => animation.finish());
-    });
-    // Read the entire stage before attaching or animating any retiring paper.
-    const measured = papers.map((paper) => ({
-      ...paper,
-      originalHeight: paper.board.style.height,
-      targetHeight: parseFloat(getComputedStyle(paper.board).height),
-      width: paper.board.offsetWidth,
-      left: paper.board.clientLeft,
-      top: paper.board.clientTop,
-      targetOpacity: getComputedStyle(paper.board).opacity,
-      targetTransform: getComputedStyle(paper.board).transform,
-      targetOpacities: paper.text.map((node) => getComputedStyle(node).opacity),
-    }));
-    const prepared = measured.map((paper) => {
-      const { captured, board, originalHeight } = paper;
-      const copy = scope.own(captured.contents.copy);
-      copy.dataset.stageRetiring = "true";
-      copy.querySelector(":scope > .c-outline")?.remove();
-      Object.assign(copy.style, {
-        position: "absolute",
-        inset: "auto",
-        left: `${-paper.left}px`,
-        top: `${-paper.top}px`,
-        margin: "0",
-        width: `${captured.width}px`,
-        height: `${captured.height}px`,
-        maxHeight: "none",
-        minHeight: "0",
-        background: "transparent",
-        borderColor: "transparent",
-        boxShadow: "none",
-        transform: "none",
-        translate: "none",
-        rotate: "none",
-        scale: "none",
-        opacity: "1",
-        zIndex: "2",
-        pointerEvents: "none",
-      });
-      originals.push({ node: board, height: originalHeight });
-      return { ...paper, copy };
-    });
-    prepared.forEach(({ board, copy }) => board.appendChild(copy));
-    const timing: KeyframeAnimationOptions = {
-      duration: 220,
-      easing: "cubic-bezier(.22,1,.3,1)",
-      fill: "both",
-    };
-    for (const {
-      captured,
-      board,
-      copy,
-      text,
-      targetHeight,
-      targetOpacity,
-      targetTransform,
-      targetOpacities,
-      width,
-    } of prepared) {
-      const heightAnimation = scope.animate(
-        board,
-        [{ height: `${captured.height}px` }, { height: `${targetHeight}px` }],
-        timing,
-      );
-      const transformAnimation = scope.animate(
-        board,
-        [{ transform: captured.transform }, { transform: targetTransform }],
-        timing,
-      );
-      heightMotions.push({ board, animation: heightAnimation, transformAnimation, width });
-      animations.push(
-        heightAnimation,
-        transformAnimation,
-        scope.animate(board, [{ opacity: captured.opacity }, { opacity: targetOpacity }], timing),
-        scope.animate(copy, [{ opacity: 1 }, { opacity: 0 }], timing),
-      );
-      text.forEach((node, index) =>
-        animations.push(
-          scope.animate(node, [{ opacity: 0 }, { opacity: targetOpacities[index] }], timing),
-        ),
-      );
-    }
-    // New native effects have no elapsed pose to preserve. Set the initial rate
-    // synchronously so their first sampled frame already uses the selected pace.
-    animations.forEach((animation) => {
-      animation.playbackRate = displayedBoards.origin === "story" ? bodySpeed.current : 1;
-    });
-    bodyAnimations.current = animations;
-    prepared.forEach(({ captured }) => captured.contents.restoreScroll());
-    window.addEventListener("resize", resize);
-    void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish);
-    return finish;
-  }, [displayedBoards.transition, displayedBoards.origin, reducePreference]);
-  useLayoutEffect(() => {
-    const rate = displayedBoards.origin === "story" ? speed : 1;
-    bodyAnimations.current.forEach((animation) => {
-      if (animation.playbackRate !== rate) animation.updatePlaybackRate(rate);
-    });
-  }, [speed, displayedBoards.transition, displayedBoards.origin]);
-
-  // The shot for this step. Every board stays in frame: the camera leans and pushes, it never hides.
-  useLayoutEffect(() => {
-    const el = world.current;
-    const geometry = naturalStageGeometry.current;
-    if (
-      clarification ||
-      !sameBoardPresentation ||
-      !el ||
-      !current ||
-      geometry?.stepId !== current.id ||
-      cameraStep.current === current.id
-    )
-      return;
-    cameraStep.current = current.id;
-    const W = geometry.width;
-    const H = geometry.height;
-    const middle = (id?: string) => {
-      const board = id ? geometry.boards.get(id) : undefined;
-      return board
-        ? {
-            x: board.left + board.width / 2,
-            y: board.top + board.height / 2,
-          }
-        : { x: W / 2, y: H / 2 };
-    };
-    let scale = 1.03;
-    let at = middle(current.agent);
-    let turn = at.x < W / 2 ? 1.6 : at.x > W / 2 + 20 ? -1.6 : 0;
-    if (current.stage === "attack" && current.to) {
-      const a = middle(current.agent);
-      const b = middle(current.to);
-      at = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) };
-      scale = Math.abs(a.x - b.x) > W * 0.5 ? 0.97 : 1.025;
-      turn = a.x < b.x ? -1.8 : 1.8;
-    } else if (current.stage === "verify" && current.to) {
-      at = middle(current.to);
-      scale = 1.04;
-      turn = at.x < W / 2 ? 1.2 : at.x > W / 2 + 20 ? -1.2 : 0;
-    } else if (current.stage === "judge") {
-      at = { x: W / 2, y: H / 2 };
-      scale = 0.985;
-      turn = 0;
-    }
-    // Every board in shot stays fully inside the frame, with room left for drift and tilt.
-    const margin = 48; // Room for the focused board moving forward in depth.
-    const inShot = [current.agent, current.to].flatMap((id) =>
-      id && geometry.boards.has(id) ? [geometry.boards.get(id)!] : [],
-    );
-    const left = Math.min(...inShot.map((board) => board.left), W);
-    const right = Math.max(...inShot.map((board) => board.left + board.width), 0);
-    const top = Math.min(...inShot.map((board) => board.top), H);
-    if (current.stage !== "judge" && right - left > 0)
-      scale = Math.min(scale, Math.max(1, (W - margin * 2) / (right - left)));
-    if (scale <= 1.01 && current.stage !== "judge") turn = Math.sign(turn) * 1.2;
-    const screen = (p: number, size: number) => size / 2 + (p - size / 2) * scale;
-    const wantX = W / 2 - screen(at.x, W);
-    const minX = margin - screen(left, W);
-    const maxX = W - margin - screen(right, W);
-    // The camera leans toward the action but keeps all three routes on screen.
-    const lean = Math.max(0, ((scale - 1) * W) / 2);
-    const leaned = Math.max(-lean, Math.min(lean, wantX));
-    const x =
-      current.stage === "judge"
-        ? 0
-        : minX > maxX
-          ? (minX + maxX) / 2
-          : Math.max(minX, Math.min(maxX, leaned));
-    const wantY = (current.stage === "judge" ? H / 2 : H * 0.26) - screen(at.y, H);
-    const y = current.stage === "judge" ? 0 : Math.max(margin - screen(top, H), wantY);
-    shot.current = { x, y, s: scale, r: turn };
-  }, [current, clarification, sameBoardPresentation]);
-
-  useLayoutEffect(() => {
-    const host = stage.current;
-    const currentRole = current?.clarificationRun?.role;
-    if (!clarification || !host || !currentRole || !sameBoardPresentation) return;
-    const node = host.querySelector<HTMLElement>(`[data-board="${currentRole}"]`);
-    const transfer = adjacentPaperTransfer(beats, index);
-    const receiver = transfer
-      ? host.querySelector<HTMLElement>(`[data-board="${transfer.to}"]`)
-      : null;
-    const path = paperPath.current;
-    const measure = () => {
-      if (!path || !node || !receiver) return;
-      const geometry = paperTransferPath(
-        node.getBoundingClientRect(),
-        receiver.getBoundingClientRect(),
-        host.getBoundingClientRect(),
-      );
-      if (geometry) path.setAttribute("d", geometry);
-    };
-    measure();
-    const draw = (frame: ReturnType<PlaybackTimeline["read"]>) => {
-      if (frame.stepId !== current.id) return;
-      const entering =
-        frame.settled || reducedMotion() ? 1 : Math.min(1, frame.elapsed / PAPER_MOTION.feedback);
-      node?.style.setProperty("--paper-lift", `${-3 * entering}px`);
-      const amount =
-        frame.settled || reducedMotion()
-          ? 1
-          : Math.max(
-              0,
-              Math.min(
-                1,
-                (frame.elapsed - Math.max(0, frame.duration - PAPER_MOTION.transfer)) /
-                  PAPER_MOTION.transfer,
-              ),
-            );
-      if (path) {
-        path.style.strokeDashoffset = String(1 - amount);
-        path.style.opacity = transfer && amount > 0 && amount < 1 && !frame.settled ? "1" : "0";
-      }
-      host.dataset.backgroundMotion =
-        transfer && amount > 0 && amount < 1 ? "transition" : "active";
-      receiver?.style.setProperty(
-        "--paper-receive",
-        amount >= 0.75 && amount < 1 ? String(Math.sin((amount - 0.75) * Math.PI * 4)) : "0",
-      );
-    };
-    if (timeline) draw(timeline.read());
-    const unsubscribe = timeline?.subscribe(draw);
-    addEventListener("resize", measure);
-    return () => {
-      unsubscribe?.();
-      removeEventListener("resize", measure);
-      node?.style.removeProperty("--paper-lift");
-      receiver?.style.removeProperty("--paper-receive");
-      if (path) path.style.opacity = "0";
-    };
-  }, [clarification, beats, index, current, timeline, sameBoardPresentation, displayedBoards.keys]);
+  };
 
   return (
-    <div
-      className={`c-stage3 ${clarification ? "clarification-paper-stage" : ""} ${activeAttack ? "has-float" : ""}`}
-      data-background-held={foreground || undefined}
-      data-background-motion={clarification ? (foreground ? "held" : "active") : undefined}
-      style={
-        clarification
-          ? ({
-              "--paper-feedback": `${PAPER_MOTION.feedback}ms`,
-              "--paper-settle": `${PAPER_MOTION.settle}ms`,
-            } as CSSProperties)
-          : undefined
-      }
-      ref={stage}
-    >
+    <div className={`c-stage3 ${activeAttack ? "has-float" : ""}`} ref={stage}>
       <div className="c-rig" ref={rig}>
         <div className="c-world" ref={world}>
-          {displayedBoards.elements}
+          {board("A")}
+          {board("B")}
+          {board("C")}
         </div>
       </div>
-      {clarification && (
-        <svg className="paper-role-transfer" aria-hidden="true">
-          <path ref={paperPath} pathLength={1} />
-        </svg>
-      )}
       <svg className="c-threads" aria-hidden="true">
         {attacks.map((a) => (
           <g key={a.id} style={{ "--route": spaced(ROUTE_COLOR[a.from]) } as CSSProperties}>
@@ -1545,48 +970,18 @@ export function RouteStage({
         directed={directed}
         seeking={seeking}
         lead={lead}
-        speed={speed}
-        replayProgress={replayProgress}
-        replayAnswersVisible={replayAnswersVisible}
-        backgroundHeld={foreground}
         reviewing={reviewing}
         onStep={onStep}
       />
       <LiveRecord
         version={version}
-        beat={foreground ? (backgroundCurrent ?? null) : current}
-        index={foreground && backgroundCurrent ? beats.indexOf(backgroundCurrent) : index}
+        beat={current}
+        index={index}
         directed={directed}
         seeking={seeking}
         lead={lead}
-        speed={speed}
-        replayProgress={replayProgress}
-        replayAnswersVisible={replayAnswersVisible}
-        backgroundHeld={foreground}
         onEvidence={onEvidence}
       />
-      {current?.replayAction && (current.replayAction.kind !== "handoff" || replayProgress < 1) && (
-        <ReplayQuestionScene
-          key={
-            ["summary_submit", "summary_confirm", "handoff"].includes(current.replayAction.kind)
-              ? `summary-${current.replayAction.round}`
-              : (current.replayAction.sourceRunId ?? `round-${current.replayAction.round}`)
-          }
-          action={current.replayAction}
-          previousAnswers={replayAnswersBefore}
-          progress={replayProgress}
-          playing={playing}
-          speed={speed}
-          seeking={seeking}
-          timeline={timeline}
-          stepId={current.id}
-          duration={playbackDuration(current)}
-          nextRole={nextRole}
-          returnsToStage={
-            current.replayAction.kind === "handoff" || !!beats[index + 1]?.clarificationRun
-          }
-        />
-      )}
     </div>
   );
 }

@@ -109,7 +109,7 @@ test("real API without model calls restores all owned history after browser iden
   dialog = await openHistory(page);
   await dialog.getByRole("button", { name: new RegExp(draftGoal) }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole("textbox", { name: "你想做什么", exact: true })).toHaveValue(
+  await expect(page.getByRole("textbox", { name: "你想解决什么问题？", exact: true })).toHaveValue(
     draftGoal,
   );
   expect(await page.evaluate(() => sessionStorage.getItem("strategy-arena:intake-tab-id"))).toBe(

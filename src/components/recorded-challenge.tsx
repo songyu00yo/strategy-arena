@@ -14,11 +14,10 @@ import type { StepContext } from "@/lib/step-context";
 import { routeModel } from "@/lib/model-routing";
 import type { Health } from "./use-arena";
 import { DisclosureMotion } from "./disclosure-motion";
-import { isDialogBackdropClick, Modal } from "./modal";
+import { Modal } from "./modal";
 import type { OverlayMotionHandle } from "./overlay-motion";
 import { ModelSelector } from "./model-selector";
 import type { SupplementDraft } from "./supplement-draft";
-import { prepareRecordedIntake } from "./recorded-intake";
 import "./recorded-challenge.css";
 
 export interface RecordedChallengeProps {
@@ -44,10 +43,8 @@ export function RecordedChallenge({
   onDraftChange,
   onSubmitted,
 }: RecordedChallengeProps) {
-  const clarification = version.workflow === "clarification";
   const quoteId = useId();
   const goalId = useId();
-  const inputLabelId = useId();
   const [showQuote, setShowQuote] = useState(false);
   const [showGoal, setShowGoal] = useState(false);
   const [text, setText] = useState(initialDraft?.text ?? "");
@@ -92,16 +89,12 @@ export function RecordedChallenge({
     ? "未找到这条判断，请关闭后重新选择。"
     : healthError ||
       (!health
-        ? clarification
-          ? "正在检查草稿服务…"
-          : "正在检查模型配置…"
+        ? "正在检查模型配置…"
         : health.requiresAccessCode && !health.accessGranted
-          ? clarification
-            ? "请先返回首页输入访问口令，再准备需求草稿。"
-            : "请先返回首页输入访问口令，再开始真实挑战。"
-          : !clarification && unavailable
+          ? "请先返回首页输入访问口令，再开始真实挑战。"
+          : unavailable
             ? "所选模型尚未配置，请选择已配置的模型。"
-            : !clarification && !prepared.success
+            : !prepared.success
               ? "原题与质疑合并后超过输入限制，无法直接创建。请先缩短质疑；原材料不会被自动截断。"
               : "");
 
@@ -129,19 +122,15 @@ export function RecordedChallenge({
       })
       .catch(() => {
         if (live.current && !controller.signal.aborted)
-          setHealthError(
-            clarification
-              ? "暂时无法连接草稿服务，请关闭弹窗后重试。"
-              : "暂时无法检查模型配置，请关闭弹窗后重试。",
-          );
+          setHealthError("暂时无法检查模型配置，请关闭弹窗后重试。");
       })
       .finally(() => controllers.current.delete(controller));
     // Cancel immediately when the shared modal begins closing, before its exit animation ends.
     const dialog = form.current?.closest("dialog");
-    const onClick = (event: MouseEvent) => {
+    const onClick = (event: Event) => {
       const node = event.target;
       if (
-        isDialogBackdropClick(event, dialog) ||
+        node === dialog ||
         (node instanceof Element && node.closest('button[aria-label="关闭弹窗"]'))
       )
         cancelRequests();
@@ -154,7 +143,7 @@ export function RecordedChallenge({
       dialog?.removeEventListener("click", onClick, true);
       dialog?.removeEventListener("cancel", onCancel, true);
     };
-  }, [clarification]);
+  }, []);
 
   return (
     <Modal
@@ -170,7 +159,14 @@ export function RecordedChallenge({
         aria-busy={pending}
         onSubmit={async (event) => {
           event.preventDefault();
-          if (locked.current || !live.current || blocked || text.trim().length < 3) return;
+          if (
+            locked.current ||
+            !live.current ||
+            blocked ||
+            text.trim().length < 3 ||
+            !prepared.success
+          )
+            return;
           locked.current = true;
           setPending(true);
           setError("");
@@ -178,25 +174,6 @@ export function RecordedChallenge({
           controllers.current.add(controller);
           let handedOff = false;
           try {
-            if (clarification) {
-              await prepareRecordedIntake({
-                goal: text.trim(),
-                modelMode: mode,
-                metadata,
-                version,
-                quote: target.context?.quote ?? claim?.text,
-                materials: version.challenge.materials,
-                signal: controller.signal,
-              });
-              if (!live.current || controller.signal.aborted) return;
-              onSubmitted?.();
-              // The homepage restores this explicitly created intake without starting a model call.
-              // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-              window.location.assign("/");
-              handedOff = true;
-              return;
-            }
-            if (!prepared.success) throw new Error("请检查原题与质疑的输入长度。");
             const response = await fetch("/api/arenas", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -271,26 +248,15 @@ export function RecordedChallenge({
             </button>
           </div>
           <DisclosureMotion open={showGoal} id={goalId}>
-            <p className="recorded-challenge-goal">
-              {clarification
-                ? version.intake?.originalGoal || "原始目标未记录"
-                : version.challenge.goal}
-            </p>
+            <p className="recorded-challenge-goal">{version.challenge.goal}</p>
           </DisclosureMotion>
           <DisclosureMotion open={showQuote} id={quoteId}>
             <blockquote className="recorded-challenge-quote">{quote}</blockquote>
           </DisclosureMotion>
         </div>
         <label className="field">
-          <span id={inputLabelId}>
-            {clarification
-              ? "你想补充或询问什么？"
-              : target.context
-                ? "补充或质疑"
-                : "你认为哪里有问题？"}
-          </span>
+          <span>{target.context ? "补充或质疑" : "你认为哪里有问题？"}</span>
           <textarea
-            aria-labelledby={inputLabelId}
             value={text}
             onChange={(event) => {
               setText(event.target.value);
@@ -302,11 +268,7 @@ export function RecordedChallenge({
             disabled={pending}
             rows={3}
             data-overlay-autofocus
-            placeholder={
-              clarification
-                ? "写下你自己的要求或执行者的问题，未确定的可以继续问。"
-                : "这里漏了什么条件，或哪一点你不认同？"
-            }
+            placeholder="这里漏了什么条件，或哪一点你不认同？"
           />
         </label>
         <div className="recorded-challenge-tools">
@@ -331,18 +293,14 @@ export function RecordedChallenge({
                   close();
                   onAdjustConditions();
                 };
-                if (!motion.current?.replace(handoff)) handoff();
+                if (!motion.current?.close(handoff)) handoff();
               }}
             >
               调整条件
             </button>
           )}
         </div>
-        <p className="recorded-challenge-notice">
-          {clarification
-            ? "确认后只准备你自己的需求草稿，原案例作为待核对材料。回到首页点击“开始梳理”才调用模型。"
-            : "确认后新建真实推演并计费，原记录保留。"}
-        </p>
+        <p className="recorded-challenge-notice">确认后新建真实推演并计费，原记录保留。</p>
         {(error || (!health && !healthError && quote ? "" : blocked)) && (
           <p className="recorded-challenge-error" role="alert">
             {error || blocked}
@@ -364,13 +322,7 @@ export function RecordedChallenge({
             className="primary-button"
             disabled={pending || !!blocked || text.trim().length < 3}
           >
-            {pending
-              ? clarification
-                ? "正在准备需求草稿…"
-                : "正在创建真实推演…"
-              : clarification
-                ? "确认并准备需求草稿"
-                : "开始真实挑战"}
+            {pending ? "正在创建真实推演…" : "开始真实挑战"}
           </button>
         </div>
       </form>

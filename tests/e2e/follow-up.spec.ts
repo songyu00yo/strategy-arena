@@ -2,11 +2,10 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page, type Route, type Locator } from "@playwright/test";
 import type { ArenaSnapshot, Challenge, ModelMode } from "../../src/lib/contracts";
-import type { IntakeAnswer } from "../../src/lib/intake-contracts";
 import type { RecordedExamplePayload } from "../../src/lib/recorded-examples";
 import { stepContext } from "../../src/lib/step-context";
 import { advanceFixture, fixtureSnapshot, fixtureVersion } from "./ui.fixture";
-import { configureFixtureModels, fixtureIntake } from "./intake.fixture";
+import { configureFixtureModels } from "./intake.fixture";
 
 type VersionBody = {
   challenge: Challenge;
@@ -27,149 +26,6 @@ function completedSnapshot() {
   };
   for (let stage = 0; stage < 5; stage++) advanceFixture(snapshot);
   return snapshot;
-}
-
-for (const width of [1440, 390]) {
-  test(`explicit UI fixture: linked questions reuse the original history and intake at ${width}px`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    const snapshot = completedSnapshot();
-    const source = snapshot.versions[0];
-    source.status = "paused";
-    source.waitingForIntake = { id: "fixture-linked-intake", versionId: source.id };
-    let draft = fixtureIntake({
-      id: "fixture-linked-intake",
-      goal: "【演示数据】补充原任务的风格要求",
-      status: "questions",
-      round: 3,
-      link: { arenaId: snapshot.id, versionId: source.id },
-      questions: [
-        {
-          id: "style",
-          title: "这份内容希望采用什么风格？",
-          reason: "演示数据，风格由用户本人确认。",
-          placeholder: "例如简洁正式",
-          type: "text",
-          options: [],
-          unit: "",
-        },
-      ],
-    });
-    let advances = 0;
-    let submissions = 0;
-    await page.route("**/api/**", async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      const method = route.request().method();
-      if (path === "/api/health")
-        return route.fulfill({
-          json: { status: "ok", model: snapshot.model, accessGranted: true },
-        });
-      if (path === "/api/identity")
-        return route.fulfill({
-          json: { identityTag: "a".repeat(64), hasRecoveryCode: false },
-        });
-      if (path === "/api/arenas")
-        return route.fulfill({
-          json: {
-            items: [
-              {
-                id: snapshot.id,
-                goal: source.challenge.goal,
-                createdAt: snapshot.createdAt,
-                activeVersionId: snapshot.activeVersionId,
-                status: source.status,
-                stage: source.stage,
-                versionCount: snapshot.versions.length,
-              },
-            ],
-            nextCursor: null,
-          },
-        });
-      if (path === "/api/intakes")
-        return route.fulfill({
-          json: {
-            items: [
-              { id: draft.id, goal: draft.goal, updatedAt: Date.now(), status: draft.status },
-            ],
-            nextCursor: null,
-          },
-        });
-      if (path.endsWith("/events"))
-        return route.fulfill({ contentType: "text/event-stream", body: "" });
-      if (path.endsWith("/advance")) {
-        advances++;
-        return route.fulfill({ json: snapshot });
-      }
-      if (path === `/api/arenas/${snapshot.id}`) return route.fulfill({ json: snapshot });
-      if (path === `/api/intakes/${draft.id}` && method === "PATCH") {
-        const body = route.request().postDataJSON();
-        expect(body.revision).toBe(draft.revision);
-        if (body.answers)
-          draft = {
-            ...draft,
-            revision: draft.revision + 1,
-            answers: body.answers.map((answer: IntakeAnswer) => ({
-              ...answer,
-              question: draft.questions.find((question) => question.id === answer.questionId)!,
-            })),
-          };
-        return route.fulfill({ json: draft });
-      }
-      if (path === `/api/intakes/${draft.id}/analyze`) {
-        draft = {
-          ...draft,
-          status: "summary",
-          revision: draft.revision + 1,
-          questions: [],
-          challenge: { ...structuredClone(source.challenge), preferences: "简洁正式" },
-        };
-        return route.fulfill({ json: draft });
-      }
-      if (path === `/api/intakes/${draft.id}/submit`) {
-        submissions++;
-        expect(draft.link).toEqual({ arenaId: snapshot.id, versionId: source.id });
-        appendCompletedVersion(snapshot, {
-          challenge: draft.challenge!,
-          changeReason: "演示数据：确认风格补充",
-          modelMode: draft.modelMode,
-          baseVersionId: source.id,
-        });
-        source.status = "superseded";
-        return route.fulfill({ status: 201, json: snapshot });
-      }
-      if (path === `/api/intakes/${draft.id}`) return route.fulfill({ json: draft });
-      return route.fulfill({ status: 500, json: { error: "Unexpected fixture request" } });
-    });
-    await page.goto(`/?arena=${snapshot.id}`);
-    await expect(page.locator(".c-board")).toHaveCount(3);
-    await expect(page.locator(".gi-questions")).toHaveCount(0);
-    await expect(
-      page
-        .getByRole("region", { name: "结论", exact: true })
-        .getByRole("heading", { name: "测试裁决：先做最小样片", exact: true }),
-    ).toBeVisible();
-    await page.waitForTimeout(300);
-    expect(advances).toBe(0);
-    await page.getByRole("button", { name: "我的历史", exact: true }).click();
-    await page.getByRole("button", { name: new RegExp(draft.goal) }).click();
-    await expect(page.locator(".gi-questions")).toBeVisible();
-    await expect(page.locator(".c-root")).toHaveCount(0);
-    await expect(page.getByText("第 3 轮", { exact: false })).toBeVisible();
-    await page
-      .getByRole("textbox", { name: draft.questions[0].title, exact: true })
-      .fill("简洁正式");
-    await page.getByRole("button", { name: "确认本轮回答并继续", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "这是我们理解的任务。" })).toBeVisible();
-    await page.getByRole("button", { name: "确认摘要并开始推演", exact: true }).click();
-    await expect(page.locator(".c-board")).toHaveCount(3);
-    await expect(page.getByLabel("选择推演版本")).toHaveValue("fixture-version-2");
-    expect(submissions).toBe(1);
-    expect(snapshot.id).toBe("fixture-arena");
-    expect(snapshot.versions[0].challenge.preferences).toBe("优先准确。");
-    expect(snapshot.versions[1].challenge.preferences).toBe("简洁正式");
-  });
 }
 async function interceptAllApis(
   page: Page,
@@ -230,41 +86,52 @@ async function openSource(page: Page, number: number) {
   return supplement;
 }
 
-test("explicit legacy-task fixture: supplement survives a conditions handoff and stays scoped to its source", async ({
-  page,
-}) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const snapshot = completedSnapshot();
-  let posts = 0;
-  await interceptAllApis(page, snapshot, async (route) => {
-    posts++;
-    await route.fulfill({
-      status: 500,
-      json: { error: "This recovery fixture must not submit." },
+for (const recorded of [false, true]) {
+  test(`explicit UI fixture: ${recorded ? "recorded" : "live"} supplement survives a conditions handoff and stays scoped to its source`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const snapshot = completedSnapshot();
+    let posts = 0;
+    await interceptAllApis(page, snapshot, async (route) => {
+      posts++;
+      await route.fulfill({
+        status: 500,
+        json: { error: "This recovery fixture must not submit." },
+      });
     });
+    await page.goto(recorded ? "/examples/career" : `/?arena=${snapshot.id}`);
+    if (recorded) await page.getByRole("button", { name: "开始分析", exact: true }).click();
+    const text = "测试：保留我已写下、尚未确认的补充，先去调整条件。";
+    let supplement = await openSource(page, 1);
+    await supplement.getByRole("textbox").fill(text);
+    if (recorded) {
+      await supplement.getByRole("button", { name: /^选择模型，当前/ }).click();
+      await page.getByRole("option", { name: "GPT 6.1 Sol", exact: true }).click();
+    }
+    await supplement.getByRole("button", { name: "调整条件", exact: true }).click();
+    const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
+    await expect(conditions).toBeVisible();
+    await conditions.getByLabel("预算上限", { exact: false }).fill("150");
+    await conditions.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(conditions).toBeHidden();
+    supplement = await openSource(page, 1);
+    await expect(supplement.getByRole("textbox")).toHaveValue(text);
+    if (recorded)
+      await expect(
+        supplement.getByRole("button", { name: "选择模型，当前GPT 6.1 Sol", exact: true }),
+      ).toBeVisible();
+    await supplement.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(supplement).toBeHidden();
+    supplement = await openSource(page, 2);
+    await expect(supplement.getByRole("textbox")).toHaveValue("");
+    await supplement.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(supplement).toBeHidden();
+    supplement = await openSource(page, 1);
+    await expect(supplement.getByRole("textbox")).toHaveValue(text);
+    expect(posts).toBe(0);
   });
-  await page.goto(`/?arena=${snapshot.id}`);
-  const text = "测试：保留我已写下、尚未确认的补充，先去调整条件。";
-  let supplement = await openSource(page, 1);
-  await supplement.getByRole("textbox").fill(text);
-  await supplement.getByRole("button", { name: "调整条件", exact: true }).click();
-  const conditions = page.getByRole("dialog", { name: "调整条件", exact: true });
-  await expect(conditions).toBeVisible();
-  await conditions.getByLabel("预算上限", { exact: false }).fill("150");
-  await conditions.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(conditions).toBeHidden();
-  supplement = await openSource(page, 1);
-  await expect(supplement.getByRole("textbox")).toHaveValue(text);
-  await supplement.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(supplement).toBeHidden();
-  supplement = await openSource(page, 2);
-  await expect(supplement.getByRole("textbox")).toHaveValue("");
-  await supplement.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(supplement).toBeHidden();
-  supplement = await openSource(page, 1);
-  await expect(supplement.getByRole("textbox")).toHaveValue(text);
-  expect(posts).toBe(0);
-});
+}
 
 for (const [label, field, value, key] of [
   ["budget", "预算上限", "150", "budget"],
@@ -670,24 +537,25 @@ test("explicit UI fixture: compact input drawers preserve desktop context and fi
   expect(posts).toEqual([]);
 });
 
-test("explicit legacy-task fixture: condition edits create a version only after confirmation", async ({
+test("explicit UI fixture: recorded conditions stay free until explicit confirmation creates a sourced real task", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
+  const snapshot = completedSnapshot();
+  snapshot.id = "fixture-recorded-conditions";
   const payload = JSON.parse(
-    readFileSync("tests/fixtures/legacy-recordings/career.json", "utf8"),
+    readFileSync("public/recorded-examples/career.json", "utf8"),
   ) as RecordedExamplePayload;
-  const snapshot = configureFixtureModels(structuredClone(payload.arena));
-  snapshot.id = "fixture-legacy-conditions";
-  const original = snapshot.versions[0].challenge;
-  const posts: { path: string; body: VersionBody }[] = [];
+  const original = payload.arena.versions[0].challenge;
+  const posts: { path: string; body: Challenge & { modelMode: ModelMode } }[] = [];
   await interceptAllApis(page, snapshot, async (route) => {
-    const body = route.request().postDataJSON() as VersionBody;
+    const body = route.request().postDataJSON() as Challenge & { modelMode: ModelMode };
     posts.push({ path: new URL(route.request().url()).pathname, body });
-    appendCompletedVersion(snapshot, body);
+    snapshot.versions[0].challenge = body;
     await route.fulfill({ json: snapshot });
   });
-  await page.goto(`/?arena=${snapshot.id}`);
+  await page.goto("/examples/career");
+  await page.getByRole("button", { name: "开始分析", exact: true }).click();
   await page.getByRole("button", { name: "调整条件", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "调整条件", exact: true });
   await expect(
@@ -702,12 +570,12 @@ test("explicit legacy-task fixture: condition edits create a version only after 
   await page.getByRole("button", { name: "调整条件", exact: true }).click();
   await dialog.getByLabel("预算上限", { exact: false }).fill("150");
   await dialog.getByRole("button", { name: "按新条件重新推演", exact: true }).click();
-  await expect(page).toHaveURL(/\/\?arena=fixture-legacy-conditions$/);
+  await expect(page).toHaveURL(/\/\?arena=fixture-recorded-conditions$/);
   expect(posts).toHaveLength(1);
-  expect(posts[0].path).toBe(`/api/arenas/${snapshot.id}/versions`);
+  expect(posts[0].path).toBe("/api/arenas");
   const { materials, ...fields } = original;
-  expect(posts[0].body.challenge).toMatchObject({ ...fields, budget: 150 });
-  expect(posts[0].body.challenge.materials).toContain(materials);
-  expect(snapshot.versions).toHaveLength(2);
-  expect(snapshot.versions[1].parentVersionId).toBe(snapshot.versions[0].id);
+  expect(posts[0].body).toMatchObject({ ...fields, budget: 150 });
+  expect(posts[0].body.materials).toContain(materials);
+  expect(posts[0].body.materials).toContain(payload.metadata.sourceCommit);
+  expect(posts[0].body.materials).toContain("待复核");
 });

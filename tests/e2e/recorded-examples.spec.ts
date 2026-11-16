@@ -1,14 +1,13 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { RECORDED_EXAMPLES, type RecordedExamplePayload } from "../../src/lib/recorded-examples";
-import { buildClarificationReplay } from "../../src/lib/replay";
 
-// Saved real-provider outputs with explicitly simulated inputs and Codex answers.
+// These are the published historical records, not synthetic UI fixtures or model stubs.
 function recording(slug: string): RecordedExamplePayload {
   return JSON.parse(
-    readFileSync(path.join(process.cwd(), "public/recorded-examples", `${slug}.json`), "utf8"),
-  );
+    readFileSync(path.join(process.cwd(), "public", "recorded-examples", `${slug}.json`), "utf8"),
+  ) as RecordedExamplePayload;
 }
 
 async function watchReadOnlyRequests(page: Page, origin: string, homepage = false) {
@@ -17,155 +16,293 @@ async function watchReadOnlyRequests(page: Page, origin: string, homepage = fals
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    const api = url.pathname.startsWith("/api/");
+    const isApi = url.pathname.startsWith("/api/");
+    // The homepage reads real configuration once. Record viewers need no API, even without access.
     const allowedHealth = homepage && url.pathname === "/api/health" && request.method() === "GET";
-    if (api) apiReads.push(`${request.method()} ${url.pathname}`);
-    if (url.origin !== origin || request.method() !== "GET" || (api && !allowedHealth)) {
+    if (isApi) apiReads.push(`${request.method()} ${url.pathname}`);
+    if (url.origin !== origin || request.method() !== "GET" || (isApi && !allowedHealth)) {
       forbidden.push(`${request.method()} ${url.href}`);
-      return route.abort();
+      await route.abort();
+      return;
     }
-    return route.continue();
+    await route.continue();
   });
   return { forbidden, apiReads };
 }
 
-async function noOverflow(page: Page) {
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
-    true,
-  );
+async function noHorizontalOverflow(page: Page) {
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+  ).toBe(true);
 }
 
 for (const example of RECORDED_EXAMPLES) {
-  for (const width of [1440, 390]) {
-    test(`saved real-model simulation: ${example.slug} replays questions, answers and final handoff at ${width}px with zero model calls`, async ({
-      page,
-      baseURL,
-    }) => {
-      const payload = recording(example.slug);
-      const version = payload.arena.versions.at(-1)!;
-      const state = version.clarification!;
-      const replay = buildClarificationReplay(version, payload.replayActions);
-      const calls = await watchReadOnlyRequests(page, new URL(baseURL!).origin);
-      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      await page.goto(`/examples/${example.slug}`);
-      await expect(page.getByRole("heading", { name: example.title, exact: true })).toBeVisible();
-      await expect(page.getByRole("textbox", { name: "你想做什么", exact: true })).toHaveValue(
-        version.intake!.originalGoal,
-      );
-      if (version.challenge.preferences)
-        await expect(page.locator(".recorded-entry-form")).not.toContainText(
-          version.challenge.preferences,
-        );
-      await expect(
-        page.getByText("真实模型运行的模拟案例 · 回看新增调用为 0", { exact: true }),
-      ).toBeVisible();
-      await noOverflow(page);
-      await page.getByRole("button", { name: "暂停自动开始", exact: true }).click();
-      await page.getByRole("button", { name: "开始回看", exact: true }).click();
-      await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
-        "aria-current",
-        "step",
-      );
+  test(`real recorded example: ${example.slug} is readable and interactive without API or external requests`, async ({
+    page,
+    baseURL,
+  }) => {
+    const payload = recording(example.slug);
+    const version = payload.arena.versions.at(-1)!;
+    const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin, true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`/examples/${example.slug}`);
+    await expect(page.getByRole("heading", { name: example.title, exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: "你想解决什么问题？", exact: true }),
+    ).toHaveValue(version.challenge.goal);
+    await page.getByRole("button", { name: "暂停自动开始", exact: true }).click();
+    await page.getByRole("button", { name: "开始分析", exact: true }).click();
+    await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    await expect(
+      page.getByRole("heading", { name: version.verdict!.headline, exact: true }),
+    ).toBeHidden();
+    await page.keyboard.press("End");
+    await expect(
+      page.getByRole("heading", { name: version.verdict!.headline, exact: true }),
+    ).toBeVisible();
+    // The compact mobile header omits the secondary badge; the full replay notice stays visible.
+    await expect(page.getByText("真实生成记录 · 回看不调用模型", { exact: true })).toBeVisible();
+    await noHorizontalOverflow(page);
 
-      const bIndex = replay.findIndex(
-        ({ clarificationRun: run }) =>
-          run?.role === "B" && "questions" in run.output && run.output.questions.length > 0,
-      );
-      const b = replay[bIndex].clarificationRun!;
-      const questions = "questions" in b.output ? b.output.questions : [];
-      await page.getByRole("button", { name: `第 ${bIndex + 1} 步`, exact: true }).click();
-      await page.getByRole("button", { name: `查看第 ${bIndex + 1} 步`, exact: true }).click();
-      const card = page.getByRole("dialog", { name: new RegExp(`^第 ${bIndex + 1} 步 ·`) });
-      await expect(card).toBeVisible();
-      for (const question of questions) {
-        await expect(card).toContainText(question.title);
-        for (const option of question.options) await expect(card).toContainText(option);
+    const sourceButton = page.getByRole("button", { name: "原题与记录", exact: true });
+    await sourceButton.focus();
+    await page.keyboard.press("Enter");
+    const source = page.getByRole("dialog", { name: "原题与生成记录", exact: true });
+    await expect(source).toBeVisible();
+    await expect(source.getByText(example.modelId, { exact: true })).toBeVisible();
+    await expect(source.getByText(example.sourceCommit, { exact: true })).toBeVisible();
+    await expect(source).toContainText(example.qualityNote);
+    await expect(source).toContainText(version.challenge.goal);
+    await expect(source).toContainText("回看不会产生新的模型费用");
+    await noHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
+    await expect(sourceButton).toBeFocused();
+
+    // Select only versions actually present in the historical record; do not manufacture a rematch.
+    const versions = page.getByRole("combobox", { name: "已存版本", exact: true });
+    if (payload.arena.versions.length > 1) {
+      await expect(versions.locator("option")).toHaveCount(payload.arena.versions.length);
+      for (const stored of payload.arena.versions) {
+        await versions.selectOption(stored.id);
+        await expect(versions).toHaveValue(stored.id);
+        await expect(
+          page.getByRole("heading", { name: stored.verdict!.headline, exact: true }),
+        ).toBeVisible();
       }
-      await expect(card).toContainText("尚未回答（未确认）");
-      const sourceRound = state.rounds.findIndex((round) => round.runIds.includes(b.id));
-      const nextAnswers = state.rounds.slice(sourceRound + 1).flatMap((round) => round.answers);
-      const firstAnswer = nextAnswers.find((answer) => answer.questionId === questions[0].id)!;
-      await page.keyboard.press("Escape");
-      await expect(card).toBeHidden();
+      await versions.selectOption(version.id);
+    } else {
+      await expect(versions).toHaveCount(0);
+      await expect(page.getByText(`原记录 V${version.number}`, { exact: true })).toBeVisible();
+    }
 
-      const questionIndex = replay.findIndex((step) => step.replayAction?.kind === "questions");
-      await page.getByRole("button", { name: `第 ${questionIndex + 1} 步`, exact: true }).click();
-      const scene = page.getByRole("region", { name: "补问过程回放", exact: true });
-      for (const question of questions) {
-        await expect(scene).toContainText(question.title);
-        for (const option of question.options) await expect(scene).toContainText(option);
-      }
-      await expect(scene.locator("input:checked")).toHaveCount(0);
-      const answerIndex = replay.findIndex((step) => step.replayAction?.kind === "answer");
-      await page.getByRole("button", { name: `第 ${answerIndex + 1} 步`, exact: true }).click();
-      const field = scene.locator(`[data-question-id="${firstAnswer.questionId}"]`);
-      const values = Array.isArray(firstAnswer.value) ? firstAnswer.value : [firstAnswer.value];
-      if (firstAnswer.question.type === "single" || firstAnswer.question.type === "multiple")
-        for (const value of values)
-          await expect(field.getByLabel(value, { exact: true })).toBeChecked();
-      else await expect(field.locator("input, textarea")).toHaveValue(String(firstAnswer.value));
-      await expect(scene).toContainText("待确认");
+    // Narrow screens show the current card; choose its step before opening its details.
+    await page.getByRole("button", { name: "第 1 步", exact: true }).click();
+    await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    const cardButton = page.getByRole("button", { name: "查看第 1 步", exact: true });
+    await cardButton.focus();
+    await page.keyboard.press("Space");
+    const card = page.getByRole("dialog", { name: "第 1 步 · 独立提案", exact: true });
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(version.strategies[0].title);
+    await noHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
+    await expect(card).toBeHidden();
+    await expect(cardButton).toBeFocused();
+    await page.keyboard.press("End");
 
-      const sourceButton = page.getByRole("button", { name: "原题与记录", exact: true });
-      await sourceButton.click();
-      const source = page.getByRole("dialog", { name: "原始目标与需求梳理记录", exact: true });
-      await expect(source).toContainText("Codex");
-      await expect(source).toContainText(example.sourceCommit);
-      await expect(source).toContainText(version.intake!.originalGoal);
-      await expect(source).toContainText("没有真实执行反馈");
-      await page.keyboard.press("Escape");
-      await expect(source).toBeHidden();
-      await page.keyboard.press("End");
-      await expect(
-        page.getByRole("heading", { name: "需求说明与执行提示词", exact: true }),
-      ).toBeVisible();
-      await page.getByRole("button", { name: "看完整结论", exact: true }).click();
-      await expect(page.locator(".c-result .lead > p")).toHaveText(state.specification);
-      await expect(page.locator(".c-result .first strong")).toHaveText(state.executionPrompt);
-      expect(await page.locator(".c-result .lead > p").textContent()).toBe(state.specification);
-      expect(await page.locator(".c-result .first strong").textContent()).toBe(
-        state.executionPrompt,
-      );
-      await expect(page.locator(".c-result .lead > p")).toHaveCSS("white-space", "pre-wrap");
-      await noOverflow(page);
-      const output = path.join(process.cwd(), "work/new-clarification-examples/screenshots");
-      mkdirSync(output, { recursive: true });
-      await page.screenshot({
-        path: path.join(output, `${example.slug}-${width}.png`),
-        fullPage: true,
-      });
-      expect(calls.forbidden).toEqual([]);
-      expect(calls.apiReads).toEqual([]);
-    });
-  }
+    const evidenceButton = page
+      .getByRole("region", { name: "全部质疑", exact: true })
+      .getByRole("button")
+      .first();
+    await evidenceButton.focus();
+    await page.keyboard.press("Enter");
+    const evidence = page.getByRole("dialog", { name: "这一条，站得住吗？", exact: true });
+    await expect(evidence).toBeVisible();
+    await expect(evidence).toContainText(version.attacks[0].claimQuote);
+    await noHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
+    await expect(evidence).toBeHidden();
+    await expect(evidenceButton).toBeFocused();
+
+    await page.getByRole("button", { name: "逐步看", exact: true }).click();
+    await expect(page.getByRole("button", { name: "逐步看", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.getByRole("button", { name: "从头放映", exact: true }).click();
+    await page.getByRole("button", { name: "第 1 步", exact: true }).click();
+    await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    await page.getByRole("button", { name: "下一步", exact: true }).click();
+    await expect(page.getByRole("button", { name: "第 2 步", exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    await page.keyboard.press("End");
+    await expect(
+      page.getByRole("heading", { name: version.verdict!.headline, exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".c-chapter")).toBeHidden();
+    await noHorizontalOverflow(page);
+    await page.waitForLoadState("networkidle");
+    expect(requests.apiReads).toEqual([]);
+    expect(requests.forbidden).toEqual([]);
+    await page.getByRole("link", { name: "返回示例", exact: true }).click();
+    await expect(page).toHaveURL(/\/\?examples=open$/);
+    await expect(page.getByRole("dialog", { name: "先看一场真实推演", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("link", {
+        name: `播放${example.direction}案例：${example.title}`,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(requests.apiReads.every((item) => item === "GET /api/health")).toBe(true);
+    expect(requests.forbidden).toEqual([]);
+  });
 }
 
-test("homepage offers all four configured clarification examples and the exact new prompt", async ({
+test("homepage keeps examples hidden until requested, then opens an input-first real replay", async ({
   page,
   baseURL,
 }) => {
-  const calls = await watchReadOnlyRequests(page, new URL(baseURL!).origin, true);
+  const example = RECORDED_EXAMPLES[0];
+  const payload = recording(example.slug);
+  const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin, true);
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "你想做什么", exact: true })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "你想做什么", exact: true })).toHaveAttribute(
-    "placeholder",
-    "先说说你想做的东西，没想清楚也没关系。可以添加文件或直接粘贴材料。",
+  await expect(page.getByRole("region", { name: "选择真实案例" })).toHaveCount(0);
+  const entry = page.getByRole("button", { name: "先看真实案例", exact: true });
+  await entry.focus();
+  await page.keyboard.press("Enter");
+  const chooser = page.getByRole("dialog", { name: "先看一场真实推演", exact: true });
+  await expect(chooser).toBeVisible();
+  await expect(chooser.getByRole("link")).toHaveCount(RECORDED_EXAMPLES.length);
+  await page.keyboard.press("Escape");
+  await expect(chooser).toBeHidden();
+  await expect(entry).toBeFocused();
+  await entry.click();
+  await chooser
+    .getByRole("link", { name: `播放${example.direction}案例：${example.title}`, exact: true })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/examples/${example.slug}$`));
+  await expect(page.getByRole("textbox", { name: "你想解决什么问题？", exact: true })).toHaveValue(
+    payload.arena.versions[0].challenge.goal,
   );
-  await page.getByRole("button", { name: "先看需求梳理示例", exact: true }).click();
-  const gallery = page.getByRole("dialog", { name: "先看需求梳理示例", exact: true });
-  await expect(gallery.getByRole("link")).toHaveCount(RECORDED_EXAMPLES.length);
-  for (const example of RECORDED_EXAMPLES)
-    await expect(gallery.getByRole("heading", { name: example.title, exact: true })).toBeVisible();
-  await expect(gallery).toContainText("真实模型运行的模拟案例");
-  await expect(gallery).not.toContainText("三条路线如何提案");
-  await noOverflow(page);
-  expect(calls.forbidden).toEqual([]);
+  await expect(page.locator(".c-root")).toHaveCount(0);
+  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+  await expect(
+    page.getByRole("heading", { name: payload.arena.versions[0].verdict!.headline, exact: true }),
+  ).toBeHidden();
+  await page.waitForLoadState("networkidle");
+  expect(requests.apiReads.every((item) => item === "GET /api/health")).toBe(true);
+  expect(requests.forbidden).toEqual([]);
 });
 
-test("retired case pages and public recording URLs return 404", async ({ request }) => {
-  for (const slug of ["learning", "career", "creation", "course-site"]) {
-    expect((await request.get(`/examples/${slug}`)).status()).toBe(404);
-    expect((await request.get(`/recorded-examples/${slug}.json`)).status()).toBe(404);
+test("real recorded example automatically starts from empty progress and plays every stage to its result", async ({
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(90_000);
+  const payload = recording("learning");
+  const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin);
+  await page.goto("/examples/learning");
+  await expect(page.getByRole("textbox", { name: "你想解决什么问题？", exact: true })).toHaveValue(
+    payload.arena.versions[0].challenge.goal,
+  );
+  await expect(page.locator(".c-root")).toHaveCount(0);
+  await expect(page.locator(".c-root")).toBeVisible({ timeout: 12_000 });
+  await expect(
+    page.getByRole("heading", { name: payload.arena.versions[0].verdict!.headline, exact: true }),
+  ).toBeHidden();
+  await expect(page.getByRole("button", { name: "第 1 步", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+  await expect(page.locator(".c-intro")).toBeHidden();
+  for (const step of [2, 4, 7, 10, 13]) {
+    await expect(page.getByRole("button", { name: `第 ${step} 步`, exact: true })).toHaveAttribute(
+      "aria-current",
+      "step",
+      { timeout: 20_000 },
+    );
   }
+  await expect(
+    page.getByRole("heading", { name: payload.arena.versions[0].verdict!.headline, exact: true }),
+  ).toBeVisible();
+  expect(requests.apiReads).toEqual([]);
+  expect(requests.forbidden).toEqual([]);
+});
+
+test("real recorded example: mobile card return stays over its source without moving the page", async ({
+  page,
+  baseURL,
+}) => {
+  const requests = await watchReadOnlyRequests(page, new URL(baseURL!).origin);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/examples/learning");
+  await page.getByRole("button", { name: "开始分析", exact: true }).click();
+  await page.getByRole("button", { name: "第 1 步", exact: true }).click();
+  const trigger = page.getByRole("button", { name: "查看第 1 步", exact: true });
+  await trigger.scrollIntoViewIfNeeded();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await trigger.click();
+  const card = page.getByRole("dialog", { name: "第 1 步 · 独立提案", exact: true });
+  await expect(card).toBeVisible();
+  await expect.poll(() => card.locator(".c-pull-face").count()).toBe(0);
+  const deckHeight = await page
+    .locator(".c-deck")
+    .evaluate((node) => node.getBoundingClientRect().height);
+  await card.getByRole("button", { name: "收起这张卡片", exact: true }).click();
+  const landing = await page.locator(".c-return-proxy").evaluate((node) => {
+    // Sample the actual flight near its end so CSS cannot silently override its transform.
+    const dialog = document.querySelector<HTMLDialogElement>(".c-pull")!;
+    for (const animation of [
+      ...dialog.getAnimations({ subtree: true }),
+      ...node.getAnimations({ subtree: true }),
+    ]) {
+      animation.pause();
+      animation.currentTime = 459;
+    }
+    const source = document.querySelector<HTMLElement>('[data-step-source="0"]')!;
+    const bounds = node.getBoundingClientRect();
+    const sourceBounds = source.getBoundingClientRect();
+    return {
+      position: getComputedStyle(node).position,
+      transform: getComputedStyle(node).transform,
+      maxCornerError: Math.max(
+        Math.abs(bounds.left - sourceBounds.left),
+        Math.abs(bounds.top - sourceBounds.top),
+        Math.abs(bounds.right - sourceBounds.right),
+        Math.abs(bounds.bottom - sourceBounds.bottom),
+      ),
+      deckHeight: document.querySelector(".c-deck")!.getBoundingClientRect().height,
+    };
+  });
+  expect(landing.position).toBe("absolute");
+  expect(landing.transform).not.toBe("none");
+  expect(landing.maxCornerError).toBeLessThan(2);
+  expect(Math.abs(landing.deckHeight - deckHeight)).toBeLessThan(1);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(card).toBeHidden();
+  await expect(page.locator(".c-return-proxy")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await noHorizontalOverflow(page);
+  expect(requests.apiReads).toEqual([]);
+  expect(requests.forbidden).toEqual([]);
 });

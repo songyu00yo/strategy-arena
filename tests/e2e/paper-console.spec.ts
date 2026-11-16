@@ -204,62 +204,6 @@ test("revised hours label unknown values and preserve zero in the synthetic resu
   }
 });
 
-for (const width of [1440, 390]) {
-  test(`explicit UI fixture: confirmed output uses the original result disclosure at ${width}px`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    const snapshot = fixtureSnapshot();
-    for (let i = 0; i < 5; i++) advanceFixture(snapshot);
-    const confirmed = Array.from(
-      { length: 20 },
-      (_, index) => `演示数据，第 ${index + 1} 项已确认要求，内容与风格根据用户明确回答执行。`,
-    );
-    const executionPrompt = ["依据用户已确认要求执行。", ...confirmed].join("\n");
-    snapshot.versions[0].requirements = {
-      confirmed,
-      executionPrompt,
-      unresolved: ["演示数据：最终截止日期尚未确认。"],
-      suggestions: ["演示数据：AI 建议先制作一页样稿，等待本人确认。"],
-      missingMaterials: ["演示数据：活动照片读取失败，需要另行提供。"],
-    };
-    await page.route("**/api/**", async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      if (path === "/api/health")
-        return route.fulfill({
-          json: { status: "ok", model: snapshot.model, accessGranted: true },
-        });
-      if (path.endsWith("/events"))
-        return route.fulfill({ contentType: "text/event-stream", body: "" });
-      if (path === `/api/arenas/${snapshot.id}`) return route.fulfill({ json: snapshot });
-      return route.fulfill({ status: 404, json: { error: "explicit fixture boundary" } });
-    });
-    await page.goto(`/?arena=${snapshot.id}`);
-    const result = page.getByRole("region", { name: "结论", exact: true });
-    await expect(result).toBeVisible();
-    await expect(page.locator(".c-board")).toHaveCount(3);
-    await expect(result.locator(".first strong")).toHaveText("展开完整结论查看本版本执行提示词");
-    expect((await result.boundingBox())!.height).toBeLessThanOrEqual(
-      page.viewportSize()!.height * 0.27 + 1,
-    );
-    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(
-      false,
-    );
-    await page.screenshot({ path: `test-results/confirmed-output-${width}-collapsed.png` });
-    await result.getByRole("button", { name: "看完整结论", exact: true }).click();
-    await expect(result.locator(".first strong")).toHaveText(executionPrompt);
-    await expect(result.locator("dd").nth(0)).toContainText("AI 建议先制作一页样稿");
-    await expect(result.locator("dd").nth(1)).toContainText("最终截止日期尚未确认");
-    await expect(result.locator("dd").nth(2)).toContainText("活动照片读取失败");
-    await expect(result.locator(".first strong")).not.toContainText("最终截止日期");
-    await expect(result.locator(".first strong")).not.toContainText("AI 建议");
-    await result.getByRole("button", { name: "收起结论", exact: true }).click();
-    await expect(result.locator(".first strong")).toHaveText("展开完整结论查看本版本执行提示词");
-    await expect(page.locator(".c-board")).toHaveCount(3);
-  });
-}
-
 test("the opening never covers the whole page", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const snapshot = fixtureSnapshot();

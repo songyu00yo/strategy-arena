@@ -34,7 +34,7 @@ test("explicit UI fixture: floating picker keeps form geometry, arrows only focu
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   // Tools appear once there is text; one character does not start a draft.
   await page.getByLabel("你想解决什么问题？", { exact: true }).fill("测");
   const trigger = page.getByRole("button", { name: /^选择模型，当前/ });
@@ -139,7 +139,7 @@ test("explicit UI fixture: picker stays in the modal focus boundary and Escape r
     localStorage.setItem("strategy-arena:last-id", "fixture-arena");
     sessionStorage.setItem("arena-intro", "1");
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await expect(page.locator(".c-root")).toBeVisible();
   await page.getByRole("button", { name: "调整条件", exact: true }).click();
   const modal = page.getByRole("dialog", { name: "调整条件" });

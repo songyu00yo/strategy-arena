@@ -85,7 +85,7 @@ for (const viewport of [
         };
         requestAnimationFrame(seek);
       });
-      await page.goto("/");
+      await page.goto("/?legacy=1");
       const input = page.getByLabel("你想解决什么问题？", { exact: true });
       await expect(input).toBeEditable();
       await expect
@@ -191,7 +191,7 @@ for (const viewport of [
           { once: true },
         );
       });
-      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await page.goto("/?legacy=1", { waitUntil: "domcontentloaded" });
       await expect
         .poll(() =>
           page.evaluate(
@@ -245,7 +245,7 @@ for (const viewport of [
       page,
     }) => {
       await installHealthFixture(page);
-      await page.goto("/");
+      await page.goto("/?legacy=1");
       const input = page.getByLabel("你想解决什么问题？", { exact: true });
       await expect(input).toBeEditable();
       await page.evaluate(() => {

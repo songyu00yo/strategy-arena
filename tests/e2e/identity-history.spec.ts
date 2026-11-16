@@ -77,7 +77,7 @@ test("real API without model calls restores all owned history after browser iden
   });
   expect(draftResponse.status()).toBe(201);
   const draft = await draftResponse.json();
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   let dialog = await openHistory(page);
   await expect(dialog.getByRole("button", { name: new RegExp(firstGoal) })).toBeVisible();
   await expect(dialog.getByRole("button", { name: new RegExp(secondGoal) })).toBeVisible();
@@ -147,7 +147,7 @@ test("real API without model calls switches existing identities without merging 
     expect(activation.status()).toBe(200);
     await unlock(page.request);
     const bobArena = await createArena(page.request, bobGoal);
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     const dialog = await openHistory(page);
     await saveAndActivateCode(page);
     const bobCookies = await page.context().storageState();
@@ -226,7 +226,7 @@ test("explicit list-network failure fixture keeps real identity recovery and cod
     ).toBe(200);
     await unlock(page.request);
     await page.route("**/api/arenas?*", (route) => route.abort("failed"));
-    await page.goto("/");
+    await page.goto("/?legacy=1");
     const dialog = await openHistory(page);
     await expect(dialog.getByRole("alert")).toBeVisible();
     await dialog.getByRole("button", { name: "生成恢复码", exact: true }).click();

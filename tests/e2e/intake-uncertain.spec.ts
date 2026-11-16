@@ -81,7 +81,7 @@ test("explicit UI fixture: restored uncertain draft blocks mutations and model c
     }
     return route.fulfill({ json: next });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   const intake = page.getByRole("region", { name: "准备一场推演", exact: true });
   const recovery = intake.getByRole("region", { name: "分析暂停", exact: true });
   await expect(recovery.getByRole("alert")).toContainText("暂时没有收到完整结果");
@@ -178,7 +178,7 @@ test("explicit UI fixture: a newly uncertain analysis cannot be replayed after r
     }
     return route.fulfill({ json: draft });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await page
     .getByRole("textbox", { name: "你想解决什么问题？", exact: true })
     .fill("测试：分析返回未知状态后等待核账，禁止重复模型调用");

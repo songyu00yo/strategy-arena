@@ -29,6 +29,7 @@ export function db(): DatabaseSync {
     );
     database.exec(readFileSync(resolve(process.cwd(), "migrations/004_identity.sql"), "utf8"));
     database.exec(readFileSync(resolve(process.cwd(), "migrations/005_agent.sql"), "utf8"));
+    database.exec(readFileSync(resolve(process.cwd(), "migrations/006_planning.sql"), "utf8"));
   }
   return database;
 }

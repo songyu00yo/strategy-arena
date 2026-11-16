@@ -137,7 +137,7 @@ async function restoreArena(
       return route.fulfill({ json: snapshot });
     return route.fulfill({ status: 500, json: { error: "Unexpected fixture mutation" } });
   });
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await expect(page.getByRole("button", { name: "快速复核", exact: true })).toBeVisible();
 }
 

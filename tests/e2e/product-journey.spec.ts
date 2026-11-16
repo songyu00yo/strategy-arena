@@ -217,7 +217,7 @@ test("explicit UI fixture: confirmed goal and cited summary survive all five fol
     return route.abort();
   });
 
-  await page.goto("/");
+  await page.goto("/?legacy=1");
   await page.getByRole("textbox", { name: "你想解决什么问题？", exact: true }).fill(goal);
   await page.getByLabel("选择参考材料", { exact: true }).setInputFiles({
     name: source.filename,
